@@ -25,8 +25,9 @@ import BrandSplashLoader from "@/components/layout/brand-splash-loader";
 import { authEmailAtom, authErrorAtom, authPendingAtom } from "@/lib/atoms";
 import { REGISTER_ROUTE } from "@/lib/api/session";
 import { signInWithPassword } from "@/lib/auth";
-import { DEMO_LOGIN_ENABLED, startDemo } from "@/lib/demo";
 
+const DEMO_EMAIL = "accounts.coastalspark@example.com";
+const DEMO_PASSWORD = "CoastalSpark2026!";
 
 export function LoginScreen() {
   const router = useRouter();
@@ -37,12 +38,17 @@ export function LoginScreen() {
   const [pending, setPending] = useAtom(authPendingAtom);
   const [error, setError] = useAtom(authErrorAtom);
 
-  const [password, setPassword] = React.useState("");
+  const [password, setPassword] = React.useState(DEMO_PASSWORD);
   const [emailEdited, setEmailEdited] = React.useState(false);
   const [passwordEdited, setPasswordEdited] = React.useState(false);
   const [sendingCode, setSendingCode] = React.useState(false);
-  const [startingDemo, setStartingDemo] = React.useState(false);
   const [noPassword, setNoPassword] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!email) {
+      setEmail(DEMO_EMAIL);
+    }
+  }, [email, setEmail]);
 
   const emailIssue = emailEdited ? requiredEmailIssue(email) : undefined;
   const passwordIssue =
@@ -82,24 +88,6 @@ export function LoginScreen() {
     if (message) setError(message);
     setSendingCode(false);
     setPending(false);
-  };
-
-  const exploreDemo = async () => {
-    if (pending) return;
-
-    setPending(true);
-    setStartingDemo(true);
-    setError(null);
-
-    const result = await startDemo();
-    if (!result.ok) {
-      setStartingDemo(false);
-      setPending(false);
-      setError(result.message);
-      return;
-    }
-
-    await land(result.user);
   };
 
   const closeCode = () => {
@@ -244,12 +232,12 @@ export function LoginScreen() {
               className="h-10 w-full"
               disabled={pending}
             >
-              {pending && !sendingCode && !startingDemo && (
-                <Loader2 className="animate-spin" aria-hidden />
-              )}
-              {pending && !sendingCode && !startingDemo
+                { pending && !sendingCode && (
+                  <Loader2 className="animate-spin" aria-hidden />
+                )}
+              {pending && !sendingCode
                 ? "Signing in…"
-                : "Sign in"}
+                : "Sign in as demo user"}
             </Button>
 
             {!noPassword && (
@@ -274,27 +262,6 @@ export function LoginScreen() {
 
           <AuthDivider />
           <SocialButtons />
-
-          {/* No account needed: a fully set-up business to click around in, wiped on exit. */}
-          {DEMO_LOGIN_ENABLED && (
-            <div className="space-y-2 rounded-lg border border-dashed px-4 py-3 text-center">
-              <p className="text-sm text-muted-foreground">
-                Just looking? Try a ready-made business. Nothing you do is
-                kept.
-              </p>
-              <Button
-                type="button"
-                variant="outline"
-                size="lg"
-                className="h-10 w-full"
-                disabled={pending}
-                onClick={() => void exploreDemo()}
-              >
-                {startingDemo && <Loader2 className="animate-spin" aria-hidden />}
-                {startingDemo ? "Opening the demo…" : "Explore the demo"}
-              </Button>
-            </div>
-          )}
         </>
       )}
     </AuthLayout>

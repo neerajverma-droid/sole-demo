@@ -63,7 +63,7 @@ export const DEFAULT_PREFERENCES: BusinessPreferences = {
   tax: DEFAULT_TAX_SETTINGS,
   documents: DEFAULT_DOCUMENT_DEFAULTS,
   notifications: DEFAULT_NOTIFICATIONS,
-  website: "",
+  website: "https://coastalspark.example.com",
   payId: "",
 };
 

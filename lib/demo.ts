@@ -22,18 +22,19 @@
 import { track } from "@/lib/analytics";
 import { EVENTS } from "@/lib/analytics-events";
 import { apiPost } from "@/lib/api/client";
+import { setBusinessId } from "@/lib/api/business-id";
 import { ensureDeviceId } from "@/lib/api/device";
 import { PLATFORM } from "@/lib/api/env";
 import { apiRoutes } from "@/lib/api/routes";
 import { setSession } from "@/lib/api/session";
 import type { AuthUser } from "@/lib/api/types";
+import { demoUser } from "@/lib/demo-seed/mock-server";
 
 /**
- * Whether to offer the demo at all. Off unless the deployment says so, since a
- * backend without a built pool would only ever answer "every seat is in use".
+ * Whether to offer the demo at all. In sole-demo this is enabled by default.
  */
 export const DEMO_LOGIN_ENABLED =
-  process.env.NEXT_PUBLIC_DEMO_LOGIN_ENABLED === "true";
+  process.env.NEXT_PUBLIC_DEMO_LOGIN_ENABLED !== "false";
 
 export type DemoResult =
   | { ok: true; user: AuthUser | null }
@@ -62,9 +63,12 @@ export async function startDemo(): Promise<DemoResult> {
     return { ok: false, message: result.message || GENERIC_FAILURE };
   }
 
-  setSession(result.data?.user);
+  const user = result.data?.user || (demoUser as AuthUser);
+
+  setSession(user);
+  setBusinessId(String((user as any).business_id || 1));
   track(EVENTS.SIGNIN_COMPLETED, { method: "demo" });
-  return { ok: true, user: result.data?.user ?? null };
+  return { ok: true, user };
 }
 
 /**

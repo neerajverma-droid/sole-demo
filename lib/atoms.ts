@@ -946,7 +946,7 @@ export const inviteAccountantOpenAtom = atom(false);
  * authenticated, whether a request is in flight, and the error the last one
  * came back with.
  */
-export const authEmailAtom = atom("");
+export const authEmailAtom = atom("accounts.coastalspark@example.com");
 export const authPendingAtom = atom(false);
 export const authErrorAtom = atom<string | null>(null);
 

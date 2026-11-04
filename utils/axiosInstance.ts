@@ -40,6 +40,7 @@ import {
   redirectToLogin,
   refreshAccessToken,
 } from "@/lib/api/session";
+import { handleMockRequest } from "@/lib/demo-seed/mock-server";
 
 // Extend config to carry the retry flags.
 interface RetryableConfig extends InternalAxiosRequestConfig {
@@ -55,6 +56,28 @@ const BASE_URL =
 const api = axios.create({
   baseURL: BASE_URL,
 });
+
+const defaultAdapter = api.defaults.adapter;
+api.defaults.adapter = async (config) => {
+  const method = config.method || "GET";
+  const url = config.url || "";
+  const mock = handleMockRequest(method, url, config.params, config.data);
+  if (mock) {
+    return {
+      data: mock.data,
+      status: mock.status,
+      statusText: "OK",
+      headers: new AxiosHeaders(mock.headers || {}),
+      config,
+      request: {},
+    };
+  }
+  const adapter =
+    typeof defaultAdapter === "function"
+      ? defaultAdapter
+      : axios.getAdapter(defaultAdapter || ["xhr", "http", "fetch"]);
+  return adapter(config);
+};
 
 /* ------------------------------------------------------------------ *
  * Request interceptor                                                  *

@@ -14,6 +14,7 @@
 import { API_BASE, API_KEY, API_CONFIGURED } from "@/lib/api/env";
 import { looksUnauthenticated } from "@/lib/api/auth-failure";
 import { getBusinessId } from "@/lib/api/cookies";
+import { handleMockRequest } from "@/lib/demo-seed/mock-server";
 import {
   clearSession,
   getAccessToken,
@@ -126,6 +127,25 @@ export async function apiRequest<T = unknown>(
     redirectOnAuthFailure = false,
     signal,
   } = options;
+
+  const isBrowser = typeof window !== "undefined";
+  const mock =
+    isBrowser || process.env.ENABLE_MOCK_SERVER === "true"
+      ? handleMockRequest(method, path, params, body)
+      : null;
+  if (mock) {
+    const payload = mock.data as Record<string, unknown>;
+    return {
+      success:
+        typeof payload?.success === "boolean"
+          ? payload.success
+          : mock.status >= 200 && mock.status < 300,
+      message:
+        typeof payload?.message === "string" ? payload.message : mock.message,
+      data: (payload?.data !== undefined ? payload.data : payload) as T,
+      status: mock.status,
+    };
+  }
 
   if (!API_CONFIGURED) {
     return { success: false, status: 0, message: NOT_CONFIGURED_MESSAGE };

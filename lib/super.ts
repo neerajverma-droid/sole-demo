@@ -388,12 +388,12 @@ function syntheticMatches(
   const reconciled = Math.max(0, amount - Math.max(0, remaining));
   return reconciled > 0.005
     ? [
-        {
-          transactionId: `reconciled-${id}`,
-          reference: "Bank reconciliation",
-          amount: reconciled,
-        },
-      ]
+      {
+        transactionId: `reconciled-${id}`,
+        reference: "Bank reconciliation",
+        amount: reconciled,
+      },
+    ]
     : [];
 }
 
@@ -600,7 +600,11 @@ export async function fetchContributionMatrix(
     apiRoutes.superContribution.kpi,
     { params: { type } },
   );
-  return response.data?.data ?? { has_previous_data: false, cards_data: [] };
+  const raw = response.data?.data;
+  if (!raw || !Array.isArray(raw.cards_data)) {
+    return { has_previous_data: false, cards_data: [] };
+  }
+  return raw;
 }
 
 export type SuperMatrixStats = {
@@ -634,13 +638,14 @@ export function mapContributionMatrix(
   matrix: ApiMatrix,
   period: SuperPeriod,
 ): SuperMatrixStats {
+  const cards = Array.isArray(matrix?.cards_data) ? matrix.cards_data : [];
   const cardFor = (key: ApiMatrixCard["key"]) => {
-    const card = matrix.cards_data.find((entry) => entry.key === key);
+    const card = cards.find((entry) => entry.key === key);
     return {
       value: invoiceMoney(card?.total_amount ?? 0),
       delta: matrixDeltaLine(
         card?.percentage_change ?? 0,
-        matrix.has_previous_data,
+        Boolean(matrix?.has_previous_data),
         period,
       ),
     };

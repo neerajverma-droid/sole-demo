@@ -64,7 +64,7 @@ export function ProfileCard() {
               />
             ) : (
               <div className="grid size-16 place-items-center rounded-full bg-primary/10 text-xl font-semibold text-primary ring-2 ring-primary">
-                {contactInitials(business.businessName)}
+                {contactInitials(business.businessName || "Coastal Spark Electrical")}
               </div>
             )}
             <span
@@ -93,7 +93,7 @@ export function ProfileCard() {
           <div className="min-w-0 space-y-1.5">
             <div className="flex flex-wrap items-center ">
               <h2 className="text-2xl font-bold tracking-tight">
-                {business.businessName || "—"}
+                {business.businessName || "Coastal Spark Electrical"}
               </h2>
               {/* <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
                 {business.companyType || industry || "—"}
@@ -101,7 +101,7 @@ export function ProfileCard() {
             </div>
             <p className="flex items-center justify-start gap-1.5 text-sm text-muted-foreground">
               <Mail className="size-4 shrink-0" aria-hidden />
-              <span className="truncate">{business.email || "—"}</span>
+              <span className="truncate">{business.email || "accounts.coastalspark@example.com"}</span>
             </p>
           </div>
         </div>
@@ -110,20 +110,20 @@ export function ProfileCard() {
             icon={<Phone aria-hidden />}
             tone="bg-primary/10 text-primary"
             label="Mobile number"
-            value={business.phone}
+            value={business.phone || "0491 570 006"}
             tabular
           />
           <DetailTile
             icon={<Globe aria-hidden />}
             tone="bg-primary/10 text-primary"
             label="Website"
-            value={prefs.website}
+            value={prefs.website || "https://coastalspark.example.com"}
           />
           <DetailTile
             icon={<MapPin aria-hidden />}
             tone={WARM_TILE}
             label="Address"
-            value={business.addressSearch}
+            value={business.addressSearch || "14 Ferry Road, Southport QLD 4215"}
           />
         </div>
       </CardContent>

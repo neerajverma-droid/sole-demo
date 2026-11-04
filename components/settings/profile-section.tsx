@@ -40,8 +40,25 @@ export function ProfileSection() {
   const [edited, setEdited] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
 
-  const values = draft ?? stored;
-  const dirty = draft !== null && !sameValues(draft, stored);
+  const fallbackProfile: PersonalProfileForm = React.useMemo(
+    () => ({
+      fullName: "Sam Taylor",
+      email: "accounts.coastalspark@example.com",
+      mobile: "+61491570006",
+    }),
+    [],
+  );
+
+  const effectiveStored = React.useMemo(() => {
+    return {
+      fullName: stored.fullName || fallbackProfile.fullName,
+      email: stored.email || fallbackProfile.email,
+      mobile: stored.mobile || fallbackProfile.mobile,
+    };
+  }, [stored, fallbackProfile]);
+
+  const values = draft ?? effectiveStored;
+  const dirty = draft !== null && !sameValues(draft, effectiveStored);
 
   const patch = (partial: Partial<PersonalProfileForm>) => {
     setEdited(true);
