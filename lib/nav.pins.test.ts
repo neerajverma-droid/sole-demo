@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { isPinnable, orderedNav, pinTargets, visibleNav } from "@/lib/nav";
+import { ADDONS } from "@/lib/addons";
+import {
+  isPinnable,
+  normalisePins,
+  orderedNav,
+  pinTargets,
+  visibleNav,
+} from "@/lib/nav";
 
 /**
  * What a pin is allowed to point at.
@@ -65,6 +72,48 @@ describe("what can be pinned", () => {
 
   it("says no to an id the nav has never heard of", () => {
     expect(isPinnable("not-a-row")).toBe(false);
+  });
+});
+
+/**
+ * An add-on is categorically not pinnable, however many pages it has.
+ *
+ * This is the case `isPinnable` was built for and, for a while, the UI never
+ * actually asked: `NavRow` decided pinnability from `hasChildren` alone, which
+ * is exactly true for a group and exactly WRONG for a single-page add-on — no
+ * children, no pages, so it read as a plain leaf and grew a working-looking
+ * pin button for an id `PIN_TARGETS` was built to exclude. Clicking it filled
+ * the icon in and did nothing else: the id can't resolve in PINNED, so the
+ * "pin" just sat on the add-on row, and outlived the add-on if it was later
+ * removed from the plan — until `useAddons`'s own removal cleanup caught it.
+ *
+ * `PIN_TARGETS` is built from the MAIN catalogue alone (`mainRoster`), which
+ * never includes `ADDONS` — so every one of these was already excluded at the
+ * data layer. What was missing was the component actually asking.
+ */
+describe("add-ons are never pinnable", () => {
+  it("every add-on id, single-page or multi-page alike", () => {
+    for (const addon of ADDONS) {
+      expect(isPinnable(addon.id), `${addon.name} should not be pinnable`).toBe(
+        false,
+      );
+    }
+  });
+
+  it("an add-on's own pages aren't pinnable either", () => {
+    const withPages = ADDONS.find((addon) => (addon.pages ?? []).length > 0);
+    expect(withPages, "fixture needs a multi-page add-on").toBeTruthy();
+
+    for (const page of withPages!.pages ?? []) {
+      expect(isPinnable(page.id), `${page.label} should not be pinnable`).toBe(
+        false,
+      );
+    }
+  });
+
+  it("drops a stored add-on pin rather than resolving it", () => {
+    const [addon] = ADDONS;
+    expect(pinTargets([addon.id])).toEqual([]);
   });
 });
 
@@ -199,9 +248,77 @@ describe("visibleNav — pinning moves a row out of its section", () => {
     );
   });
 
+  it("keeps a group whose own id is sitting in the pinned list", () => {
+    /*
+     * The bug this guards: a pin is a move, so an id nothing can draw takes a
+     * row out of its section and gives it nowhere to arrive. A group id — which
+     * the onboarding picker used to store for a ticked group — did exactly
+     * that, and Expenses went missing from the rail rather than appearing in
+     * PINNED.
+     */
+    const sections = visibleNav({ pinned: [group.id] });
+
+    expect(ids(sections)).toContain(group.id);
+    expect(childIds(sections, group.id)).toEqual(
+      group.children!.map((child) => child.id),
+    );
+  });
+
   it("treats an absent pinned list as nothing pinned", () => {
     // Storage predates the field: it arrives undefined for anyone who hasn't
     // visited since it was added, and that has to mean "nothing", not a throw.
     expect(ids(visibleNav({}))).toEqual(ids(visibleNav({ pinned: [] })));
+  });
+});
+
+/**
+ * Pins as they come back off the server, before the rail is asked to draw them.
+ *
+ * `pinTargets` still refuses a group on its own account — that rule hasn't
+ * moved. This is the other half: reading a stored group id as the thing the
+ * person who ticked it asked for, which is every page inside it, rather than
+ * letting it travel on as an id that resolves to nothing.
+ */
+describe("normalisePins", () => {
+  it("expands a stored group id into its pages", () => {
+    const group = groups[0];
+
+    expect(normalisePins([group.id])).toEqual(
+      group.children!.map((child) => child.id),
+    );
+  });
+
+  it("leaves a list of real pins exactly as it is", () => {
+    const list = [children[1].id, topLevelLeaves[0].id, children[0].id];
+
+    expect(normalisePins(list)).toEqual(list);
+  });
+
+  it("drops an id that names nothing pinnable", () => {
+    const [addon] = ADDONS;
+
+    expect(normalisePins(["not-a-row", addon.id])).toEqual([]);
+  });
+
+  it("doesn't pin a page twice when its group is in the list as well", () => {
+    const group = groups[0];
+    const child = group.children![0];
+
+    expect(normalisePins([child.id, group.id])).toEqual([
+      child.id,
+      ...group.children!.slice(1).map((item) => item.id),
+    ]);
+  });
+
+  it("treats a missing list as nothing pinned", () => {
+    expect(normalisePins()).toEqual([]);
+  });
+
+  it("is what the rail can then resolve, all of it", () => {
+    const group = groups[0];
+
+    expect(pinTargets(normalisePins([group.id])).map((item) => item.id)).toEqual(
+      group.children!.map((child) => child.id),
+    );
   });
 });

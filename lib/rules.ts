@@ -9,8 +9,6 @@
  */
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
 import { invoiceMoney } from "@/lib/invoices";
 import type { TransactionCategoryType } from "@/lib/transactions";
@@ -555,10 +553,6 @@ export async function createRuleApi(draft: RuleDraft): Promise<Rule[]> {
   if (!response.data?.success) {
     throw new Error(response.data?.message || "Failed to create rule.");
   }
-  // A rule is somebody deciding the product should do the categorising from
-  // now on, which is a far stronger signal than any single reconcile. The old
-  // app had one generic event covering this whole module.
-  track(EVENTS.TRANSACTION_RULE_CREATED);
   return hydrateRuleRows(response.data.data?.rules ?? []);
 }
 

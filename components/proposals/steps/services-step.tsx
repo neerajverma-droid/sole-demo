@@ -14,7 +14,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { ItemLookupInput } from "@/components/documents/item-lookup-input";
 import { StepFooter, StepHeader, useTouched } from "@/components/proposals/steps/step-parts";
+import { searchInvoiceItems } from "@/lib/invoice-item-search";
 import {
   formatProposalMoney,
   hasServiceIssues,
@@ -23,6 +25,7 @@ import {
   recalculateLine,
   round2,
   serviceTotals,
+  servicePatchFromSuggestion,
   servicesIssues,
   type ServiceLine,
 } from "@/lib/proposals";
@@ -85,159 +88,216 @@ export function ServicesStep({
         }
       : null;
 
+  /** Each line's controls — laid out as a table row from sm, as a card on phones. */
+  const lineFields = (service: ServiceLine, index: number) => ({
+    description: (
+      <>
+        <ItemLookupInput
+          search={(query) => searchInvoiceItems(query, false)}
+          queryKey="invoice"
+          value={service.description}
+          placeholder="Search or type a service"
+          label="Description"
+          invalid={Boolean(rowIssue(index, "description"))}
+          onChange={(value) => update(index, { description: value })}
+          onSelect={(suggestion) => update(index, servicePatchFromSuggestion(suggestion, service, tax.percent))}
+        />
+        <CellError message={rowIssue(index, "description")} />
+      </>
+    ),
+    quantity: (
+      <>
+        <Input
+          type="number"
+          min={0}
+          aria-label="Quantity"
+          value={service.quantity}
+          aria-invalid={Boolean(rowIssue(index, "quantity"))}
+          onKeyDown={blockSignKeys}
+          onChange={(event) => update(index, { quantity: nonNegative(event.target.value) })}
+        />
+        <CellError message={rowIssue(index, "quantity")} />
+      </>
+    ),
+    price: (
+      <>
+        <Input
+          type="number"
+          min={0}
+          aria-label="Price"
+          value={service.price}
+          aria-invalid={Boolean(rowIssue(index, "price"))}
+          onKeyDown={blockSignKeys}
+          onChange={(event) => update(index, { price: nonNegative(event.target.value) })}
+        />
+        <CellError message={rowIssue(index, "price")} />
+      </>
+    ),
+    discount: (
+      <>
+        <Input
+          type="number"
+          min={0}
+          max={100}
+          aria-label="Discount percent"
+          value={service.discount_percent ?? 0}
+          aria-invalid={Boolean(rowIssue(index, "discount_percent"))}
+          onKeyDown={blockSignKeys}
+          onChange={(event) =>
+            update(index, { discount_percent: nonNegative(event.target.value, 100) })
+          }
+        />
+        <CellError message={rowIssue(index, "discount_percent")} />
+      </>
+    ),
+    tax: (
+        <div className="flex h-9 items-center gap-2">
+          <Switch
+            aria-label={`Apply ${tax.name}`}
+            checked={Number(service.gst_percent) > 0}
+            onCheckedChange={(checked) =>
+              update(index, { gst_percent: checked ? tax.percent : 0 })
+            }
+          />
+          <span className="text-xs text-muted-foreground">
+            {Number(service.gst_percent) > 0 ? `${service.gst_percent}%` : "No"}
+          </span>
+        </div>
+    ),
+    amount: formatProposalMoney(service.amount, currency),
+    remove: (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-9"
+          aria-label="Remove service"
+          onClick={() => onChange(services.filter((_, at) => at !== index))}
+        >
+          <Trash2 className="text-muted-foreground" />
+        </Button>
+    ),
+  });
+
   return (
     <section className="space-y-4">
       <StepHeader
         title="Services"
         description={`Add service lines with quantity, price, discount, and ${tax.name}.`}
-        action={
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() =>
-              onChange([
-                ...services,
-                newServiceLine(tax.enabledByDefault ? tax.percent : 0),
-              ])
-            }
-          >
-            <Plus />
-            Add row
-          </Button>
-        }
       />
 
-      <div className="overflow-x-auto rounded-lg border border-border">
-        <Table className="min-w-[640px]">
-          <TableHeader>
-            <TableRow>
-              <TableHead>Description</TableHead>
-              <TableHead className="w-20">Qty</TableHead>
-              <TableHead className="w-28">Price</TableHead>
-              <TableHead className="w-24">Discount %</TableHead>
-              <TableHead className="w-28">{tax.name}</TableHead>
-              <TableHead className="w-28 text-right">Amount</TableHead>
-              <TableHead className="w-12" />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {services.length === 0 ? (
+      {/* One card, as sole-pm's: the group's heading, its lines, "Add New Service" and its totals. */}
+      <div className="overflow-hidden rounded-xl border border-border bg-card">
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 border-b border-border px-4 py-3">
+          <h3 className="text-base font-semibold">One-off Services</h3>
+          <span className="text-sm text-muted-foreground">· Billed on acceptance</span>
+        </div>
+
+        {/* Phones: one card per line, nothing to scroll sideways. */}
+        <div className="space-y-3 p-3 sm:hidden">
+          {services.length === 0 ? (
+            <p className="rounded-lg border border-border py-7 text-center text-sm text-muted-foreground">
+              No services added yet.
+            </p>
+          ) : (
+            services.map((service, index) => {
+              const field = lineFields(service, index);
+              return (
+                <div key={index} className="space-y-3 rounded-lg border border-border bg-background p-3">
+                  <div className="flex items-start gap-2">
+                    <div className="min-w-0 flex-1">{field.description}</div>
+                    {field.remove}
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <MobileField label="Qty">{field.quantity}</MobileField>
+                    <MobileField label="Price">{field.price}</MobileField>
+                    <MobileField label="Discount %">{field.discount}</MobileField>
+                    <MobileField label={tax.name}>{field.tax}</MobileField>
+                  </div>
+                  <div className="flex items-center justify-between border-t border-border pt-2 text-sm">
+                    <span className="text-muted-foreground">Amount</span>
+                    <span className="font-medium tabular">{field.amount}</span>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        <div className="hidden overflow-x-auto sm:block">
+          <Table className="min-w-[640px]">
+            <TableHeader className="bg-muted/40">
               <TableRow>
-                <TableCell colSpan={7} className="py-7 text-center text-sm text-muted-foreground">
-                  No services added yet.
-                </TableCell>
+                <TableHead>Description</TableHead>
+                <TableHead className="w-20">Qty</TableHead>
+                <TableHead className="w-28">Price</TableHead>
+                <TableHead className="w-24">Discount %</TableHead>
+                <TableHead className="w-28">{tax.name}</TableHead>
+                <TableHead className="w-28 text-right">Amount</TableHead>
+                <TableHead className="w-12" />
               </TableRow>
-            ) : (
-              services.map((service, index) => (
-                <TableRow key={index} className="align-top">
-                  <TableCell>
-                    <Input
-                      value={service.description}
-                      placeholder="Service description"
-                      aria-label="Description"
-                      aria-invalid={Boolean(rowIssue(index, "description"))}
-                      onChange={(event) => update(index, { description: event.target.value })}
-                    />
-                    <CellError message={rowIssue(index, "description")} />
-                  </TableCell>
-                  <TableCell>
-                    <Input
-                      type="number"
-                      min={0}
-                      aria-label="Quantity"
-                      value={service.quantity}
-                      aria-invalid={Boolean(rowIssue(index, "quantity"))}
-                      onKeyDown={blockSignKeys}
-                      onChange={(event) => update(index, { quantity: nonNegative(event.target.value) })}
-                    />
-                    <CellError message={rowIssue(index, "quantity")} />
-                  </TableCell>
-                  <TableCell>
-                    <Input
-                      type="number"
-                      min={0}
-                      aria-label="Price"
-                      value={service.price}
-                      aria-invalid={Boolean(rowIssue(index, "price"))}
-                      onKeyDown={blockSignKeys}
-                      onChange={(event) => update(index, { price: nonNegative(event.target.value) })}
-                    />
-                    <CellError message={rowIssue(index, "price")} />
-                  </TableCell>
-                  <TableCell>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={100}
-                      aria-label="Discount percent"
-                      value={service.discount_percent ?? 0}
-                      aria-invalid={Boolean(rowIssue(index, "discount_percent"))}
-                      onKeyDown={blockSignKeys}
-                      onChange={(event) =>
-                        update(index, { discount_percent: nonNegative(event.target.value, 100) })
-                      }
-                    />
-                    <CellError message={rowIssue(index, "discount_percent")} />
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex h-9 items-center gap-2">
-                      <Switch
-                        aria-label={`Apply ${tax.name}`}
-                        checked={Number(service.gst_percent) > 0}
-                        onCheckedChange={(checked) =>
-                          update(index, { gst_percent: checked ? tax.percent : 0 })
-                        }
-                      />
-                      <span className="text-xs text-muted-foreground">
-                        {Number(service.gst_percent) > 0 ? `${service.gst_percent}%` : "No"}
-                      </span>
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-right font-medium tabular">
-                    <span className="inline-flex h-9 items-center">
-                      {formatProposalMoney(service.amount, currency)}
-                    </span>
-                  </TableCell>
-                  <TableCell>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="size-9"
-                      aria-label="Remove service"
-                      onClick={() => onChange(services.filter((_, at) => at !== index))}
-                    >
-                      <Trash2 className="text-muted-foreground" />
-                    </Button>
+            </TableHeader>
+            <TableBody>
+              {services.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={7} className="py-7 text-center text-sm text-muted-foreground">
+                    No services added yet.
                   </TableCell>
                 </TableRow>
-              ))
+              ) : (
+                services.map((service, index) => {
+                  const field = lineFields(service, index);
+                  return (
+                    <TableRow key={index} className="align-top">
+                      <TableCell>{field.description}</TableCell>
+                      <TableCell>{field.quantity}</TableCell>
+                      <TableCell>{field.price}</TableCell>
+                      <TableCell>{field.discount}</TableCell>
+                      <TableCell>{field.tax}</TableCell>
+                      <TableCell className="text-right font-medium tabular">
+                        <span className="inline-flex h-9 items-center">{field.amount}</span>
+                      </TableCell>
+                      <TableCell>{field.remove}</TableCell>
+                    </TableRow>
+                  );
+                })
+              )}
+            </TableBody>
+          </Table>
+        </div>
+
+        <div className="border-t border-border p-3">
+          <button
+            type="button"
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border py-2.5 text-sm font-medium text-foreground transition-colors hover:border-primary hover:bg-primary/5 hover:text-primary"
+            onClick={() => onChange([...services, newServiceLine(tax.enabledByDefault ? tax.percent : 0)])}
+          >
+            <Plus className="size-4" aria-hidden />
+            Add New Service
+          </button>
+        </div>
+
+        <div className="flex flex-col gap-2 border-t border-border bg-muted/40 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+          <span className="text-muted-foreground">
+            {services.length} {services.length === 1 ? "service" : "services"}
+          </span>
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
+            <FooterTotal label="Subtotal" value={formatProposalMoney(totals.subtotal, currency)} />
+            {totals.discount > 0 && (
+              <FooterTotal
+                label="Discount"
+                value={`-${formatProposalMoney(totals.discount, currency)}`}
+                valueClass="text-destructive"
+              />
             )}
-          </TableBody>
-        </Table>
+            <FooterTotal label={tax.name} value={formatProposalMoney(totals.gst, currency)} />
+            <FooterTotal label="Total" value={formatProposalMoney(totals.total, currency)} valueClass="font-semibold" />
+          </div>
+        </div>
       </div>
       {show("services") && issues.services && (
         <p className="text-xs text-destructive">{issues.services}</p>
       )}
-
-      <div className="space-y-2 rounded-lg bg-muted/50 p-4 text-sm">
-        <TotalRow label="Subtotal" value={formatProposalMoney(totals.subtotal, currency)} />
-        {totals.discount > 0 && (
-          <TotalRow
-            label="Discount"
-            value={`-${formatProposalMoney(totals.discount, currency)}`}
-            valueClass="text-destructive"
-          />
-        )}
-        <TotalRow label={tax.name} value={formatProposalMoney(totals.gst, currency)} />
-        <div className="flex items-center justify-between border-t border-border pt-2">
-          <span className="font-medium">Total</span>
-          <span className="text-base font-semibold tabular">
-            {formatProposalMoney(totals.total, currency)}
-          </span>
-        </div>
-      </div>
 
       {multicurrency && (
         <ExchangePanel
@@ -251,7 +311,7 @@ export function ServicesStep({
         />
       )}
 
-      <StepFooter saving={saving} nextLabel="Payments" onSave={save} />
+      <StepFooter saving={saving} nextLabel="Documents" onSave={save} />
     </section>
   );
 }
@@ -259,6 +319,15 @@ export function ServicesStep({
 /** Typing a sign or exponent into a money/qty field is never meant. */
 function blockSignKeys(event: React.KeyboardEvent<HTMLInputElement>) {
   if (["-", "+", "e", "E"].includes(event.key)) event.preventDefault();
+}
+
+function FooterTotal({ label, value, valueClass }: { label: string; value: string; valueClass?: string }) {
+  return (
+    <span className="whitespace-nowrap">
+      <span className="text-muted-foreground">{label}: </span>
+      <span className={cn("font-medium tabular", valueClass)}>{value}</span>
+    </span>
+  );
 }
 
 function CellError({ message }: { message?: string }) {
@@ -367,6 +436,15 @@ function ExchangePanel({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function MobileField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="min-w-0 space-y-1">
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      {children}
     </div>
   );
 }

@@ -22,6 +22,7 @@ import {
   type TabularReportConfig,
 } from "@/lib/report-table";
 import type { ReportPeriod } from "@/lib/report-periods";
+import { customerIdLabel, taxWord } from "@/lib/country-context";
 
 /* ------------------------------------------------------------------ *
  * Asset Listing — report_type_id 3
@@ -67,6 +68,56 @@ export const assetListingConfig: TabularReportConfig = {
   source: reportEndpointSource(ASSET_LISTING_REPORT_TYPE_ID),
   itemLabel: "asset",
   reportTypeId: ASSET_LISTING_REPORT_TYPE_ID,
+};
+
+/* ------------------------------------------------------------------ *
+ * Transaction Listing — report_type_id 4
+ * ------------------------------------------------------------------ */
+
+export const TRANSACTION_LISTING_REPORT_TYPE_ID = "4";
+
+/**
+ * Every column `getTransactionReport` sends, as the original Reports page
+ * listed them: one row per reconciled transaction, no grouping and no totals
+ * worked out on this side.
+ */
+const TRANSACTION_LISTING_COLUMNS: ReportColumnSpec[] = [
+  { key: "Transaction Date", label: "Date", format: "date" },
+  { key: "Type", secondary: true },
+  { key: "Transaction Name", label: "Transaction", emphasis: true },
+  { key: "Client/Supplier", label: "Client / Supplier" },
+  { key: "Category Name", label: "Category" },
+  { key: "Description", secondary: true },
+  {
+    key: "Amount (EX GST)",
+    label: "Amount (ex GST)",
+    countryLabel: (country) => `Amount (ex ${taxWord(country)})`,
+    format: "money",
+  },
+  {
+    key: "Amount (INC. GST)",
+    label: "Amount (inc GST)",
+    countryLabel: (country) => `Amount (inc ${taxWord(country)})`,
+    format: "money",
+  },
+  { key: "Reconcile Date", label: "Reconciled", format: "date", secondary: true },
+];
+
+export const transactionListingConfig: TabularReportConfig = {
+  id: "transaction-listing",
+  title: "Transaction Listing",
+  description: "Every transaction in the period, ready to download or send on.",
+  tip: "Every transaction coded to a category in the period, one row each. Read-only — this is the copy you export or send on, and coding is changed on the Transactions screen.",
+  columns: TRANSACTION_LISTING_COLUMNS,
+  periods: [
+    "This month",
+    "Last quarter",
+    "This financial year",
+    "Custom range",
+  ] as readonly ReportPeriod[],
+  source: reportEndpointSource(TRANSACTION_LISTING_REPORT_TYPE_ID),
+  itemLabel: "transaction",
+  reportTypeId: TRANSACTION_LISTING_REPORT_TYPE_ID,
 };
 
 /* ------------------------------------------------------------------ *
@@ -131,7 +182,9 @@ const CUSTOMER_SUPPLIER_COLUMNS: Record<CustomerSupplierTab, ReportColumnSpec[]>
     { key: "Contact Mobile", label: "Mobile", secondary: true },
     { key: "Contact Address", label: "Address", secondary: true },
     { key: "Contact Website", label: "Website", secondary: true },
-    { key: "Contact ABN", label: "ABN", secondary: true },
+    // The backend's key stays "Contact ABN"; the heading is the country's own
+    // word for a business number — "NZBN" for a New Zealand business.
+    { key: "Contact ABN", label: "ABN", countryLabel: customerIdLabel, secondary: true },
   ],
   Invoices: [
     CONTACT_NAME,

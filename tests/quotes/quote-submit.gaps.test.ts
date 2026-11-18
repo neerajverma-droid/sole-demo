@@ -128,7 +128,9 @@ describe("a converting quote with no rate yet", () => {
       ...CONTEXT,
       exchangeRate: 1.0912345,
     });
-    expect(payload.exchange_rate).toBe(1.09);
+    // Six decimals, the precision the server stores — and the one the totals
+    // are divided by, so the server's own division agrees with the client's.
+    expect(payload.exchange_rate).toBe(1.091235);
     expect(payload.total_after_exchange).toBe(payload.exchange_total);
     expect(payload.is_exchange_rate_edited).toBe(1);
   });

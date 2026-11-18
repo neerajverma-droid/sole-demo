@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const trackMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/analytics", () => ({ track: trackMock }));
+
 import { decryptPayload } from "@/utils/encrypt";
 import apiRoutes from "@/config/api-routes";
 
@@ -75,6 +78,45 @@ describe("the shared result/err handling", () => {
     expect(result).not.toHaveProperty("rows");
   });
 
+  it("reports rows the server skipped as already existing, with their invoice numbers", async () => {
+    apiMock.post.mockResolvedValue({
+      data: {
+        success: true,
+        data: [{}],
+        skipped: [
+          { row: 2, identifier: "INV-7", message: "Invoice number already exists" },
+          { row: 3, identifier: "INV-8", message: "Invoice number appears earlier in the file" },
+        ],
+      },
+    });
+
+    const result = await createBulkInvoices(rows(3));
+
+    expect(result).toEqual({
+      created: 1,
+      failed: 0,
+      skipped: 2,
+      rows: [
+        { row: 2, status: "skipped", identifier: "INV-7", message: "Invoice number already exists" },
+        { row: 3, status: "skipped", identifier: "INV-8", message: "Invoice number appears earlier in the file" },
+      ],
+    });
+  });
+
+  it("counts a batch that was entirely skipped as created 0, not failed", async () => {
+    apiMock.post.mockResolvedValue({
+      data: {
+        success: true,
+        data: [],
+        skipped: [{ row: 1, identifier: "INV-1", message: "Invoice number already exists" }],
+      },
+    });
+
+    const result = await createBulkInvoices(rows(1));
+
+    expect(result).toMatchObject({ created: 0, failed: 0, skipped: 1 });
+  });
+
   it("reads a 2xx with no echoed array as the whole batch landing", async () => {
     apiMock.post.mockResolvedValue({ data: { success: true, message: "Done" } });
 
@@ -114,5 +156,21 @@ describe("the shared result/err handling", () => {
     apiMock.post.mockRejectedValue(error);
 
     await expect(createBulkAssets(rows(1))).rejects.toBe(error);
+  });
+});
+
+describe("createBulkExpenses fires its Mixpanel event", () => {
+  it("fires after the server confirms", async () => {
+    trackMock.mockClear();
+    apiMock.post.mockResolvedValue({ data: { success: true, message: "Done" } });
+    await createBulkExpenses(rows(3));
+    expect(trackMock).toHaveBeenCalledWith("expense_added", { source: "bulk_upload", count: 3 });
+  });
+
+  it("stays silent when the server refuses", async () => {
+    trackMock.mockClear();
+    apiMock.post.mockResolvedValue({ data: { success: false, message: "no" } });
+    await expect(createBulkExpenses(rows(3))).rejects.toThrow();
+    expect(trackMock).not.toHaveBeenCalled();
   });
 });

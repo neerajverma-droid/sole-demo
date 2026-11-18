@@ -25,9 +25,11 @@ import { cn } from "@/lib/utils";
  * is greyed out — and for an icon-only control that's doubly true, since its
  * position is the only thing naming it.
  *
- * Icon-only, so `label` is the accessible name rather than decoration. It isn't
- * shown on hover for an enabled button: that's the pattern Expenses set, and a
- * tooltip on every icon in a row of them is a lot of chrome for four words.
+ * Icon-only, so `label` is the accessible name rather than decoration. By
+ * default it isn't shown on hover for an enabled button — a tooltip on every
+ * icon in a row is a lot of chrome for a short cluster. A table whose whole
+ * action set sits inline (Expenses) passes `tooltip` so each icon is named on
+ * hover, since there's no menu left to read the names from.
  */
 export function RowIconButton({
   icon,
@@ -36,6 +38,7 @@ export function RowIconButton({
   onClick,
   disabledReason,
   destructive,
+  tooltip = false,
 }: {
   icon: React.ReactNode;
   /** The accessible name — the button shows only its icon. */
@@ -46,6 +49,8 @@ export function RowIconButton({
   /** When set, the button is disabled and this explains why on hover. */
   disabledReason?: string;
   destructive?: boolean;
+  /** Shows `label` on hover for an enabled button too. */
+  tooltip?: boolean;
 }) {
   const disabled = !!disabledReason;
   const asLink = !!href && !disabled;
@@ -69,16 +74,21 @@ export function RowIconButton({
     </Button>
   );
 
-  if (!disabled) return button;
+  if (!disabled && !tooltip) return button;
 
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        {/* The wrapper takes the hover: a disabled button fires no events. */}
-        <span className="inline-flex">{button}</span>
+        {disabled ? (
+          // The wrapper takes the hover: a disabled button fires no events.
+          <span className="inline-flex">{button}</span>
+        ) : (
+          button
+        )}
       </TooltipTrigger>
       <TooltipContent side="top" className="max-w-56">
-        {disabledReason}
+        {/* With tooltips on, a disabled icon still says what it is. */}
+        {!disabled ? label : tooltip ? `${label} — ${disabledReason}` : disabledReason}
       </TooltipContent>
     </Tooltip>
   );

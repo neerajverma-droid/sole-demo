@@ -38,6 +38,7 @@ export function FooterTab({
       <SalesSection
         icon={Phone}
         title="Contact"
+        tourId="sales-contact"
         description="Shown in the footer of every invoice and quote you send."
       >
         <ToggleRow
@@ -98,6 +99,7 @@ export function FooterTab({
       <SalesSection
         icon={Share2}
         title="Website & social"
+        tourId="sales-social"
         description="Only the ones you switch on are printed, so an unused profile never appears."
       >
         <div className="space-y-3">

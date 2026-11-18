@@ -14,6 +14,46 @@ import { cn } from "@/lib/utils";
  * stepper, dropzone and field list.
  */
 
+/**
+ * A table row that can't be imported as it stands — tinted, with a red edge
+ * down its left side so it's findable in a long list without reading it.
+ * One class for every bulk step, so "this row has a problem" looks the same
+ * on Review and on Sole fields.
+ */
+export const ERROR_ROW_CLASS =
+  "bg-destructive/[0.06] shadow-[inset_3px_0_0_hsl(var(--destructive))] hover:bg-destructive/10";
+
+/**
+ * The Review table's Actions column, pinned to the right edge of its scroll
+ * area so Edit, Delete and Save are always in reach however wide the columns
+ * get. The table's tints are translucent, so a pinned cell can't just be
+ * transparent — scrolled content would show through it. It's opaque instead,
+ * with the same tint layered on top as a gradient (the header's wash, the
+ * row's hover and edit fills), and the row must carry `group/row` for the
+ * hover to reach it.
+ */
+// Written out in full: Tailwind only generates classes it can read as literals.
+// A hairline plus a soft shadow on the left edge, so the pinned column reads as
+// a separate layer. An inset shadow rather than a border: borders on sticky
+// cells drop out while scrolling in a collapsed-border table.
+const PINNED_EDGE =
+  "sticky right-0 z-10 bg-background shadow-[inset_1px_0_0_hsl(var(--border)),-12px_0_10px_-8px_hsl(var(--foreground)/0.22)]";
+
+export const PINNED_ACTIONS_HEAD =
+  PINNED_EDGE +
+  " bg-[linear-gradient(hsl(var(--primary)/0.06),hsl(var(--primary)/0.06))]" +
+  " dark:bg-[linear-gradient(hsl(var(--primary)/0.1),hsl(var(--primary)/0.1))]";
+export const PINNED_ACTIONS_CELL =
+  PINNED_EDGE +
+  " group-hover/row:bg-[linear-gradient(hsl(var(--primary)/0.05),hsl(var(--primary)/0.05))]";
+export const PINNED_ACTIONS_CELL_EDITING =
+  PINNED_EDGE +
+  " bg-[linear-gradient(hsl(var(--primary)/0.03),hsl(var(--primary)/0.03))]";
+
+/** The cell of an error row that is actually at fault. */
+export const ERROR_CELL_CLASS =
+  "bg-destructive/10 font-medium text-destructive";
+
 export function WizardStepper({
   steps,
   current,

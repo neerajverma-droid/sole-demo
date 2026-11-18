@@ -9,6 +9,7 @@ import {
   reportAssetStatusApi,
   type ReportAssetStatusValues,
 } from "@/lib/assets";
+import { invalidateAssetQueries } from "@/hooks/use-assets-query";
 
 /** The asset's current lost/damaged/stolen report, or `null` if none. */
 export function useAssetStatusQuery(assetId: string | undefined) {
@@ -23,8 +24,10 @@ function useInvalidateAssetStatus(assetId: string) {
   const queryClient = useQueryClient();
   return () => {
     queryClient.invalidateQueries({ queryKey: ["asset-status", assetId] });
-    queryClient.invalidateQueries({ queryKey: ["asset", assetId] });
-    queryClient.invalidateQueries({ queryKey: ["assets"] });
+    // Disposal and lost/stolen share one backend row.
+    queryClient.invalidateQueries({ queryKey: ["asset-disposal", assetId] });
+    // A report pauses depreciation and "returned" resumes it.
+    void invalidateAssetQueries(queryClient);
   };
 }
 

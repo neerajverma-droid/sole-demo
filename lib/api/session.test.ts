@@ -117,6 +117,7 @@ describe("isSignedOutRoute", () => {
       "/register",
       "/auth/forgot-password",
       "/auth/verify-email",
+      "/accountant-invite",
     ]) {
       expect(isSignedOutRoute(path)).toBe(true);
     }
@@ -127,81 +128,5 @@ describe("isSignedOutRoute", () => {
     for (const path of ["/", "/dashboard", "/login-help", "/registers", "/authors"]) {
       expect(isSignedOutRoute(path)).toBe(false);
     }
-  });
-});
-
-describe("sessionEndReason", () => {
-  /**
-   * A cookie jar: the plain string the tests above use keeps only the last
-   * cookie written, and these need the token and refresh token side by side.
-   */
-  beforeEach(() => {
-    const jar = new Map<string, string>();
-    vi.stubGlobal("document", {
-      get cookie() {
-        return [...jar].map(([name, value]) => `${name}=${value}`).join("; ");
-      },
-      set cookie(line: string) {
-        const [pair] = line.split(";");
-        const name = pair.slice(0, pair.indexOf("=")).trim();
-        if (/expires=Thu, 01 Jan 1970/.test(line)) jar.delete(name);
-        else jar.set(name, pair.slice(pair.indexOf("=") + 1));
-      },
-    });
-    // The rest of the sign-out wipe (stores, caches, IndexedDB) isn't what's under test.
-    vi.doMock("@/lib/api/teardown", () => ({ clearClientState: vi.fn() }));
-  });
-
-  /** A window just big enough for redirectToLogin, on a page inside the app. */
-  function stubWindow() {
-    const location = { pathname: "/dashboard", href: "" };
-    vi.stubGlobal("window", { location, localStorage: { setItem: vi.fn() } });
-    return location;
-  }
-
-  it("says the session expired for an ordinary session", async () => {
-    const session = await import("@/lib/api/session");
-    session.setSession({ token: "a1b2c3", refresh_token: "r" });
-    expect(session.sessionEndReason()).toBe("session_expired");
-  });
-
-  it("says the demo ended while a demo session is held", async () => {
-    const session = await import("@/lib/api/session");
-    session.setSession({ token: "demo_abc", refresh_token: "r" });
-    expect(session.sessionEndReason()).toBe("demo_ended");
-  });
-
-  it("remembers it was a demo after the tokens are cleared, for the redirect that follows", async () => {
-    stubWindow();
-    const session = await import("@/lib/api/session");
-    session.setSession({ token: "demo_abc", refresh_token: "r" });
-    session.clearSession();
-    expect(session.getAccessToken()).toBeNull();
-    expect(session.sessionEndReason()).toBe("demo_ended");
-  });
-
-  it("forgets the ended demo once a new session starts", async () => {
-    stubWindow();
-    const session = await import("@/lib/api/session");
-    session.setSession({ token: "demo_abc", refresh_token: "r" });
-    session.clearSession();
-    session.setSession({ token: "a1b2c3", refresh_token: "r" });
-    expect(session.sessionEndReason()).toBe("session_expired");
-  });
-
-  it("sends a demo visitor to sign-in with the demo message, whatever the reason given", async () => {
-    const location = stubWindow();
-    const session = await import("@/lib/api/session");
-    session.setSession({ token: "demo_abc", refresh_token: "r" });
-    session.redirectToLogin("signed_out");
-    expect(location.href).toBe("/login?error=demo_ended");
-  });
-
-  it("leaves an ordinary sign-out's reason alone", async () => {
-    const location = stubWindow();
-    const session = await import("@/lib/api/session");
-    session.setSession({ token: "a1b2c3", refresh_token: "r" });
-    session.redirectToLogin("signed_out");
-    expect(location.href).toBe("/login?error=signed_out");
   });
 });

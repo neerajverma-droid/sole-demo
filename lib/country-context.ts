@@ -24,6 +24,7 @@
  * its registry is unreachable.
  */
 
+import { getCountryCallingCode, isSupportedCountry } from "libphonenumber-js";
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
 import { useCountryStore } from "@/stores/country";
@@ -496,6 +497,20 @@ export function contactDefaultCurrency(ctx: CountryContext): string {
   return formFieldByKey(ctx, "contact", "currency")?.default || ctx.currency;
 }
 
+/**
+ * The dial code a new contact's phone starts on — "+61" for an Australian
+ * business, "+64" for a New Zealand one. The registry's own `phone_dial_code`
+ * when it sends one, otherwise worked out from the country, and "+61" for a
+ * country libphonenumber doesn't know.
+ */
+export function contactDefaultDialCode(ctx: CountryContext): string {
+  const fromRegistry = ctx.phoneDialCode?.trim();
+  if (fromRegistry) {
+    return fromRegistry.startsWith("+") ? fromRegistry : `+${fromRegistry}`;
+  }
+  return isSupportedCountry(ctx.iso2) ? `+${getCountryCallingCode(ctx.iso2)}` : "+61";
+}
+
 /** A label from the registry, or a sensible Australian default. */
 export function countryLabel(ctx: CountryContext, key: string, fallback: string): string {
   return ctx.labels?.[key]?.trim() || fallback;
@@ -545,6 +560,21 @@ export function documentTax(ctx: CountryContext, date?: string | null): Document
 /** What this country calls its return: "BAS", "GST return", "VAT return". */
 export function returnWord(ctx: CountryContext): string {
   return ctx.returnName?.trim() || countryLabel(ctx, "tax_return", "BAS");
+}
+
+/**
+ * Sole's own name for the retirement-contribution scheme the Super
+ * contributions module tracks: "Super" everywhere it's launched so far,
+ * "KiwiSaver" in New Zealand. Not a registry label — the registry has no
+ * word for a product name, this is Sole's.
+ */
+export function superWord(ctx: CountryContext): string {
+  return ctx.iso2 === "NZ" ? "KiwiSaver" : "Super";
+}
+
+/** The module's own title: "Super contributions", "KiwiSaver contributions". */
+export function superContributionsLabel(ctx: CountryContext): string {
+  return ctx.iso2 === "NZ" ? "KiwiSaver contributions" : "Super contributions";
 }
 
 /**
@@ -969,13 +999,30 @@ export function activeAmountDigits(
 const digitsOnly = (value: string): string => value.replace(/[^0-9]/g, "");
 
 /**
- * Whether a bank field holds something this country would accept.
- *
- * Pattern only — no check digits, because none of the three countries' bank
- * numbers carry one that is published. Blank is not an error here even for a
- * required field: these forms save partial payout details all the time, and
- * the "can this business be paid" question is asked separately
- * (`hasCompleteBankDetails`).
+ * The bank-field algorithms the registry can name (`validator`), transcribed
+ * from sole-ocr's `services/country/identifiers.js` so the form says no at the
+ * same moment the server would. The server stays the authority; a validator
+ * the registry names but this build lacks passes here, exactly as it does there.
+ */
+const BANK_VALIDATORS: Record<string, (value: string) => boolean> = {
+  /** New Zealand BB-bbbb-AAAAAAA-SSS: the bank and branch parts must be in issued ranges. */
+  nz_bank_account: (value) => {
+    const account = digitsOnly(value);
+    if (account.length !== 15 && account.length !== 16) return false;
+    const bank = Number(account.slice(0, 2));
+    const branch = Number(account.slice(2, 6));
+    return bank >= 1 && bank <= 99 && branch >= 1 && branch <= 9999;
+  },
+  /** India IFSC: four letters for the bank, a reserved "0", six characters for the branch. */
+  in_ifsc: (value) => /^[A-Z]{4}0[A-Z0-9]{6}$/.test(value.toUpperCase()),
+};
+
+/**
+ * Whether a bank field holds something this country would accept: its pattern,
+ * then its named validator, in the order the server checks them. Blank is not
+ * an error here even for a required field: these forms save partial payout
+ * details all the time, and the "can this business be paid" question is asked
+ * separately (`hasCompleteBankDetails`).
  *
  * The message names the field as this country calls it, so a New Zealand
  * business is never told its "BSB" is wrong.
@@ -985,10 +1032,16 @@ export function bankFieldError(ctx: CountryContext, key: string, value: string):
   const trimmed = value.trim();
   if (!spec || !trimmed) return undefined;
 
-  if (spec.pattern && !new RegExp(spec.pattern).test(trimmed.replace(/\s/g, ""))) {
+  const compact = trimmed.replace(/\s/g, "");
+  if (spec.pattern && !new RegExp(spec.pattern).test(compact)) {
     return bankFieldHelp(ctx, key)
       ? `${spec.label} should be ${bankFieldHelp(ctx, key)}.`
       : `${spec.label} is not in the expected format.`;
+  }
+
+  const check = spec.validator ? BANK_VALIDATORS[spec.validator] : undefined;
+  if (check && !check(compact)) {
+    return `${spec.label} doesn't look right — check the number and try again.`;
   }
   return undefined;
 }

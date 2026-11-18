@@ -7,6 +7,16 @@
  *
  *  - **Invoice Number is optional.** Blank means the backend generates one.
  *    Requiring it here would reject perfectly importable history.
+ *    The Review table shows "auto" for it, as the old importer did.
+ *  - **Status and a client email are required here** — stricter than the old
+ *    importer, which defaulted a blank status to Draft and treated the email
+ *    as optional. The AI formatter suggests the status from the file (paid,
+ *    draft, or otherwise overdue) and Review is where it's changed.
+ *  - **Dates are never required.** The server fills a missing invoice date with
+ *    today and a missing due date with the invoice date plus the payment terms
+ *    (7 days when the file has none), so nothing is sent for terms unless the
+ *    file states them. The one date rule is that a due date can't precede the
+ *    invoice date.
  *  - **Total is calculated, never read.** `total = sub_total + total_gst`.
  *    A "Total Amount" column in the file is deliberately not a mappable
  *    field, because a file whose own total disagrees with its parts would
@@ -28,6 +38,9 @@ import {
 
 /** The statuses an imported invoice can be marked as. */
 export const INVOICE_IMPORT_STATUSES = ["Draft", "Paid", "Overdue"] as const;
+
+const isOverdue = (row: BulkValues) =>
+  row["Mark as"].trim().toLowerCase() === "overdue";
 
 /**
  * Built for the business's country: its word for the tax ("GST", "VAT") in
@@ -62,28 +75,48 @@ export function invoiceImportSpec(
         required: true,
         desc: "Who the invoice is addressed to",
         aliases: ["client", "customer", "customer name", "bill to", "client name"],
-        review: { heading: "Client", editor: { kind: "text" } },
+        review: {
+          heading: "Client",
+          editor: { kind: "text" },
+          editWidth: "min-w-44",
+        },
       },
       {
         label: "Invoice number",
         apiKey: "invoice_no",
         desc: "Left blank, Sole generates one",
         aliases: ["invoice no", "invoice number", "invoice #", "number", "inv no"],
-        review: { heading: "Invoice no", editor: { kind: "text" }, mono: true },
+        review: {
+          heading: "Invoice no",
+          editor: { kind: "text" },
+          mono: true,
+          editWidth: "min-w-36",
+          empty: "auto",
+        },
       },
       {
         label: "Invoice date",
         apiKey: "invoice_date",
-        desc: "DD/MM/YYYY",
+        desc: "DD/MM/YYYY — today when blank",
         aliases: ["invoice date", "date", "issue date", "issued"],
-        review: { heading: "Date", editor: { kind: "text" }, mono: true },
+        review: {
+          heading: "Date",
+          editor: { kind: "text" },
+          mono: true,
+          editWidth: "min-w-36",
+        },
       },
       {
         label: "Due date",
         apiKey: "due_date",
-        desc: "DD/MM/YYYY",
+        desc: "DD/MM/YYYY — invoice date plus terms (7 days) when blank",
         aliases: ["due date", "due", "payment due"],
-        review: { heading: "Due", editor: { kind: "text" }, mono: true },
+        review: {
+          heading: "Due",
+          editor: { kind: "text" },
+          mono: true,
+          editWidth: "min-w-36",
+        },
       },
       {
         label: "Sub total",
@@ -102,6 +135,7 @@ export function invoiceImportSpec(
           heading: "Sub total",
           editor: { kind: "text", inputMode: "decimal" },
           mono: true,
+          editWidth: "min-w-32",
         },
       },
       {
@@ -121,33 +155,49 @@ export function invoiceImportSpec(
           heading: tax,
           editor: { kind: "text", inputMode: "decimal" },
           mono: true,
+          editWidth: "min-w-28",
         },
       },
       {
         label: "Mark as",
         apiKey: "mark_as",
-        desc: `${INVOICE_IMPORT_STATUSES.join(", ")} — defaults to Draft`,
+        required: true,
+        desc: INVOICE_IMPORT_STATUSES.join(", "),
         aliases: ["mark as", "status", "state", "invoice status"],
         review: {
           heading: "Status",
           editor: {
             kind: "select",
             options: INVOICE_IMPORT_STATUSES,
-            placeholder: "Draft",
+            placeholder: "Choose a status",
           },
+          editWidth: "min-w-36",
         },
       },
       {
         label: "Client email",
         apiKey: "client_email",
-        desc: "Optional",
+        required: true,
+        desc: "Where the invoice is sent",
         aliases: ["client email", "email", "customer email", "e mail"],
+        // Checked on import, so it needs a cell to be fixed in.
+        review: {
+          heading: "Email",
+          editor: { kind: "text", inputMode: "email" },
+          editWidth: "min-w-64",
+        },
       },
       {
         label: "Client phone",
         apiKey: "client_phone",
         desc: "Optional",
         aliases: ["client phone", "phone", "mobile", "contact number"],
+        review: {
+          heading: "Phone",
+          editor: { kind: "text", inputMode: "tel" },
+          mono: true,
+          editWidth: "min-w-44",
+        },
       },
       {
         label: "Client address",
@@ -158,7 +208,7 @@ export function invoiceImportSpec(
       {
         label: "Payment terms",
         apiKey: "payment_term",
-        desc: "Days — defaults to 30",
+        desc: "Days — 7 when blank",
         aliases: ["payment terms", "terms", "payment term", "net days"],
       },
       {
@@ -219,23 +269,38 @@ export function invoiceImportSpec(
         "Draft",
         "liam.johnson@email.com",
       ],
-      ["Michael Turner", "", "14/08/2025", "13/09/2025", "450.00", sampleTax(450), "Draft", ""],
+      [
+        "Michael Turner",
+        "",
+        "14/08/2025",
+        "13/09/2025",
+        "450.00",
+        sampleTax(450),
+        "Draft",
+        "michael.turner@email.com",
+      ],
     ],
 
     issues: [
       {
         message: "Client name is required",
+        hint: "Required",
+        field: "Client name",
         summary: "missing a client name",
         test: (row) => row["Client name"].trim() === "",
       },
       {
         message: "Sub total must be a positive number",
+        hint: "Enter a valid amount",
+        field: "Sub total",
         summary: "missing a valid Sub total",
         test: (row) =>
           row["Sub total"].trim() === "" || !isMoney(row["Sub total"]),
       },
       {
         message: `Total ${tax} must be a number`,
+        hint: "Enter an amount (0 if none)",
+        field: "Total GST",
         summary: `missing a valid Total ${tax}`,
         // Required, but zero is a perfectly good answer for anyone not
         // registered for GST — so "" fails and "0" passes.
@@ -244,18 +309,31 @@ export function invoiceImportSpec(
       },
       {
         message: "Invoice date must be DD/MM/YYYY",
+        hint: "Use DD/MM/YYYY",
+        field: "Invoice date",
         summary: "carrying an unreadable Invoice date",
         test: (row) =>
           row["Invoice date"].trim() !== "" && !parseBulkDate(row["Invoice date"]),
       },
       {
         message: "Due date must be DD/MM/YYYY",
+        hint: "Use DD/MM/YYYY",
+        field: "Due date",
         summary: "carrying an unreadable Due date",
         test: (row) =>
           row["Due date"].trim() !== "" && !parseBulkDate(row["Due date"]),
       },
       {
+        message: `Mark as is required (${INVOICE_IMPORT_STATUSES.join(", ")})`,
+        hint: "Choose a status",
+        field: "Mark as",
+        summary: "without a status",
+        test: (row) => row["Mark as"].trim() === "",
+      },
+      {
         message: `Mark as must be one of: ${INVOICE_IMPORT_STATUSES.join(", ")}`,
+        hint: "Choose a status",
+        field: "Mark as",
         summary: "carrying an unrecognised status",
         test: (row) =>
           row["Mark as"].trim() !== "" &&
@@ -264,24 +342,52 @@ export function invoiceImportSpec(
           ),
       },
       {
-        message: "An invoice marked Overdue needs a Due date in the past",
-        summary: "marked Overdue without a past Due date",
-        // sole-webapp's own extra rule. An "overdue" invoice dated in the
-        // future is a contradiction the invoice list would then display.
+        message: "Due date can't be before the invoice date",
+        hint: "Before the invoice date",
+        field: "Due date",
+        summary: "due before they were issued",
+        // Only when both dates read — an unreadable one has its own rule, and
+        // a blank one is filled in by the server (today, and +7 days).
         test: (row) => {
-          if (row["Mark as"].trim().toLowerCase() !== "overdue") return false;
+          const issued = parseBulkDate(row["Invoice date"]);
           const due = parseBulkDate(row["Due date"]);
-          return !due || due >= todayIso();
+          return issued !== null && due !== null && due < issued;
         },
       },
       {
+        message: "Due date must be in the past when the status is Overdue",
+        hint: "Must be in the past",
+        field: "Due date",
+        summary: "marked Overdue with a Due date that isn't in the past",
+        // sole-webapp's own extra rule. An "overdue" invoice due in the
+        // future is a contradiction the invoice list would then display.
+        // Only when there is a due date: a blank one is filled in by the
+        // server, and an unreadable one is reported by its own rule above.
+        test: (row) => {
+          if (!isOverdue(row)) return false;
+          const due = parseBulkDate(row["Due date"]);
+          return due !== null && due >= todayIso();
+        },
+      },
+      {
+        message: "Client email is required",
+        hint: "Required",
+        field: "Client email",
+        summary: "missing a client email",
+        test: (row) => row["Client email"].trim() === "",
+      },
+      {
         message: "Invalid client email",
+        hint: "Not a valid email",
+        field: "Client email",
         summary: "carrying a malformed email",
         test: (row) =>
           row["Client email"].trim() !== "" && !isEmail(row["Client email"]),
       },
       {
         message: "Invalid client phone",
+        hint: "Use 8–15 digits",
+        field: "Client phone",
         summary: "carrying a malformed phone number",
         test: (row) =>
           row["Client phone"].trim() !== "" && !isPhone(row["Client phone"]),
@@ -302,7 +408,8 @@ export type InvoiceImportPayload = {
   currency: string;
   invoice_date: string;
   due_date: string;
-  payment_term: number;
+  /** `null` when the file gave none — the server then uses 7 days. */
+  payment_term: number | null;
   description: string;
   notes: string;
   mark_as: string;
@@ -346,12 +453,15 @@ export function invoicePayload(
     currency: country.currency,
     invoice_date: parseBulkDate(values["Invoice date"]) ?? "",
     due_date: parseBulkDate(values["Due date"]) ?? "",
-    // sole-webapp's own fallback — 30 days when the column is absent or
-    // isn't a number.
-    payment_term: Number.isFinite(terms) && terms > 0 ? terms : 30,
+    // Only what the file states. Left out, the server derives a missing due
+    // date as the invoice date plus 7 days; sending a default here would
+    // override that.
+    payment_term: Number.isFinite(terms) && terms > 0 ? terms : null,
     description: values["Description"].trim(),
     notes: values["Notes"].trim(),
-    mark_as: (values["Mark as"].trim() || "Draft").toLowerCase(),
+    // Review requires a status, so this only guards a caller that skips it —
+    // the server's own default for a missing one is Overdue.
+    mark_as: (values["Mark as"].trim() || "Overdue").toLowerCase(),
     sub_total: subTotal,
     total_gst: totalGst,
     // Calculated, never read from the file. See the note at the top.

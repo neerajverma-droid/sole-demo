@@ -30,8 +30,10 @@ const {
   fetchSolePayDraft,
   formatDobForWire,
   formatSolePayAddress,
+  isValidAuStateCode,
   isValidAustralianAbn,
   isValidSolePayPhone,
+  latestEligibleDirectorDob,
   parseDobFromWire,
   percentToBasisPoints,
   requiredDocumentSlots,
@@ -345,6 +347,58 @@ describe("entityIssues / directorIssues / accountsIssues", () => {
     expect(entityIssues({ ...state.entity, phone: "123" }, state.address).phone).toBeTruthy();
   });
 
+  it("rejects a negative transaction qty, max or avg transaction amount", () => {
+    const state = baseState();
+    expect(
+      entityIssues({ ...state.entity, transactionQty: "-5" }, state.address).transactionQty,
+    ).toBeTruthy();
+    expect(
+      entityIssues({ ...state.entity, maxTransaction: "-100" }, state.address).maxTransaction,
+    ).toBeTruthy();
+    expect(
+      entityIssues({ ...state.entity, avgTransaction: "-1" }, state.address).avgTransaction,
+    ).toBeTruthy();
+    // Zero and ordinary positive values are untouched by this check.
+    expect(
+      entityIssues({ ...state.entity, transactionQty: "0" }, state.address).transactionQty,
+    ).toBeUndefined();
+    expect(
+      entityIssues({ ...state.entity, maxTransaction: "1000" }, state.address).maxTransaction,
+    ).toBeUndefined();
+  });
+
+  it("flags a DL state or address state that isn't a real AU code, e.g. a typo like \"465\"", () => {
+    const state = baseState();
+
+    expect(
+      directorIssues({ ...state.director, licenceState: "465" }).licenceState,
+    ).toBeTruthy();
+    expect(
+      directorIssues({ ...state.director, licenceState: "vic" }).licenceState,
+    ).toBeUndefined();
+
+    expect(
+      directorIssues({
+        ...state.director,
+        address: { ...state.director.address, state: "465" },
+      })["address.state"],
+    ).toBeTruthy();
+
+    expect(
+      entityIssues(
+        state.entity,
+        { ...state.address, state: "465" },
+      )["address.state"],
+    ).toBeTruthy();
+  });
+
+  it("isValidAuStateCode accepts the 8 real codes case-insensitively and rejects anything else", () => {
+    expect(isValidAuStateCode("VIC")).toBe(true);
+    expect(isValidAuStateCode("vic")).toBe(true);
+    expect(isValidAuStateCode("465")).toBe(false);
+    expect(isValidAuStateCode("XX")).toBe(false);
+  });
+
   it("requires licenceState/cardNumber only when idType is Driving Licence", () => {
     const state = baseState();
     const withPassport = directorIssues({
@@ -369,6 +423,39 @@ describe("entityIssues / directorIssues / accountsIssues", () => {
     const state = baseState();
     expect(directorIssues({ ...state.director, ownershipPercent: "150" }).ownershipPercent).toBeTruthy();
     expect(directorIssues({ ...state.director, ownershipPercent: "0" }).ownershipPercent).toBeTruthy();
+  });
+
+  it("rejects a DOB that is one day short of 18, and the exact 18th birthday is fine", () => {
+    const state = baseState();
+    const cutoff = latestEligibleDirectorDob();
+
+    const oneDayShort = new Date(cutoff);
+    oneDayShort.setDate(oneDayShort.getDate() + 1);
+    expect(
+      directorIssues({
+        ...state.director,
+        dateOfBirth: oneDayShort.toISOString().slice(0, 10),
+      }).dateOfBirth,
+    ).toBeTruthy();
+
+    expect(
+      directorIssues({
+        ...state.director,
+        dateOfBirth: cutoff.toISOString().slice(0, 10),
+      }).dateOfBirth,
+    ).toBeUndefined();
+  });
+
+  it("rejects a future DOB too, via the same 18-years-old cutoff the calendar uses", () => {
+    const state = baseState();
+    const future = new Date();
+    future.setFullYear(future.getFullYear() + 1);
+    expect(
+      directorIssues({
+        ...state.director,
+        dateOfBirth: future.toISOString().slice(0, 10),
+      }).dateOfBirth,
+    ).toBeTruthy();
   });
 
   it("flags a BSB or account number with the wrong digit count", () => {

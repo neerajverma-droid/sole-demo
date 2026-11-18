@@ -10,6 +10,7 @@ import { StopTimerDialog } from "@/components/time-tracker/time-dialogs";
 import { TimeDetailsFields } from "@/components/time-tracker/time-fields";
 import { useActiveTimerQuery, useTimerSeconds } from "@/hooks/use-project-timer";
 import { useProjectSettingsQuery } from "@/hooks/use-projects-query";
+import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import {
   useStartTimerMutation,
   useUpdateActiveTimerMutation,
@@ -19,10 +20,12 @@ import { formatTimerClock, type ActiveTimer } from "@/lib/project-timer";
 import { num, str } from "@/lib/projects";
 import {
   EMPTY_SELECTION,
+  TIME_ENTRIES_ANCHOR_ID,
   timerDescription,
   type DraftErrors,
   type TimerSelection,
 } from "@/lib/time-tracker";
+import { keepOpenForTour } from "@/components/usertour/keep-open-for-tour";
 import { cn } from "@/lib/utils";
 
 type Raw = Record<string, unknown>;
@@ -184,6 +187,21 @@ export function TimerBar() {
     setStopOpen(false);
   };
 
+  /*
+   * After a save, down to the list where the new entry lands at the top.
+   * Waits for the dialog to finish closing: it hands focus back to the Stop
+   * button on the way out, which would otherwise pull the page back up.
+   */
+  const reducedMotion = usePrefersReducedMotion();
+  const scrollToEntries = () => {
+    window.setTimeout(() => {
+      document.getElementById(TIME_ENTRIES_ANCHOR_ID)?.scrollIntoView({
+        behavior: reducedMotion ? "auto" : "smooth",
+        block: "start",
+      });
+    }, 250);
+  };
+
   const projectLabel = timerProjectLabel(timer);
   const clientLabel = selection.client?.name || (selection.client ? "Unnamed client" : "");
 
@@ -191,6 +209,7 @@ export function TimerBar() {
     <>
       <section
         aria-label="Timer"
+        data-usertour="time-timer"
         className={cn(
           "flex flex-wrap items-center gap-3 rounded-lg border bg-card px-4 py-2.5 shadow-sm",
           running ? "border-primary/40" : "border-border",
@@ -198,6 +217,7 @@ export function TimerBar() {
       >
         <input
           aria-label="What are you working on?"
+          data-usertour="time-description"
           className="min-w-[200px] flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
           placeholder="What are you working on?"
           value={description}
@@ -209,7 +229,11 @@ export function TimerBar() {
 
         <Popover open={panelOpen} onOpenChange={openPanel}>
           <PopoverTrigger asChild>
-            <Button variant="outline" className="max-w-[260px] justify-start gap-2 pl-1.5">
+            <Button
+              variant="outline"
+              className="max-w-[260px] justify-start gap-2 pl-1.5"
+              data-usertour="time-client-picker"
+            >
               <span className="grid size-6 shrink-0 place-items-center rounded bg-primary/10 text-primary">
                 <Folder className="size-4" />
               </span>
@@ -222,7 +246,11 @@ export function TimerBar() {
               <ChevronDown className="size-4 shrink-0 opacity-50" />
             </Button>
           </PopoverTrigger>
-          <PopoverContent align="end" className="w-[380px] max-w-[92vw] p-5">
+          <PopoverContent
+            align="end"
+            className="w-[380px] max-w-[92vw] p-5"
+            onInteractOutside={keepOpenForTour}
+          >
             <TimeDetailsFields
               idPrefix="timer"
               value={panelDraft}
@@ -251,7 +279,11 @@ export function TimerBar() {
               >
                 Reset
               </Button>
-              <Button onClick={savePanel} disabled={updateTimer.isPending}>
+              <Button
+                onClick={savePanel}
+                disabled={updateTimer.isPending}
+                data-usertour="time-picker-save"
+              >
                 Save
               </Button>
             </div>
@@ -263,12 +295,20 @@ export function TimerBar() {
         </span>
 
         {running ? (
-          <Button variant="destructive" onClick={() => setStopOpen(true)}>
+          <Button
+            variant="destructive"
+            onClick={() => setStopOpen(true)}
+            data-usertour="time-stop"
+          >
             <Square className="fill-current" />
             Stop
           </Button>
         ) : (
-          <Button onClick={startTimer} disabled={start.isPending || timerQuery.isLoading}>
+          <Button
+            onClick={startTimer}
+            disabled={start.isPending || timerQuery.isLoading}
+            data-usertour="time-start"
+          >
             {start.isPending ? <Loader2 className="animate-spin" /> : <Play className="fill-current" />}
             Start
           </Button>
@@ -283,7 +323,10 @@ export function TimerBar() {
         selection={selection}
         projectLabel={projectLabel}
         onOpenChange={setStopOpen}
-        onDone={resetBar}
+        onDone={(outcome) => {
+          resetBar();
+          if (outcome === "saved") scrollToEntries();
+        }}
       />
     </>
   );

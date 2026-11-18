@@ -26,6 +26,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { useUnsavedChanges } from "@/components/ui/unsaved-changes";
 import { useCreateTemplate, useUpdateTemplate } from "@/hooks/use-report-packs";
+import { useFiscalYearStart } from "@/hooks/use-fiscal-year-start";
 import { apiErrorMessage } from "@/lib/api-error";
 import {
   CUSTOM_PERIOD,
@@ -87,6 +88,7 @@ export function TemplateEditor({
   const router = useRouter();
   const create = useCreateTemplate();
   const update = useUpdateTemplate();
+  const fiscalYearStart = useFiscalYearStart();
 
   const [content, setContent] = React.useState<Content>(() =>
     contentOf(template),
@@ -168,7 +170,7 @@ export function TemplateEditor({
     }
   };
 
-  const range = presetRange(previewPeriod);
+  const range = presetRange(previewPeriod, fiscalYearStart);
   const previewInput: PackInput = {
     name: "Management report pack",
     cover_title: null,

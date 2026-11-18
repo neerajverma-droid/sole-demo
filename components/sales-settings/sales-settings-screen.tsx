@@ -1,13 +1,14 @@
 "use client";
 
 import * as React from "react";
-import { useAtom } from "jotai";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ReceiptText } from "lucide-react";
 import { toast } from "sonner";
 
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/layout/page-header";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { BrandingTab } from "@/components/sales-settings/branding-tab";
 import { CommunicationTab } from "@/components/sales-settings/communication-tab";
 import { FieldsTab } from "@/components/sales-settings/fields-tab";
@@ -15,10 +16,13 @@ import { StylingTab } from "@/components/sales-settings/styling-tab";
 import { FooterTab } from "@/components/sales-settings/footer-tab";
 import { SettingsTab } from "@/components/sales-settings/settings-tab";
 import { TabFooter } from "@/components/sales-settings/tab-shell";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
 import { salesDraftAtom, salesTabAtom } from "@/lib/atoms";
 import {
   SALES_TABS,
   brandingTabIssues,
+  migrateSalesSettings,
   footerTabIssues,
   settingsTabIssues,
   tabDirty,
@@ -28,6 +32,7 @@ import {
 } from "@/lib/sales-settings";
 import {
   enableTextMessageApi,
+  fetchSalesSettings,
   removeLogoApi,
   saveBrandingApi,
   saveNotificationPreferenceApi,
@@ -35,8 +40,6 @@ import {
   saveSeqNumbersApi,
   uploadLogoApi,
 } from "@/lib/sales-settings-api";
-import { useSalesSettings } from "@/lib/use-sales-settings";
-import { useSalesSettingsQuery } from "@/hooks/use-sales-settings-query";
 import { useSalesSettingsStore } from "@/stores/sales-settings";
 
 /** Which tabs share the single get-branding/save-branding record. */
@@ -50,13 +53,39 @@ const BRANDING_RECORD_TABS: readonly SalesTab[] = [
 ];
 
 export function SalesSettingsScreen() {
-  useSalesSettingsQuery();
   const queryClient = useQueryClient();
-  const { settings: stored } = useSalesSettings();
-  const save = useSalesSettingsStore((state) => state.patch);
-  const [tab, setTab] = useAtom(salesTabAtom);
-  const [draft, setDraft] = useAtom(salesDraftAtom);
+  const writeThrough = useSalesSettingsStore((state) => state.patch);
+  /**
+   * What the server holds, read fresh every time this screen opens.
+   *
+   * Nothing here comes from the shared store or a cache: `gcTime: 0` drops the
+   * answer when the screen unmounts, and `refetchOnMount: "always"` reads it
+   * again on the next visit, so every visit starts on the loading skeleton and
+   * ends on what is actually saved. The tab and the unsaved edits are plain
+   * state of this component for the same reason — leaving the page throws them
+   * away rather than carrying them to the next visit, and nothing is written
+   * until Save Changes is pressed.
+   */
+  const query = useQuery({
+    queryKey: ["sales-settings", "screen"],
+    queryFn: fetchSalesSettings,
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: "always",
+  });
+  const stored = React.useMemo(
+    () => migrateSalesSettings(query.data),
+    [query.data],
+  );
+  const [tab, setTab] = React.useState<SalesTab>("settings");
+  const [draft, setDraft] = React.useState<Partial<SalesSettings>>({});
   const [saving, setSaving] = React.useState(false);
+  /**
+   * True while the saved settings are being read back after a save. The page
+   * shows its loading skeleton for that moment, the same as a first visit, so
+   * what ends up on screen is what the server actually holds.
+   */
+  const [reloading, setReloading] = React.useState(false);
 
   /**
    * One draft across the whole screen, but every save and dirty check is scoped
@@ -65,7 +94,7 @@ export function SalesSettingsScreen() {
    */
   const values = { ...stored, ...draft } as SalesSettings;
   const patch = (next: Partial<SalesSettings>) =>
-    setDraft({ ...(draft ?? {}), ...next });
+    setDraft((current) => ({ ...current, ...next }));
 
   const dirty = tabDirty(tab, values, stored);
   const issues =
@@ -102,12 +131,16 @@ export function SalesSettingsScreen() {
 
     if (tab === "branding") {
       let logo = values.logo;
-      if (logo && logo.startsWith("data:")) {
+      const uploadingLogo = !!logo && logo.startsWith("data:");
+      if (logo && uploadingLogo) {
         logo = await uploadLogoApi(logo);
       } else if (logo === null && stored.logo) {
         await removeLogoApi();
       }
       await saveBrandingApi({ ...values, logo });
+      if (uploadingLogo) {
+        track(EVENTS.INVOICE_BRANDING_UPLOAD, { source: "sales_settings" });
+      }
       return { logo };
     }
 
@@ -158,14 +191,14 @@ export function SalesSettingsScreen() {
     try {
       const resolved = await persistTab();
       const slice = { ...tabSlice(tab, values), ...resolved };
-      save(slice);
       // Only this tab's keys leave the draft; a sibling's edits stay open.
-      setDraft(
+      setDraft((current) =>
         Object.fromEntries(
-          Object.entries(draft ?? {}).filter(([key]) => !(key in slice)),
+          Object.entries(current).filter(([key]) => !(key in slice)),
         ),
       );
       toast.success("Changes saved");
+      await reloadAfterSave();
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Couldn't save changes",
@@ -174,6 +207,63 @@ export function SalesSettingsScreen() {
       setSaving(false);
     }
   };
+
+  /**
+   * Reads the settings back from the server after a save, and refreshes what
+   * else was cached from them.
+   *
+   * The other screens that use these settings (the invoice and quote editors,
+   * the business settings) keep their own cached copies, so those are marked
+   * stale; and the fresh answer is written through to the shared store they
+   * read, so a layout or numbering change shows there without waiting. This
+   * screen itself only ever reads the server's answer.
+   */
+  const reloadAfterSave = async () => {
+    setReloading(true);
+    try {
+      void queryClient.invalidateQueries({ queryKey: ["invoice-branding"] });
+      void queryClient.invalidateQueries({ queryKey: ["next-invoice-number"] });
+      void queryClient.invalidateQueries({ queryKey: ["next-quote-number"] });
+      await queryClient.invalidateQueries({ queryKey: ["sales-settings"] });
+      const fresh = await queryClient.fetchQuery({
+        queryKey: ["sales-settings", "screen"],
+        queryFn: fetchSalesSettings,
+        staleTime: 0,
+      });
+      writeThrough(fresh);
+    } catch {
+      // The save itself worked; the screen simply carries on with what it has.
+    } finally {
+      setReloading(false);
+    }
+  };
+
+  // Failed to load: say so, rather than painting defaults that a save would write.
+  if (query.isError && !query.data) {
+    return (
+      <div className="space-y-[15px]">
+        <PageHeader
+          icon={ReceiptText}
+          title="Sales settings"
+          description="Defaults for everything you send out — numbering, branding, what prints on a document, and how clients are reminded."
+        />
+        <div className="flex flex-col items-center gap-3 rounded-lg border border-border bg-card p-10 text-center shadow-sm">
+          <p className="text-sm text-muted-foreground">
+            Couldn&apos;t load your sales settings.
+          </p>
+          <Button variant="outline" onClick={() => void query.refetch()}>
+            Try again
+          </Button>
+        </div>
+      </div>
+    );
+  }
+  /*
+   * Held until the saved settings are in, on every visit and after every save.
+   */
+  if (query.isPending || query.isFetching || reloading) {
+    return <SalesSettingsSkeleton />;
+  }
 
   return (
     <div className="space-y-[15px]">
@@ -202,24 +292,26 @@ export function SalesSettingsScreen() {
         </TabsList>
       </Tabs>
 
-      {tab === "settings" && <SettingsTab values={values} patch={patch} />}
-      {tab === "branding" && <BrandingTab values={values} patch={patch} />}
-      {tab === "footer" && <FooterTab values={values} patch={patch} />}
-      {tab === "invoice-fields" && (
-        <FieldsTab kind="Invoice" values={values} patch={patch} />
-      )}
-      {tab === "quote-fields" && (
-        <FieldsTab kind="Quote" values={values} patch={patch} />
-      )}
-      {tab === "invoice-styling" && (
-        <StylingTab kind="Invoice" values={values} patch={patch} />
-      )}
-      {tab === "quote-styling" && (
-        <StylingTab kind="Quote" values={values} patch={patch} />
-      )}
-      {tab === "communication" && (
-        <CommunicationTab values={values} patch={patch} />
-      )}
+      <div data-usertour={`sales-tab-${tab}`}>
+        {tab === "settings" && <SettingsTab values={values} patch={patch} />}
+        {tab === "branding" && <BrandingTab values={values} patch={patch} />}
+        {tab === "footer" && <FooterTab values={values} patch={patch} />}
+        {tab === "invoice-fields" && (
+          <FieldsTab kind="Invoice" values={values} patch={patch} />
+        )}
+        {tab === "quote-fields" && (
+          <FieldsTab kind="Quote" values={values} patch={patch} />
+        )}
+        {tab === "invoice-styling" && (
+          <StylingTab kind="Invoice" values={values} patch={patch} />
+        )}
+        {tab === "quote-styling" && (
+          <StylingTab kind="Quote" values={values} patch={patch} />
+        )}
+        {tab === "communication" && (
+          <CommunicationTab values={values} patch={patch} />
+        )}
+      </div>
 
       <TabFooter
         dirty={dirty}
@@ -227,6 +319,33 @@ export function SalesSettingsScreen() {
         saving={saving}
         onSave={onSave}
       />
+    </div>
+  );
+}
+
+/** The screen's shape while the saved settings load: header, tabs, one section. */
+function SalesSettingsSkeleton() {
+  return (
+    <div className="space-y-[15px]" aria-busy aria-label="Loading sales settings">
+      <PageHeader
+        icon={ReceiptText}
+        title="Sales settings"
+        description="Defaults for everything you send out — numbering, branding, what prints on a document, and how clients are reminded."
+      />
+      <div className="flex gap-2 overflow-hidden">
+        {Array.from({ length: 5 }).map((_, index) => (
+          <Skeleton key={index} className="h-9 w-32 shrink-0 rounded-md" />
+        ))}
+      </div>
+      <div className="space-y-4 rounded-lg border border-border bg-card p-4 shadow-sm">
+        <Skeleton className="h-5 w-48" />
+        <Skeleton className="h-4 w-full max-w-xl" />
+        <div className="grid gap-4 sm:grid-cols-2">
+          {Array.from({ length: 4 }).map((_, index) => (
+            <Skeleton key={index} className="h-9 w-full" />
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

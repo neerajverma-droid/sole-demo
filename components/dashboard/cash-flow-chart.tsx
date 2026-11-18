@@ -91,7 +91,7 @@ export function CashFlowChart() {
       {/* The header, not the card: the card is taller than a laptop screen
           leaves room for, and this is where the controls the tour describes
           are. */}
-      <CardHeader data-usertour="dashboard-cash-flow" className="space-y-4">
+      <CardHeader data-usertour="dashboard-cash-flow" className="space-y-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
             <CardTitle className="text-base">Cash flow</CardTitle>
@@ -344,7 +344,7 @@ function DeltaSummary({
         const Arrow = up ? TrendingUp : TrendingDown;
 
         return (
-          <div key={figure.label} className="rounded-md border p-3">
+          <div key={figure.label} className="rounded-lg border p-3">
             <dt className="text-xs text-muted-foreground">{figure.label}</dt>
             <dd className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-1">
               <span className="text-lg font-semibold tracking-tight tabular">
@@ -380,6 +380,15 @@ function DeltaSummary({
   );
 }
 
+/** 0, 500, 1.5k, 35k — never "0k" for a figure that isn't zero. */
+function formatAxisTick(value: number): string {
+  const symbol = activeCurrencySymbol();
+  const abs = Math.abs(value);
+  if (abs < 1000) return `${symbol}${Math.round(value)}`;
+  const thousands = value / 1000;
+  return `${symbol}${Number.isInteger(thousands) ? thousands : thousands.toFixed(1)}k`;
+}
+
 function Chart({
   series,
   comparing,
@@ -392,8 +401,8 @@ function Chart({
   const reducedMotion = usePrefersReducedMotion();
 
   return (
-    <ChartContainer config={chartConfig} className="h-[360px] w-full">
-      <ComposedChart data={series} margin={{ left: 4, right: 8, top: 8 }}>
+    <ChartContainer config={chartConfig} className="h-[260px] w-full">
+      <ComposedChart data={series} margin={{ left: 0, right: 8, top: 4, bottom: 0 }}>
         <defs>
           {/* Three stops so the fill falls away rather than banding. */}
           <linearGradient id="fillMoneyIn" x1="0" y1="0" x2="0" y2="1">
@@ -437,10 +446,16 @@ function Chart({
         <YAxis
           tickLine={false}
           axisLine={false}
-          width={56}
+          width={48}
           tickMargin={8}
+          // Five evenly spaced ticks, whole numbers only: the axis is sized by
+          // the plot's height rather than left to scatter a handful of labels
+          // down a tall chart.
+          tickCount={5}
+          allowDecimals={false}
+          domain={[0, "auto"]}
           className="text-xs tabular"
-          tickFormatter={(value: number) => `${activeCurrencySymbol()}${Math.round(value / 1000)}k`}
+          tickFormatter={formatAxisTick}
         />
         <ChartTooltip content={<CashFlowTooltip />} />
 

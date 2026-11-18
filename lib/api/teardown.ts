@@ -17,6 +17,8 @@
  * stopped the browser being able to authenticate.
  */
 
+import { ATTRIBUTION_COOKIE } from "@/lib/partner-attribution";
+
 /**
  * Device-scoped keys that are not account data and are deliberately kept.
  *
@@ -25,6 +27,16 @@
  * belongs in the wipe — if in doubt, leave it out of this list.
  */
 const KEPT_STORAGE_KEYS = new Set(["theme"]);
+
+/**
+ * Cookies that are not the account and are deliberately kept.
+ *
+ * A partner link (?ref=CODE&partner=<slug>) lands a signed-out visitor on a page that
+ * clears the session on the way to sign-in. Wiping the partner's code there threw away
+ * the attribution before the visitor could sign up. It holds no tokens and no profile,
+ * only "this partner's code", and it expires on its own (see partner-attribution.ts).
+ */
+const KEPT_COOKIES = new Set([ATTRIBUTION_COOKIE]);
 
 /**
  * React Query's cache lives in a client held in `Providers`' component state,
@@ -57,7 +69,7 @@ function clearCookies(): void {
   const names = document.cookie
     .split(";")
     .map((pair) => pair.split("=")[0]?.trim())
-    .filter((name): name is string => Boolean(name));
+    .filter((name): name is string => Boolean(name) && !KEPT_COOKIES.has(name as string));
 
   if (names.length === 0) return;
 

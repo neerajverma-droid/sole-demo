@@ -11,6 +11,8 @@ import { SoleLogo } from "@/components/layout/sole-logo";
 import { invalidateBankAccounts } from "@/hooks/use-bank-accounts-query";
 import { apiErrorMessage } from "@/lib/api-error";
 import { completeAkahuConnection } from "@/lib/bank-connection";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
 
 type Status =
   | { kind: "working" }
@@ -40,6 +42,10 @@ export function AkahuCallbackPage() {
   const code = params?.get("code") ?? null;
   const state = params?.get("state") ?? null;
   const error = params?.get("error") ?? null;
+  // Only present on ACCEPT/UPDATE/REVOKE — Akahu's own event on the redirect.
+  // REVOKE carries no code and no error, so without this it would otherwise
+  // fall through to "Missing code" from the backend and read as a failure.
+  const event = params?.get("event") ?? null;
 
   React.useEffect(() => {
     if (started.current) return;
@@ -56,16 +62,23 @@ export function AkahuCallbackPage() {
       });
       return;
     }
+    if (!code && event === "REVOKE") {
+      setStatus({ kind: "cancelled" });
+      return;
+    }
 
     completeAkahuConnection({ code, state, error })
       .then((result) => {
         setStatus({ kind: result });
-        if (result === "connected") invalidateBankAccounts(queryClient);
+        if (result === "connected") {
+          track(EVENTS.BANK_ACCOUNT_CONNECTED, { provider: "akahu" });
+          invalidateBankAccounts(queryClient);
+        }
       })
       .catch((err) =>
         setStatus({ kind: "failed", message: apiErrorMessage(err, "Couldn't finish connecting your bank.") }),
       );
-  }, [code, state, error, params, queryClient]);
+  }, [code, state, error, event, params, queryClient]);
 
   if (status.kind === "working") {
     return (

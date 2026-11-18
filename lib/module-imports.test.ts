@@ -8,6 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   autoMapBulkColumns,
+  buildBulkRows,
+  bulkCellText,
+  bulkEditorSeed,
+  bulkFieldErrors,
   bulkRowIssues,
   bulkTemplateCsv,
   type BulkValues,
@@ -58,12 +62,17 @@ describe.each([
     for (const line of rows) {
       // The samples deliberately contain no commas inside cells.
       const cells = line.split(",");
-      const row: BulkValues = {};
-      for (const field of spec.fields) row[field.label] = "";
+      const sheetRow: Record<string, string> = {};
       spec.templateColumns.forEach((column, index) => {
-        row[column] = cells[index] ?? "";
+        sheetRow[column] = cells[index] ?? "";
       });
-      expect(bulkRowIssues(spec, row)).toEqual([]);
+      // Through the same door a real file takes, so a category written as a
+      // name in the sample resolves to the id the row holds.
+      const mapping = Object.fromEntries(
+        spec.templateColumns.map((column, index) => [index, column]),
+      );
+      const [row] = buildBulkRows(spec, [...spec.templateColumns], [sheetRow], mapping);
+      expect(row.issues).toEqual([]);
     }
   });
 });
@@ -76,12 +85,39 @@ describe("invoice import", () => {
   const spec = INVOICE_IMPORT_SPEC;
   const valid = {
     "Client name": "Williams Health",
+    "Client email": "accounts@williams.example",
+    "Mark as": "Draft",
     "Sub total": "1200.00",
     "Total GST": "120.00",
   };
 
-  it("accepts a row with only the three required fields", () => {
+  it("accepts a row with every required field and nothing else", () => {
     expect(bulkRowIssues(spec, values(spec, valid))).toEqual([]);
+  });
+
+  it("requires a status and a client email", () => {
+    expect(
+      bulkRowIssues(spec, values(spec, { ...valid, "Mark as": "" })),
+    ).toEqual(["Mark as is required (Draft, Paid, Overdue)"]);
+    expect(
+      bulkRowIssues(spec, values(spec, { ...valid, "Client email": "" })),
+    ).toEqual(["Client email is required"]);
+  });
+
+  it("lists status and email among the required fields", () => {
+    const required = spec.fields.filter((f) => f.required).map((f) => f.label);
+    expect(required).toEqual([
+      "Client name",
+      "Sub total",
+      "Total GST",
+      "Mark as",
+      "Client email",
+    ]);
+  });
+
+  it("shows a blank invoice number as auto, as the old importer did", () => {
+    const field = spec.fields.find((f) => f.label === "Invoice number");
+    expect(field?.review?.empty).toBe("auto");
   });
 
   it("does not require an invoice number — the backend generates one", () => {
@@ -107,13 +143,48 @@ describe("invoice import", () => {
     ).toEqual([]);
   });
 
+  it("never requires a date — the server fills a missing one in", () => {
+    expect(
+      bulkRowIssues(spec, values(spec, { ...valid, "Invoice date": "", "Due date": "" })),
+    ).toEqual([]);
+    // Not even for Overdue: a blank due date is derived, not refused.
+    expect(
+      bulkRowIssues(spec, values(spec, { ...valid, "Mark as": "Overdue", "Due date": "" })),
+    ).toEqual([]);
+  });
+
+  it("rejects a due date before the invoice date, only when both are given", () => {
+    const issues = (invoice: string, due: string) =>
+      bulkRowIssues(
+        spec,
+        values(spec, { ...valid, "Invoice date": invoice, "Due date": due }),
+      );
+    expect(issues("20/07/2025", "19/07/2025")).toEqual([
+      "Due date can't be before the invoice date",
+    ]);
+    expect(issues("20/07/2025", "20/07/2025")).toEqual([]);
+    expect(issues("20/07/2025", "19/08/2025")).toEqual([]);
+    expect(issues("", "19/07/2025")).toEqual([]);
+    expect(issues("20/07/2025", "")).toEqual([]);
+  });
+
+  it("gives the due-date cell its own short message", () => {
+    expect(
+      bulkFieldErrors(
+        spec,
+        values(spec, { ...valid, "Invoice date": "20/07/2025", "Due date": "01/07/2025" }),
+      ),
+    ).toEqual({ "Due date": "Before the invoice date" });
+  });
+
   it("rejects an Overdue invoice whose due date has not passed", () => {
+
     expect(
       bulkRowIssues(
         spec,
         values(spec, { ...valid, "Mark as": "Overdue", "Due date": "01/12/2025" }),
       ),
-    ).toContain("An invoice marked Overdue needs a Due date in the past");
+    ).toEqual(["Due date must be in the past when the status is Overdue"]);
 
     expect(
       bulkRowIssues(
@@ -130,16 +201,27 @@ describe("invoice import", () => {
     expect(payload.total).toBe(1320);
   });
 
-  it("converts dates to ISO and defaults the payment term to 30 days", () => {
+  it("converts dates to ISO and leaves a missing due date and term for the server", () => {
     const payload = invoicePayload(
       values(spec, { ...valid, "Invoice date": "20/07/2025" }),
     );
     expect(payload.invoice_date).toBe("2025-07-20");
     expect(payload.due_date).toBe("");
-    expect(payload.payment_term).toBe(30);
+    // Nothing sent, so the server's own default (invoice date + 7 days) applies.
+    expect(payload.payment_term).toBeNull();
   });
 
-  it("defaults the status to draft, lower-cased", () => {
+  it("sends a payment term only when the file states one", () => {
+    expect(
+      invoicePayload(values(spec, { ...valid, "Payment terms": "30" })).payment_term,
+    ).toBe(30);
+    expect(
+      invoicePayload(values(spec, { ...valid, "Payment terms": "0" })).payment_term,
+    ).toBeNull();
+  });
+
+  it("falls back to overdue, lower-cased, for a caller that skips the status", () => {
+    expect(invoicePayload(values(spec, { ...valid, "Mark as": "" })).mark_as).toBe("overdue");
     expect(invoicePayload(values(spec, valid)).mark_as).toBe("draft");
     expect(
       invoicePayload(values(spec, { ...valid, "Mark as": "Paid" })).mark_as,
@@ -163,7 +245,8 @@ describe("expense import", () => {
     Date: "21/07/2025",
     "Total amount": "482.90",
     "GST included": "Yes",
-    Category: "Office supplies",
+    // The row holds the category's id; the name is what Review shows.
+    Category: "72",
     Paid: "Yes",
   };
 
@@ -180,19 +263,86 @@ describe("expense import", () => {
     );
   });
 
-  it("flags a category that isn't on the chart of accounts", () => {
-    expect(
-      bulkRowIssues(spec, values(spec, { ...valid, Category: "Marketing" })),
-    ).toContain("Category doesn't match one of your expense accounts");
+  it("asks for a category when the AI left it empty", () => {
+    expect(bulkRowIssues(spec, values(spec, { ...valid, Category: "" }))).toEqual([
+      "Category is required",
+    ]);
+    expect(bulkFieldErrors(spec, values(spec, { ...valid, Category: "" }))).toEqual({
+      Category: "Choose a category",
+    });
   });
 
-  it("does not flag an unmatched category before the accounts have loaded", () => {
+  it("flags a category id that isn't on the chart of accounts", () => {
+    expect(
+      bulkRowIssues(spec, values(spec, { ...valid, Category: "999" })),
+    ).toEqual(["Category isn't one of your expense accounts"]);
+  });
+
+  it("does not ask for a category before the accounts have loaded", () => {
     // Otherwise every row would read as broken for the tick before the fetch
-    // lands. The dialog blocks the import until it has.
+    // lands — or for good if it never does, with nothing to choose from. The
+    // dialog blocks the upload until the list is in.
     const loading = expenseImportSpec([]);
     expect(
-      bulkRowIssues(loading, values(loading, { ...valid, Category: "Marketing" })),
+      bulkRowIssues(loading, values(loading, { ...valid, Category: "" })),
     ).toEqual([]);
+  });
+
+  describe("the Category column", () => {
+    const sheet = (category: string) => [
+      { ...valid, Category: category },
+    ];
+    const columns = Object.keys(valid);
+    const mapping = Object.fromEntries(columns.map((c, i) => [i, c]));
+    const build = (category: string) =>
+      buildBulkRows(spec, columns, sheet(category), mapping)[0];
+
+    it("keeps the id the AI formatter returned", () => {
+      expect(build("73").values.Category).toBe("73");
+      expect(build("73").issues).toEqual([]);
+    });
+
+    it("leaves it empty when the AI gave none, rather than guessing", () => {
+      const row = build("");
+      expect(row.values.Category).toBe("");
+      expect(row.issues).toEqual(["Category is required"]);
+    });
+
+    it("reads a name from a plain-parse fallback into its id", () => {
+      expect(build("Software").values.Category).toBe("73");
+      expect(build("office").values.Category).toBe("72");
+      expect(build("Marketing").values.Category).toBe("");
+    });
+
+    it("shows the name on screen and in the error CSV, not the id", () => {
+      expect(bulkCellText(spec, build("73").values, "Category")).toBe("Software");
+      expect(bulkCellText(spec, build("").values, "Category")).toBe("");
+    });
+  });
+
+  it("hands a Yes/No editor the value a sheet's own spelling stands for", () => {
+    const paid = spec.fields.find((field) => field.label === "Paid")!;
+    expect(bulkEditorSeed(paid, "TRUE")).toBe("Yes");
+    expect(bulkEditorSeed(paid, "unpaid")).toBe("No");
+    expect(bulkEditorSeed(paid, "maybe")).toBe("");
+  });
+
+  it("gives each wrong cell a short message of its own", () => {
+    expect(
+      bulkFieldErrors(
+        spec,
+        values(spec, {
+          ...valid,
+          Date: "",
+          "Total amount": "lots",
+          "Supplier email": "x@",
+        }),
+      ),
+    ).toEqual({
+      Date: "Required",
+      "Total amount": "Enter a number, e.g. 482.90",
+      "Supplier email": "Not a valid email",
+    });
   });
 
   it("rejects a future date", () => {
@@ -242,7 +392,7 @@ describe("asset import", () => {
   const spec = assetImportSpec(categories);
   const valid = {
     "Asset name": "Dell laptop",
-    Category: "Office equipment",
+    Category: "80",
     "Purchase date": "01/06/2025",
     "Purchase price": "2349.00",
     Paid: "Yes",

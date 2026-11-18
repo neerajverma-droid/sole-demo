@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Check, Layers, Loader2, Puzzle, X } from "lucide-react";
+import { Check, Layers, Loader2, Puzzle, ShieldCheck, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,11 +14,15 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { AddonRow, Price } from "@/components/pricing/addon-row";
 import { pricingMoney, pricingPeriodLabel } from "@/lib/pricing";
 import {
+  EMPTY_ADDON_SELECTION,
   INCLUDED_ADDON_COUNT,
-  defaultIncludedAddons,
   fetchSubscriptionCatalogue,
+  planDisplayName,
   plansForInterval,
+  refillAddonSelection,
   selectionMonthlyTotal,
+  toggleAddonSelection,
+  type AddonSelection,
   type BillingInterval,
   type SubscriptionPlan,
 } from "@/lib/subscription";
@@ -26,6 +30,7 @@ import { cn } from "@/lib/utils";
 
 export type PricingSelection = {
   planSlug: string;
+  planName: string;
   /** Add-on slugs, in the order they were switched on — see `INCLUDED_ADDON_COUNT`. */
   addons: string[];
   billing: BillingInterval;
@@ -53,6 +58,10 @@ export function PricingPlans({
   onSubmit,
   busy = false,
   secondaryAction,
+  title,
+  compact = false,
+  guaranteeDays,
+  coupon,
 }: {
   discount?: number;
   ctaLabel: string;
@@ -61,6 +70,27 @@ export function PricingPlans({
   busy?: boolean;
   /** Bottom-left of the action row — a Back button, where there's one to offer. */
   secondaryAction?: React.ReactNode;
+  /**
+   * Stands in for the "Simple pricing, built for you." heading, for a page that
+   * already has a title of its own and shouldn't carry two.
+   */
+  title?: React.ReactNode;
+  /**
+   * Fits the picker to one screen: packages two across, add-ons two across,
+   * tighter cards, and the total, guarantee and button on a single row. Only
+   * from `lg` up — below that the columns stack and the page scrolls, as it
+   * must.
+   */
+  compact?: boolean;
+  /** Shows the money-back guarantee beside the total, for that many days. */
+  guaranteeDays?: number;
+  /**
+   * A coupon field, shown with the total. A slot rather than state of the
+   * picker's own: the code is checked and sent by whoever opens the checkout,
+   * and a page that takes none (an additional business is already half price)
+   * simply doesn't pass one.
+   */
+  coupon?: React.ReactNode;
 }) {
   const catalogueQuery = useQuery({
     queryKey: ["subscription", "catalogue"],
@@ -69,7 +99,10 @@ export function PricingPlans({
 
   const [billing, setBilling] = React.useState<BillingInterval>("monthly");
   const [planSlug, setPlanSlug] = React.useState<string | null>(null);
-  const [addonSlugs, setAddonSlugs] = React.useState<string[]>([]);
+  const [selection, setSelection] = React.useState<AddonSelection>(
+    EMPTY_ADDON_SELECTION,
+  );
+  const addonSlugs = selection.slugs;
 
   // The free plan can't be checked out — paying for a business means a paid one.
   const packages = React.useMemo(
@@ -96,7 +129,8 @@ export function PricingPlans({
     : 0;
 
   /*
-   * The package's free slots arrive filled.
+   * The package's free slots arrive filled — and are handed back when the
+   * package changes.
    *
    * An effect rather than a click handler, unlike the Settings picker: nothing
    * is selected here to begin with, `selectedPlan` falls back to the first
@@ -105,9 +139,16 @@ export function PricingPlans({
    * charged for a slot the package covers, so filling them costs nothing and
    * shows the offer as made.
    *
+   * The refill drops what the last package filled in before filling the new
+   * one's. Topping up alone never let go: Pro ticks every add-on, and moving on
+   * to the Compliance Bundle kept all of them, so everything past its three
+   * became a charge nobody chose. Only what was ticked by hand is carried — see
+   * `refillAddonSelection`.
+   *
    * Keyed on the package and the interval, because switching to annual
    * replaces every row with its annual twin — same slugs, different objects —
-   * and the top-up has to be re-run against the list actually on screen.
+   * and the fill has to be re-run against the list actually on screen. Refilling
+   * the package already held changes nothing, so that re-run is safe.
    */
   const lastDefaulted = React.useRef<string | null>(null);
   React.useEffect(() => {
@@ -115,8 +156,8 @@ export function PricingPlans({
     const key = `${selectedPlan.slug}:${billing}`;
     if (lastDefaulted.current === key) return;
     lastDefaulted.current = key;
-    setAddonSlugs((current) =>
-      defaultIncludedAddons(selectedPlan.slug, addons, current),
+    setSelection((current) =>
+      refillAddonSelection(current, selectedPlan.slug, addons),
     );
   }, [selectedPlan, addons, billing]);
 
@@ -124,50 +165,111 @@ export function PricingPlans({
   const total = selectionMonthlyTotal(selectedPlan, selectedAddons) * discount;
 
   const toggleAddon = (slug: string) =>
-    setAddonSlugs((current) =>
-      current.includes(slug)
-        ? current.filter((entry) => entry !== slug)
-        : [...current, slug],
-    );
+    setSelection((current) => toggleAddonSelection(current, slug));
 
   if (catalogueQuery.isPending) {
     return (
-      <div className="space-y-3" aria-hidden>
-        <Shimmer className="h-10 w-72 rounded-md" />
-        <Shimmer className="h-80 w-full rounded-lg border border-border" />
+      <div className="space-y-3">
+        {title}
+        <div className="space-y-3" aria-hidden>
+          <Shimmer className="h-10 w-72 rounded-md" />
+          <Shimmer
+            className={cn(
+              "w-full rounded-lg border border-border",
+              compact ? "h-[22rem]" : "h-80",
+            )}
+          />
+        </div>
       </div>
     );
   }
 
   if (catalogueQuery.isError || packages.length === 0) {
     return (
-      <div className="space-y-3 rounded-lg border border-border p-6 text-center">
-        <p className="text-sm text-muted-foreground">
-          We couldn&apos;t load the plans just now.
-        </p>
-        <div className="flex flex-wrap justify-center gap-2">
-          {secondaryAction}
-          <Button
-            variant="outline"
-            onClick={() => void catalogueQuery.refetch()}
-          >
-            Try again
-          </Button>
+      <div className="space-y-3">
+        {title}
+        <div className="space-y-3 rounded-lg border border-border p-6 text-center">
+          <p className="text-sm text-muted-foreground">
+            We couldn&apos;t load the plans just now.
+          </p>
+          <div className="flex flex-wrap justify-center gap-2">
+            {secondaryAction}
+            <Button
+              variant="outline"
+              onClick={() => void catalogueQuery.refetch()}
+            >
+              Try again
+            </Button>
+          </div>
         </div>
       </div>
     );
   }
 
+  const totalBlock = (
+    <div className="min-w-0">
+      <p className="flex flex-wrap items-baseline gap-2">
+        <span
+          className={cn(
+            "font-semibold tracking-tight tabular",
+            compact ? "text-2xl" : "text-3xl",
+          )}
+        >
+          {pricingMoney(total)}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          {pricingPeriodLabel(billing)}
+        </span>
+      </p>
+      {discounted && (
+        <p className="mt-1 text-xs font-medium text-success">
+          {Math.round((1 - discount) * 100)}% off applied at checkout —
+          additional businesses are half price.
+        </p>
+      )}
+    </div>
+  );
+
+  const submitButton = (
+    <Button
+      disabled={busy || !selectedPlan}
+      onClick={() =>
+        selectedPlan &&
+        onSubmit({
+          planSlug: selectedPlan.slug,
+          planName: selectedPlan.name,
+          addons: addonSlugs,
+          billing,
+          monthlyTotal: total,
+        })
+      }
+    >
+      {busy && <Loader2 className="animate-spin" aria-hidden />}
+      {busy ? "Opening checkout…" : ctaLabel}
+    </Button>
+  );
+
+  const guarantee = guaranteeDays ? (
+    <MoneyBackGuarantee days={guaranteeDays} />
+  ) : null;
+
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-4">
+    <div className={compact ? "space-y-3" : "space-y-4"}>
+      <div
+        className={cn(
+          "flex flex-wrap justify-between gap-4",
+          compact ? "items-end" : "items-start",
+        )}
+      >
         <div className="min-w-0 space-y-1">
-          <h2 className="text-xl font-semibold tracking-tight">
-            Simple pricing, built for you.
-          </h2>
+          {title ?? (
+            <h2 className="text-xl font-semibold tracking-tight">
+              Simple pricing, built for you.
+            </h2>
+          )}
           <p className="text-sm text-muted-foreground">
-            Choose your package and add the features you need. Every plan starts
-            with a free trial.
+            Choose your package and add the features you need. Your
+            subscription starts as soon as you pay.
           </p>
         </div>
 
@@ -206,17 +308,26 @@ export function PricingPlans({
         </ToggleGroup>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
+      <div
+        className={cn(
+          "grid gap-4",
+          compact
+            ? "lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] lg:items-start lg:gap-3"
+            : "lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]",
+        )}
+      >
         <FormSection
           icon={Layers}
           title="1. Select package"
           description="One package, and only one — add-ons are how you extend it."
+          className={compact ? "p-3" : undefined}
+          headerClassName={compact ? "py-2.5" : undefined}
         >
           <RadioGroup
             value={selectedPlan?.slug ?? ""}
             onValueChange={setPlanSlug}
             disabled={busy}
-            className="gap-2.5"
+            className={cn("gap-2.5", compact && "gap-2 sm:grid-cols-2")}
           >
             {packages.map((plan) => (
               <PackageCard
@@ -224,6 +335,7 @@ export function PricingPlans({
                 plan={plan}
                 selected={plan.slug === selectedPlan?.slug}
                 discount={discount}
+                compact={compact}
               />
             ))}
           </RadioGroup>
@@ -234,12 +346,13 @@ export function PricingPlans({
           title="2. Add-ons"
           description={
             included === Number.POSITIVE_INFINITY
-              ? `Every add-on is included with ${selectedPlan?.name}.`
+              ? `Every add-on is included with ${selectedPlan ? planDisplayName(selectedPlan.name) : "this package"}.`
               : included > 0
-                ? `${selectedPlan?.name} includes ${included} add-ons — anything past that is extra.`
+                ? `${selectedPlan ? planDisplayName(selectedPlan.name) : "This package"} includes ${included} add-ons — anything past that is extra.`
                 : "Switch on what this business needs."
           }
-          className="space-y-2"
+          className={compact ? "grid gap-2 p-3 sm:grid-cols-2" : "space-y-2"}
+          headerClassName={compact ? "py-2.5" : undefined}
         >
           {addons.map((addon) => {
             const position = addonSlugs.indexOf(addon.slug);
@@ -252,54 +365,51 @@ export function PricingPlans({
                 onToggle={() => toggleAddon(addon.slug)}
                 discount={discount}
                 disabled={busy}
+                compact={compact}
               />
             );
           })}
         </FormSection>
       </div>
 
-      <div className="space-y-4 rounded-lg border border-border bg-card p-4 shadow-sm">
-        <div className="min-w-0">
-          <p className="flex flex-wrap items-baseline gap-2">
-            <span className="text-3xl font-semibold tracking-tight tabular">
-              {pricingMoney(total)}
-            </span>
-            <span className="text-xs text-muted-foreground">
-              {pricingPeriodLabel(billing)}
-            </span>
-          </p>
-          {discounted && (
-            <p className="mt-1 text-xs font-medium text-success">
-              {Math.round((1 - discount) * 100)}% off applied at checkout —
-              additional businesses are half price.
-            </p>
-          )}
-        </div>
-
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-          <div className="flex min-w-0 flex-wrap items-center gap-3">
+      {compact ? (
+        /*
+          One row: the total, the coupon, the guarantee, the button. Stacked
+          below `lg`, where the page scrolls anyway.
+        */
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3 rounded-lg border border-border bg-card px-4 py-3 shadow-sm">
+          {totalBlock}
+          {coupon}
+          {guarantee && <div className="min-w-0 flex-1 basis-72">{guarantee}</div>}
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-3">
             {secondaryAction}
-            <p className="text-xs text-muted-foreground">
-              Secure payment by Stripe · cancel anytime
-            </p>
+            <div className="space-y-1 text-center">
+              {submitButton}
+              <p className="text-[11px] text-muted-foreground">
+                Secure payment by Stripe · cancel anytime
+              </p>
+            </div>
           </div>
-          <Button
-            disabled={busy || !selectedPlan}
-            onClick={() =>
-              selectedPlan &&
-              onSubmit({
-                planSlug: selectedPlan.slug,
-                addons: addonSlugs,
-                billing,
-                monthlyTotal: total,
-              })
-            }
-          >
-            {busy && <Loader2 className="animate-spin" aria-hidden />}
-            {busy ? "Opening checkout…" : ctaLabel}
-          </Button>
         </div>
-      </div>
+      ) : (
+        <div className="space-y-4 rounded-lg border border-border bg-card p-4 shadow-sm">
+          <div className="min-w-0 space-y-2">
+            {totalBlock}
+            {coupon}
+            {guarantee}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+            <div className="flex min-w-0 flex-wrap items-center gap-3">
+              {secondaryAction}
+              <p className="text-xs text-muted-foreground">
+                Secure payment by Stripe · cancel anytime
+              </p>
+            </div>
+            {submitButton}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -314,16 +424,22 @@ function PackageCard({
   plan,
   selected,
   discount,
+  compact = false,
 }: {
   plan: SubscriptionPlan;
   selected: boolean;
   discount: number;
+  /** Tighter, and without the cycle on the name — see `PricingPlans`. */
+  compact?: boolean;
 }) {
+  const price = <Price full={plan.monthlyPrice} discount={discount} />;
+
   return (
     <Label
       htmlFor={`package-${plan.slug}`}
       className={cn(
         "flex cursor-pointer items-start gap-3 rounded-lg border p-3 font-normal",
+        compact && "gap-2.5 p-2.5",
         "motion-safe:transition-colors",
         selected
           ? "border-primary/40 bg-primary/[0.04]"
@@ -337,25 +453,35 @@ function PackageCard({
         disabled={plan.comingSoon}
         className="mt-1"
       />
-      <span className="min-w-0 flex-1 space-y-1.5">
-        <span className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-semibold">{plan.name}</span>
-          {plan.badge && (
-            <Badge
-              variant="outline"
-              className="rounded-full border-transparent bg-muted px-2 py-0 text-[10px] font-semibold text-muted-foreground"
-            >
-              {plan.badge}
-            </Badge>
-          )}
-          {plan.comingSoon && (
-            <Badge
-              variant="outline"
-              className="rounded-full px-2 py-0 text-[10px]"
-            >
-              Coming soon
-            </Badge>
-          )}
+      <span className={cn("min-w-0 flex-1", compact ? "space-y-1" : "space-y-1.5")}>
+        <span className="flex items-start justify-between gap-2">
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="text-sm font-semibold">
+              {compact ? planDisplayName(plan.name) : plan.name}
+            </span>
+            {plan.badge && (
+              <Badge
+                variant="outline"
+                className="rounded-full border-transparent bg-muted px-2 py-0 text-[10px] font-semibold text-muted-foreground"
+              >
+                {plan.badge}
+              </Badge>
+            )}
+            {/* A badge that already says when it's coming says it twice otherwise. */}
+            {plan.comingSoon && !(compact && plan.badge) && (
+              <Badge
+                variant="outline"
+                className="rounded-full px-2 py-0 text-[10px]"
+              >
+                Coming soon
+              </Badge>
+            )}
+          </span>
+          {/* Beside the name when compact, pinned top-right so a badge wraps
+              under the name rather than pushing the price off its line — and
+              so the features below get the whole card to wrap in, not the
+              part a price column would leave. */}
+          {compact && price}
         </span>
 
         <span className="block space-y-0.5">
@@ -383,7 +509,32 @@ function PackageCard({
         </span>
       </span>
 
-      <Price full={plan.monthlyPrice} discount={discount} />
+      {!compact && price}
     </Label>
+  );
+}
+
+/**
+ * The promise made at the point of payment: don't like the plan, get the money
+ * back. It sits beside the total and the button because that is where someone
+ * is deciding whether to commit a card to something they haven't used.
+ */
+function MoneyBackGuarantee({ days }: { days: number }) {
+  return (
+    <div className="flex items-start gap-2.5">
+      <span
+        className="grid size-8 shrink-0 place-items-center rounded-full bg-success/15 text-success"
+        aria-hidden
+      >
+        <ShieldCheck className="size-4" />
+      </span>
+      <p className="min-w-0 text-xs leading-snug text-muted-foreground">
+        <span className="block text-sm font-semibold text-foreground">
+          {days}-day money-back guarantee
+        </span>
+        Not happy with your plan? Contact us within {days} days and
+        we&apos;ll refund you in full.
+      </p>
+    </div>
   );
 }

@@ -1,8 +1,10 @@
 "use client";
 
+import * as React from "react";
 import Link from "next/link";
-import { ArrowLeft, Landmark, TrendingDown } from "lucide-react";
+import { ArrowLeft, Download, TrendingDown, TriangleAlert } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Empty,
@@ -11,24 +13,32 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { Shimmer } from "@/components/ui/shimmer";
 import {
   Table,
   TableBody,
   TableCell,
+  TableFooter,
   TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { apiErrorMessage } from "@/lib/api-error";
 import {
-  assetMoney,
-  depreciationSchedule,
-  formatAssetDate,
-} from "@/lib/assets";
-import { documentTax } from "@/lib/country-context";
+  depreciationScheduleCsv,
+  depreciationScheduleFilename,
+  downloadScheduleCsv,
+  groupByIncomeYear,
+  isCurrentPeriod,
+  isFuturePeriod,
+  scheduleTotals,
+  type AssetDepreciationSchedule,
+} from "@/lib/asset-depreciation-schedule";
+import { assetMoney, formatAssetDate } from "@/lib/assets";
 import { toIsoDate } from "@/lib/invoices";
 import { cn } from "@/lib/utils";
-import { useAssetsQuery } from "@/hooks/use-assets-query";
-import { useCountryContext } from "@/hooks/use-country-context";
+import { useAssetDepreciationScheduleQuery } from "@/hooks/use-asset-depreciation-schedule-query";
+import { useFiscalYearStart } from "@/hooks/use-fiscal-year-start";
 import { useAssetsStore } from "@/stores/assets";
 
 const ASSETS_ROOT = "/assets";
@@ -36,96 +46,107 @@ const ASSETS_ROOT = "/assets";
 /**
  * A figure that carries no status.
  *
- * Every number on this page takes it. The panel this replaces coloured the
- * accumulated figure red and the book value green, which read as "bad" and
- * "good" — but depreciation is neither: a large accumulated figure is a
- * deduction already claimed, and a small book value is an old asset, not a
- * problem. Paired with the token in dark mode.
+ * Every number on this page takes it. Depreciation is neither good nor bad: a
+ * large accumulated figure is a deduction already claimed, and a small book
+ * value is an old asset, not a problem. Paired with the token in dark mode.
  */
 const NEUTRAL_FIGURE = "text-[#0F1117] dark:text-foreground";
 
-/** A fraction as a percentage, or the stand-in when there isn't one. */
-function rateLabel(rate: number | null): string {
-  return rate === null ? "N/A" : `${(rate * 100).toFixed(2)}%`;
+/** A stored percentage (20 = 20%), or the stand-in when there isn't one. */
+function rateLabel(ratePercent: number | null): string {
+  return ratePercent === null ? "N/A" : `${ratePercent.toFixed(2)}%`;
+}
+
+function lifeLabel(years: number | null): string {
+  if (years === null) return "N/A";
+  return `${years} ${years === 1 ? "year" : "years"}`;
 }
 
 /**
- * The depreciation schedule.
+ * The depreciation schedule, as the backend stores it.
  *
- * Read-only, and the counterpart to the setup page: that one asks what the
- * rules are, this one shows what they come to. Both read the same
- * `depreciationSchedule`, which is built on the same `depreciationPreview` the
- * setup page previews with — so the rate quoted here is the rate you chose
- * there, rather than a second implementation of it.
+ * Read-only, and the counterpart to the settings page: that one asks what the
+ * rules are, this one shows the monthly entries the server generated from
+ * them — the same entries the journal posts and the depreciation report sums,
+ * so the three can't disagree. Matches sole-webapp's schedule drawer (summary,
+ * monthly table with the current period marked, totals, CSV export), with the
+ * months grouped by income year so each year's subtotal reads against the
+ * report.
  */
 export function DepreciationScheduleScreen({ assetId }: { assetId: string }) {
-  // Hydrates the register on a direct/refreshed visit to this route, same as
-  // AssetsScreen — this page doesn't only get reached by clicking through it.
-  useAssetsQuery();
-  const assets = useAssetsStore((state) => state.assets);
-  const asset = assets.find((entry) => entry.id === assetId);
-  const { country } = useCountryContext();
-
-  const assetHref = `${ASSETS_ROOT}/${assetId}`;
-  const setupHref = `${ASSETS_ROOT}/${assetId}/depreciation`;
-
-  if (!asset) {
-    return (
-      <div className="mx-auto max-w-3xl">
-        <Empty>
-          <EmptyMedia>
-            <Landmark aria-hidden />
-          </EmptyMedia>
-          <div className="space-y-1">
-            <EmptyTitle>Asset not found</EmptyTitle>
-            <EmptyDescription>
-              It may have been deleted from the register.
-            </EmptyDescription>
-          </div>
-          <EmptyActions>
-            <Button variant="outline" size="sm" asChild>
-              <Link href={ASSETS_ROOT}>Back to assets</Link>
-            </Button>
-          </EmptyActions>
-        </Empty>
-      </div>
-    );
-  }
-
-  const { depreciation } = asset;
-  // GST comes out at the rate on the purchase date: the business's custom rate,
-  // else its country's (10% AU, 15% NZ / ZA).
-  const schedule = depreciationSchedule(
-    asset,
-    depreciation,
-    toIsoDate(new Date()),
-    documentTax(country, asset.purchaseDate).rate,
+  const { data: schedule, isLoading, isError, error, refetch } =
+    useAssetDepreciationScheduleQuery(assetId);
+  // Only a fallback for the heading when there's no record to name the asset —
+  // the register may already be in memory from the page we came from.
+  const storedName = useAssetsStore(
+    (state) => state.assets.find((entry) => entry.id === assetId)?.name ?? "",
   );
+  const assetName = schedule?.assetName || storedName;
+
+  const setupHref = `${ASSETS_ROOT}/${assetId}/depreciation`;
+  const entries = schedule?.entries ?? [];
+
+  const exportCsv = () => {
+    if (!entries.length) return;
+    downloadScheduleCsv(
+      depreciationScheduleFilename(assetName, assetId),
+      depreciationScheduleCsv(entries),
+    );
+  };
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    <div className="mx-auto min-w-0 max-w-6xl space-y-6">
       <div className="space-y-3">
+        {/* The register, not /assets/:id — that's the edit form. */}
         <Button variant="ghost" size="sm" className="-ml-2" asChild>
-          <Link href={assetHref}>
+          <Link href={ASSETS_ROOT}>
             <ArrowLeft />
-            {asset.name}
+            Assets
           </Link>
         </Button>
-        <div className="space-y-1">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Depreciation schedule
-          </h1>
-          <p className="text-sm text-muted-foreground">{asset.name}</p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 space-y-1">
+            <h1 className="text-2xl font-semibold tracking-tight">
+              Depreciation schedule
+            </h1>
+            {assetName && (
+              <p className="truncate text-sm text-muted-foreground">
+                {assetName}
+              </p>
+            )}
+          </div>
+          {entries.length > 0 && (
+            <Button variant="outline" size="sm" onClick={exportCsv}>
+              <Download />
+              Export CSV
+            </Button>
+          )}
         </div>
       </div>
 
-      {!depreciation.enabled ? (
+      {isLoading ? (
+        <ScheduleLoadingSkeleton />
+      ) : isError ? (
+        <Empty>
+          <EmptyMedia>
+            <TriangleAlert aria-hidden />
+          </EmptyMedia>
+          <div className="space-y-1">
+            <EmptyTitle>Couldn&apos;t load the schedule</EmptyTitle>
+            <EmptyDescription>
+              {apiErrorMessage(error, "Couldn't load the depreciation schedule")}
+            </EmptyDescription>
+          </div>
+          <EmptyActions>
+            <Button size="sm" variant="outline" onClick={() => void refetch()}>
+              Try again
+            </Button>
+          </EmptyActions>
+        </Empty>
+      ) : !schedule ? (
         /*
-          Nothing to show, and one thing to do about it.
-
-          The way out is the primary action rather than a link in the copy: this
-          page has no other purpose until depreciation exists, so there is no
-          competing thing to press.
+          Nothing to show, and one thing to do about it — the primary action,
+          since this page has no other purpose until depreciation exists.
         */
         <Empty className="py-14">
           <EmptyMedia className="bg-muted text-muted-foreground">
@@ -134,7 +155,7 @@ export function DepreciationScheduleScreen({ assetId }: { assetId: string }) {
           <div className="space-y-1">
             <EmptyTitle>No depreciation set up for this asset</EmptyTitle>
             <EmptyDescription>
-              Choose a method and an effective life, and the yearly write-down
+              Choose a method and an effective life, and the monthly write-down
               appears here.
             </EmptyDescription>
           </div>
@@ -146,59 +167,11 @@ export function DepreciationScheduleScreen({ assetId }: { assetId: string }) {
         </Empty>
       ) : (
         <div className="space-y-6">
-          {/* What the schedule was worked out from, and where it stands. */}
-          <section className="rounded-[14px] border border-border bg-card p-5 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-sm font-semibold">Depreciation summary</h2>
-              <Button variant="ghost" size="sm" asChild>
-                <Link href={setupHref}>Edit settings</Link>
-              </Button>
-            </div>
+          <ScheduleSummary schedule={schedule} setupHref={setupHref} />
 
-            <dl className="mt-4 grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
-              <SummaryItem label="Method" value={depreciation.method} />
-              <SummaryItem
-                label="Rate"
-                value={rateLabel(schedule.preview.rate)}
-              />
-              <SummaryItem
-                label="Effective life"
-                value={
-                  depreciation.effectiveLife
-                    ? `${depreciation.effectiveLife} years`
-                    : "—"
-                }
-              />
-              <SummaryItem
-                label="Start date"
-                value={
-                  depreciation.startDate
-                    ? formatAssetDate(depreciation.startDate)
-                    : "—"
-                }
-              />
-              <SummaryItem
-                label="Opening value"
-                value={assetMoney(schedule.depreciableCost)}
-              />
-              <SummaryItem
-                label="Residual value"
-                value={assetMoney(schedule.residual)}
-              />
-              <SummaryItem
-                label="Accumulated depreciation"
-                value={assetMoney(schedule.accumulated)}
-              />
-              <SummaryItem
-                label="Current book value"
-                value={assetMoney(schedule.currentBookValue)}
-              />
-            </dl>
-          </section>
-
-          {schedule.years.length === 0 ? (
-            /* Enabled, but with nothing to work from — an effective life of
-               nothing produces no rows, and saying so beats an empty table. */
+          {entries.length === 0 ? (
+            /* A record with nothing to write off (no rate, or a zero
+               depreciable value) produces no rows — say so, not an empty table. */
             <Empty className="py-12">
               <EmptyMedia className="bg-muted text-muted-foreground">
                 <TrendingDown aria-hidden />
@@ -206,8 +179,8 @@ export function DepreciationScheduleScreen({ assetId }: { assetId: string }) {
               <div className="space-y-1">
                 <EmptyTitle>Nothing to schedule yet</EmptyTitle>
                 <EmptyDescription>
-                  Add an effective life to the settings and the yearly
-                  write-down appears here.
+                  Check the method, effective life and residual value in the
+                  settings and the monthly write-down appears here.
                 </EmptyDescription>
               </div>
               <EmptyActions>
@@ -217,50 +190,198 @@ export function DepreciationScheduleScreen({ assetId }: { assetId: string }) {
               </EmptyActions>
             </Empty>
           ) : (
-            <div className="overflow-x-auto rounded-lg border border-border bg-card shadow-sm">
-              <Table className="min-w-[560px]">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-[88px]">Year</TableHead>
-                    <TableHead className="text-right">Opening value</TableHead>
-                    <TableHead className="text-right">Depreciation</TableHead>
-                    <TableHead className="text-right">Closing value</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {schedule.years.map((row) => (
-                    <TableRow key={row.year}>
-                      <TableCell
-                        className={cn("w-[88px] tabular", NEUTRAL_FIGURE)}
-                      >
-                        {row.year}
-                      </TableCell>
-                      <TableCell
-                        className={cn("text-right tabular", NEUTRAL_FIGURE)}
-                      >
-                        {assetMoney(row.openingValue)}
-                      </TableCell>
-                      <TableCell
-                        className={cn("text-right tabular", NEUTRAL_FIGURE)}
-                      >
-                        {assetMoney(row.depreciation)}
-                      </TableCell>
-                      <TableCell
-                        className={cn(
-                          "text-right font-medium tabular",
-                          NEUTRAL_FIGURE,
-                        )}
-                      >
-                        {assetMoney(row.closingValue)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+            <ScheduleTable schedule={schedule} />
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** What the schedule was worked out from, and where it stands — all server values. */
+function ScheduleSummary({
+  schedule,
+  setupHref,
+}: {
+  schedule: AssetDepreciationSchedule;
+  setupHref: string;
+}) {
+  return (
+    <section className="rounded-[14px] border border-border bg-card p-5 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold">Depreciation summary</h2>
+        <Button variant="ghost" size="sm" asChild>
+          <Link href={setupHref}>Edit settings</Link>
+        </Button>
+      </div>
+
+      <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-4 lg:grid-cols-4">
+        <SummaryItem label="Method" value={schedule.method} />
+        <SummaryItem label="Rate" value={rateLabel(schedule.ratePercent)} />
+        <SummaryItem
+          label="Effective life"
+          value={lifeLabel(schedule.effectiveLifeYears)}
+        />
+        <SummaryItem
+          label="Start date"
+          value={schedule.startDate ? formatAssetDate(schedule.startDate) : "—"}
+        />
+        <SummaryItem
+          label="Opening value"
+          value={assetMoney(schedule.openingValue)}
+        />
+        <SummaryItem
+          label="Residual value"
+          value={assetMoney(schedule.residualValue)}
+        />
+        <SummaryItem
+          label="Accumulated depreciation"
+          value={assetMoney(schedule.accumulatedDepreciation)}
+        />
+        <SummaryItem
+          label="Current book value"
+          value={assetMoney(schedule.bookValue)}
+        />
+      </dl>
+    </section>
+  );
+}
+
+/**
+ * The server's monthly entries, grouped by income year with a subtotal under
+ * each, and the grand total at the foot. Scrolls sideways inside its own box
+ * on a phone rather than widening the page.
+ */
+function ScheduleTable({ schedule }: { schedule: AssetDepreciationSchedule }) {
+  const today = toIsoDate(new Date());
+  const fiscalYearStart = useFiscalYearStart();
+  const groups = React.useMemo(
+    () => groupByIncomeYear(schedule.entries, fiscalYearStart),
+    [schedule.entries, fiscalYearStart],
+  );
+  const totals = scheduleTotals(schedule.entries);
+  const first = schedule.entries[0];
+  const last = schedule.entries[schedule.entries.length - 1];
+
+  return (
+    <section className="min-w-0 space-y-3">
+      <h2 className="text-sm font-semibold">
+        Monthly schedule{" "}
+        <span className="font-normal text-muted-foreground">
+          ({schedule.entries.length}{" "}
+          {schedule.entries.length === 1 ? "period" : "periods"})
+        </span>
+      </h2>
+      <div className="max-w-full overflow-x-auto rounded-lg border border-border bg-card shadow-sm">
+        <Table className="min-w-[680px]">
+          <TableHeader>
+            <TableRow>
+              <TableHead>Period</TableHead>
+              <TableHead className="text-right">Days held</TableHead>
+              <TableHead className="text-right">Opening book value</TableHead>
+              <TableHead className="text-right">Depreciation</TableHead>
+              <TableHead className="text-right">Closing book value</TableHead>
+            </TableRow>
+          </TableHeader>
+          {groups.map((group) => (
+            <TableBody key={group.startYear}>
+              <TableRow className="bg-muted/40 hover:bg-muted/40">
+                <TableCell
+                  colSpan={5}
+                  className="py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                >
+                  {group.label}
+                  <span className="ml-2 font-normal normal-case tracking-normal">
+                    {formatAssetDate(group.start)} – {formatAssetDate(group.end)}
+                  </span>
+                </TableCell>
+              </TableRow>
+              {group.entries.map((entry) => {
+                const current = isCurrentPeriod(entry, today);
+                const future = isFuturePeriod(entry, today);
+                const figure = future ? "text-muted-foreground" : NEUTRAL_FIGURE;
+                return (
+                  <TableRow
+                    key={entry.periodStart}
+                    aria-current={current ? "date" : undefined}
+                    className={cn(current && "bg-primary/5 hover:bg-primary/10")}
+                  >
+                    <TableCell className={cn("whitespace-nowrap tabular", figure)}>
+                      {formatAssetDate(entry.periodStart)} –{" "}
+                      {formatAssetDate(entry.periodEnd)}
+                      {current && (
+                        <Badge variant="secondary" className="ml-2">
+                          Current
+                        </Badge>
+                      )}
+                    </TableCell>
+                    <TableCell className={cn("text-right tabular", figure)}>
+                      {entry.daysHeld}
+                    </TableCell>
+                    <TableCell className={cn("text-right tabular", figure)}>
+                      {assetMoney(entry.openingBookValue)}
+                    </TableCell>
+                    <TableCell
+                      className={cn("text-right font-medium tabular", figure)}
+                    >
+                      {assetMoney(entry.depreciation)}
+                    </TableCell>
+                    <TableCell className={cn("text-right tabular", figure)}>
+                      {assetMoney(entry.closingBookValue)}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+              <TableRow className="border-b-2 hover:bg-transparent">
+                <TableCell className="whitespace-nowrap text-sm font-medium">
+                  {group.label} subtotal
+                </TableCell>
+                <TableCell className={cn("text-right tabular", NEUTRAL_FIGURE)}>
+                  {group.daysHeld}
+                </TableCell>
+                <TableCell className={cn("text-right tabular", NEUTRAL_FIGURE)}>
+                  {assetMoney(group.openingBookValue)}
+                </TableCell>
+                <TableCell
+                  className={cn("text-right font-semibold tabular", NEUTRAL_FIGURE)}
+                >
+                  {assetMoney(group.depreciation)}
+                </TableCell>
+                <TableCell className={cn("text-right tabular", NEUTRAL_FIGURE)}>
+                  {assetMoney(group.closingBookValue)}
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          ))}
+          <TableFooter>
+            <TableRow>
+              <TableCell className="font-medium">Total</TableCell>
+              <TableCell className="text-right font-medium tabular">
+                {totals.daysHeld}
+              </TableCell>
+              <TableCell className="text-right font-medium tabular">
+                {assetMoney(first.openingBookValue)}
+              </TableCell>
+              <TableCell className="text-right font-semibold tabular">
+                {assetMoney(totals.depreciation)}
+              </TableCell>
+              <TableCell className="text-right font-medium tabular">
+                {assetMoney(last.closingBookValue)}
+              </TableCell>
+            </TableRow>
+          </TableFooter>
+        </Table>
+      </div>
+    </section>
+  );
+}
+
+/** Shaped like the summary and table, as the other asset reports skeleton themselves. */
+function ScheduleLoadingSkeleton() {
+  return (
+    <div className="space-y-6" aria-hidden>
+      <Shimmer className="h-44 w-full rounded-[14px]" />
+      <Shimmer className="h-96 w-full rounded-lg" />
     </div>
   );
 }

@@ -224,7 +224,10 @@ export function SolePayAccountsScreen() {
           billing header would make it look like a setting on that account
           alone.
         */}
-        <div className="flex items-start gap-3 rounded-[14px] border border-border bg-card p-4 shadow-sm">
+        <div
+          className="flex items-start gap-3 rounded-[14px] border border-border bg-card p-4 shadow-sm"
+          data-usertour="solepay-accounts-mirror"
+        >
           <Checkbox
             id="accounts-mirrored"
             checked={mirrored}
@@ -264,6 +267,7 @@ export function SolePayAccountsScreen() {
         <FormSection
           icon={Landmark}
           title="Settlement account"
+          tourId="solepay-settlement"
           description="Where SolePay pays your takings."
           headerClassName={SECTION_HEADER}
           className="space-y-4 p-4 sm:p-6"
@@ -287,6 +291,7 @@ export function SolePayAccountsScreen() {
         <FormSection
           icon={Receipt}
           title="Billing account"
+          tourId="solepay-billing"
           description="Where SolePay takes its fees from."
           headerClassName={SECTION_HEADER}
           className="space-y-4 p-4 sm:p-6"

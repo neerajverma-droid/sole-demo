@@ -167,7 +167,10 @@ export function PropertyDetailScreen({ propertyId }: { propertyId: string }) {
             )}
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div
+          className="flex flex-wrap items-center gap-2"
+          data-usertour="property-actions"
+        >
           <Button variant="outline" onClick={() => setEditOpen(true)} disabled={disposed}>
             <Pencil />
             Edit
@@ -190,7 +193,9 @@ export function PropertyDetailScreen({ propertyId }: { propertyId: string }) {
         </div>
       </div>
 
-      <StatCards stats={stats} loading={statsLoading} />
+      <div data-usertour="property-stats">
+        <StatCards stats={stats} loading={statsLoading} />
+      </div>
 
       <PropertyTabs propertyId={property.id} active={tab} />
 

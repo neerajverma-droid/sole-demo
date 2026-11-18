@@ -6,6 +6,16 @@ import { useRouter } from "next/navigation";
 import { ArrowLeft, Info, Landmark, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Empty,
@@ -19,28 +29,24 @@ import { Label } from "@/components/ui/label";
 import { DatePicker } from "@/components/documents/date-picker";
 import { Field, Required } from "@/components/documents/field";
 import { MoneyInput } from "@/components/planner/money-input";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
-import { assetMoney, assetValue, type AssetInsurance } from "@/lib/assets";
-import { toIsoDate } from "@/lib/invoices";
-import { useAssetDisposalQuery, useRecordAssetDisposalMutation } from "@/hooks/use-asset-disposal-query";
+import {
+  assetMoney,
+  assetValue,
+  hasDisposal,
+  suggestedDisposalSaleValue,
+} from "@/lib/assets";
+import { apiErrorMessage } from "@/lib/api-error";
+import { disposalDateError, saleValueError } from "@/lib/asset-validation";
+import { parseIsoDate, toIsoDate } from "@/lib/invoices";
+import {
+  useAssetDisposalQuery,
+  useDeleteAssetDisposalMutation,
+  useRecordAssetDisposalMutation,
+} from "@/hooks/use-asset-disposal-query";
 import { useAssetInsuranceQuery } from "@/hooks/use-asset-insurance-query";
-import { useAssetsQuery } from "@/hooks/use-assets-query";
-import { useAssetsStore } from "@/stores/assets";
+import { useRegisterAsset } from "@/hooks/use-asset-query";
 
 const ASSETS_ROOT = "/assets";
-
-/**
- * What the insurer says the asset is worth, if anyone has said.
- *
- * The first policy's coverage: a second policy on the same asset covers
- * something narrower — tools in transit, say — so the first is the one that
- * stands for the whole thing. A suggestion either way, and the field stays
- * editable.
- */
-function suggestedSaleValue(insurance: AssetInsurance[]): string {
-  return insurance[0]?.coverageAmount ?? "";
-}
 
 /**
  * Record disposal.
@@ -56,15 +62,19 @@ function suggestedSaleValue(insurance: AssetInsurance[]): string {
  */
 export function DisposalScreen({ assetId }: { assetId: string }) {
   const router = useRouter();
-  // Hydrates the register on a direct/refreshed visit to this route.
-  useAssetsQuery();
-  const assets = useAssetsStore((state) => state.assets);
+  // The register's copy, or the asset fetched on its own on a direct visit.
+  const { asset, loading } = useRegisterAsset(assetId);
   const { data: disposal } = useAssetDisposalQuery(assetId);
   const { data: insurance = [] } = useAssetInsuranceQuery(assetId);
   const recordDisposal = useRecordAssetDisposalMutation(assetId);
+  const deleteDisposal = useDeleteAssetDisposalMutation(assetId);
+  const [confirmingRemove, setConfirmingRemove] = React.useState(false);
+  const disposed = hasDisposal(disposal);
 
-  const asset = assets.find((entry) => entry.id === assetId);
-  const assetHref = `${ASSETS_ROOT}/${assetId}`;
+  // Back, Cancel and "done" return to the register — `/assets/:id` is the edit
+  // form (it shows "Loading asset…" and isn't where these screens were opened
+  // from).
+  const assetHref = ASSETS_ROOT;
   const today = toIsoDate(new Date());
 
   /**
@@ -76,6 +86,12 @@ export function DisposalScreen({ assetId }: { assetId: string }) {
    */
   const [disposedDate, setDisposedDate] = React.useState(today);
   const [saleValue, setSaleValue] = React.useState("");
+  /**
+   * Errors show once a field is left or Save is tried — not on first paint,
+   * where a seeded form would otherwise open already complaining.
+   */
+  const [touched, setTouched] = React.useState({ date: false, sale: false });
+  const [attempted, setAttempted] = React.useState(false);
 
   /*
    * Reseeded once the disposal record and insurance list have both loaded —
@@ -87,8 +103,19 @@ export function DisposalScreen({ assetId }: { assetId: string }) {
     if (seeded.current || disposal === undefined) return;
     seeded.current = true;
     setDisposedDate(disposal?.disposedDate || today);
-    setSaleValue(disposal?.saleValue || suggestedSaleValue(insurance));
+    setSaleValue(
+      (hasDisposal(disposal) && disposal?.saleValue) ||
+        suggestedDisposalSaleValue(disposal, insurance),
+    );
   }, [disposal, insurance, today]);
+
+  if (loading) {
+    return (
+      <div className="mx-auto max-w-3xl py-12 text-center text-sm text-muted-foreground">
+        Loading asset…
+      </div>
+    );
+  }
 
   if (!asset) {
     return (
@@ -113,31 +140,33 @@ export function DisposalScreen({ assetId }: { assetId: string }) {
     );
   }
 
+  const removeDisposal = async () => {
+    try {
+      await deleteDisposal.mutateAsync();
+      toast.success(`Disposal removed — ${asset.name} is back on the register`);
+      setConfirmingRemove(false);
+      router.push(assetHref);
+    } catch (error) {
+      toast.error(apiErrorMessage(error, "Couldn't remove the disposal"));
+    }
+  };
+
+  const dateError = disposalDateError(disposedDate, today, asset.purchaseDate);
+  const saleError = saleValueError(saleValue);
+  const invalid = !!dateError || !!saleError;
+  const shownDateError = attempted || touched.date ? dateError : null;
+  const shownSaleError = attempted || touched.sale ? saleError : null;
+
   const record = async () => {
+    setAttempted(true);
+    if (invalid) return;
     try {
       await recordDisposal.mutateAsync({ disposedDate, saleValue });
-
-      /*
-       * Here, not in `updateAssetApi`, which is where a disposal is actually
-       * written. That call cannot tell a disposal from any later edit of an
-       * already-disposed asset, so firing there would count the same disposal
-       * again every time somebody corrected a typo on the record.
-       *
-       * `value` is the asset's cost so it lines up with `asset_added`; the
-       * sale price rides alongside, which is what makes gain-or-loss on
-       * disposal answerable without joining back to the ledger.
-       */
-      track(EVENTS.ASSET_DISPOSED, {
-        value: assetValue(asset),
-        sale_value: Number(String(saleValue).replace(/,/g, "")) || 0,
-      });
 
       toast.success(`${asset.name} recorded as disposed`);
       router.push(assetHref);
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Couldn't record disposal",
-      );
+      toast.error(apiErrorMessage(error, "Couldn't record disposal"));
     }
   };
 
@@ -147,7 +176,7 @@ export function DisposalScreen({ assetId }: { assetId: string }) {
         <Button variant="ghost" size="sm" className="-ml-2" asChild>
           <Link href={assetHref}>
             <ArrowLeft />
-            {asset.name}
+            Assets
           </Link>
         </Button>
         <div className="space-y-1">
@@ -156,7 +185,7 @@ export function DisposalScreen({ assetId }: { assetId: string }) {
           </h1>
           <p className="text-sm text-muted-foreground">
             {asset.category} · {assetMoney(assetValue(asset))}
-            {!!disposal && " · already recorded as disposed"}
+            {disposed && " · already recorded as disposed"}
           </p>
         </div>
       </div>
@@ -181,6 +210,7 @@ export function DisposalScreen({ assetId }: { assetId: string }) {
       <FormSection
         icon={Landmark}
         title="Disposal details"
+        tourId="asset-disposal-details"
         description="When it left the business, and what you got for it."
       >
         <div className="grid gap-4 sm:grid-cols-2">
@@ -189,27 +219,38 @@ export function DisposalScreen({ assetId }: { assetId: string }) {
               Date disposed
               <Required />
             </Label>
+            {/* Capped at today: a disposal is something that has happened. */}
             <DatePicker
               label="Date disposed"
               value={disposedDate}
               onChange={setDisposedDate}
+              onClose={() => setTouched((t) => ({ ...t, date: true }))}
+              toDate={parseIsoDate(today)}
+              invalid={!!shownDateError}
             />
+            {shownDateError && (
+              <p className="text-xs text-destructive">{shownDateError}</p>
+            )}
           </div>
 
           <Field
             label="Sale value"
             htmlFor="disposal-sale-value"
+            error={shownSaleError ?? undefined}
             hint={
-              insurance.length > 0
+              suggestedDisposalSaleValue(disposal, insurance)
                 ? "Suggested from this asset's insurance coverage — change it to what it actually sold for."
                 : "Leave blank if it was scrapped or given away."
             }
           >
             <MoneyInput
               id="disposal-sale-value"
+              placeholder="0.00"
               label="Sale value"
               value={saleValue}
               onChange={setSaleValue}
+              onBlur={() => setTouched((t) => ({ ...t, sale: true }))}
+              invalid={!!shownSaleError}
             />
           </Field>
         </div>
@@ -217,19 +258,66 @@ export function DisposalScreen({ assetId }: { assetId: string }) {
 
       {/* Stuck to the foot of the viewport, matching the depreciation flow. */}
       <div className="sticky bottom-0 -mx-4 flex flex-wrap items-center justify-end gap-2 border-t border-border bg-background/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
+        {disposed && (
+          <Button
+            variant="outline"
+            className="mr-auto text-destructive hover:text-destructive"
+            onClick={() => setConfirmingRemove(true)}
+          >
+            Remove disposal
+          </Button>
+        )}
         <Button variant="outline" asChild>
           <Link href={assetHref}>Cancel</Link>
         </Button>
         <Button
-          disabled={!disposedDate || recordDisposal.isPending}
+          // Clickable until tried, so the first click can say what's wrong;
+          // after that it stays off until the errors are fixed.
+          disabled={(attempted && invalid) || recordDisposal.isPending}
           onClick={record}
         >
           {recordDisposal.isPending && (
             <Loader2 className="size-4 animate-spin" />
           )}
-          {recordDisposal.isPending ? "Saving…" : "Record disposal"}
+          {recordDisposal.isPending
+            ? "Saving…"
+            : disposed
+              ? "Save changes"
+              : "Record disposal"}
         </Button>
       </div>
+
+      <AlertDialog open={confirmingRemove} onOpenChange={setConfirmingRemove}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove this disposal?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {asset.name} goes back to being held by the business, the disposal
+              date and sale value are cleared, and its depreciation picks up
+              again.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteDisposal.isPending}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deleteDisposal.isPending}
+              onClick={(event) => {
+                // Stays open, reading "Removing…", until the server answers.
+                event.preventDefault();
+                void removeDisposal();
+              }}
+            >
+              {deleteDisposal.isPending && (
+                <Loader2 className="size-4 animate-spin" />
+              )}
+              {deleteDisposal.isPending ? "Removing…" : "Remove disposal"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

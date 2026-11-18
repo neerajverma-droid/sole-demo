@@ -24,15 +24,29 @@ import {
  * ------------------------------------------------------------------ */
 
 /**
- * The one page between sign-up and the product, and the celebration after it.
+ * The business page and the plan page between sign-up and the product, and the
+ * celebration after them.
  *
- * Two routes and no more. Everything else onboarding used to do — how they
+ * Three routes and no more. The plan page is where the first subscription is
+ * taken — there is no free trial, so the product opens once it's paid for.
+ * Everything else onboarding used to do — how they
  * found us, what they're keeping their books in, how money reaches them, the
  * sidebar — is the overlay that opens over the dashboard, which is a surface
  * rather than a place and so has nothing to link to.
  */
 export const BUSINESS_INFO_HREF = "/onboarding";
+export const ONBOARDING_PLAN_HREF = "/onboarding/plan";
 export const ONBOARDING_DONE_HREF = "/onboarding/done";
+
+/**
+ * How long after paying a new subscriber can ask for their money back.
+ *
+ * Shown at the point of payment, in place of the trial it replaces: nobody gets
+ * to try the product before paying, so the promise is that they can still back
+ * out. It is a promise to be kept by hand — nothing in the billing code issues
+ * the refund — so the number lives here, once, rather than in copy.
+ */
+export const MONEY_BACK_GUARANTEE_DAYS = 30;
 
 /**
  * The presets offered in the dropdown — everything the platform knows except
@@ -155,11 +169,22 @@ export function isNdisChoice(draft: CompanyProfileDraft): boolean {
 
 export type OnboardingIssue = { key: string; message: string };
 
-/** Permissive: a domain with a dot in it. People type these many ways. */
+/**
+ * A hostname with a dot in it, with or without a scheme, port or path. People
+ * type these many ways, but an email address (or anything with an `@`) isn't
+ * one of them.
+ */
 export function websiteError(value: string): string | undefined {
-  if (!value.trim()) return undefined;
-  const trimmed = value.trim().replace(/^https?:\/\//i, "");
-  return /^[^\s/]+\.[^\s/]{2,}/.test(trimmed)
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.includes("@")) {
+    return "That looks like an email address. Enter a website, e.g. yourbusiness.com.au";
+  }
+  // `www.` isn't the domain, so `www.google` mustn't pass as one.
+  const host = trimmed.replace(/^https?:\/\//i, "").replace(/^www\./i, "");
+  return /^([a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(:\d{1,5})?([/?#]\S*)?$/i.test(
+    host,
+  )
     ? undefined
     : "Enter a valid website, e.g. yourbusiness.com.au";
 }

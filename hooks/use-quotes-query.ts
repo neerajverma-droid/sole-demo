@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type QueryClient } from "@tanstack/react-query";
 import { useAtomValue } from "jotai";
 
 import { listedQuotesAtom } from "@/lib/atoms";
@@ -27,6 +27,16 @@ export function useQuotesQuery() {
   }, [query.data, setQuotes]);
 
   return query;
+}
+
+/**
+ * Puts the quote list back to "not loaded yet" — see `resetInvoiceListCache`:
+ * after a save, the list must open on its skeleton, not on the stale page it
+ * cached, with the new quote popping in later.
+ */
+export function resetQuoteListCache(queryClient: QueryClient) {
+  useQuotesStore.setState({ hydrated: false });
+  void queryClient.resetQueries({ queryKey: ["quotes"] });
 }
 
 /**

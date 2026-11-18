@@ -20,6 +20,8 @@ import { AvatarCropDialog } from "@/components/settings/avatar-crop-dialog";
 import { useIndustriesQuery } from "@/hooks/use-industries-query";
 import { useCountriesQuery } from "@/hooks/use-countries-query";
 import { useActiveBusiness } from "@/hooks/use-active-business";
+import { useCountryContext } from "@/hooks/use-country-context";
+import { industriesForCountry } from "@/lib/industries";
 import { useAvatarUpload } from "@/hooks/use-avatar-upload";
 import { contactInitials } from "@/lib/contacts";
 import { countryByIso2 } from "@/lib/countries";
@@ -69,8 +71,13 @@ import { cn } from "@/lib/utils";
 export function BusinessSection() {
   const { values: stored, loading, save } = useBusinessDetails();
   const { values: prefs, patch: patchPrefs } = usePreferences();
-  const { data: industries = [], isPending: industriesPending } =
+  const { data: industriesRaw = [], isPending: industriesPending } =
     useIndustriesQuery();
+  const { country: countryContext } = useCountryContext();
+  // NDIS dropped from the picker when this business's country doesn't offer
+  // it — `industriesRaw` stays unfiltered so an existing NDIS business whose
+  // industry id this screen already holds still resolves its own name.
+  const industries = industriesForCountry(industriesRaw, countryContext);
   const { data: countries = [] } = useCountriesQuery();
   // Straight off the record rather than through the form draft: it is not
   // editable, so it has no business being in a draft that can be dirty.
@@ -166,7 +173,7 @@ export function BusinessSection() {
       saving={saving}
       onSave={() => void onSave()}
     >
-      <div className="grid gap-2 sm:grid-cols-2">
+      <div className="grid gap-2 sm:grid-cols-2" data-usertour="settings-business-identity">
         <Field
           label="Photo"
           hint="Shown on your invoices and quotes, and wherever Sole greets you."
@@ -381,7 +388,7 @@ export function BusinessSection() {
         </Field>
       </div>
 
-      <div className="space-y-[15px]">
+      <div className="space-y-[15px]" data-usertour="settings-business-address">
         <Field
           label="Business address"
           htmlFor="settings-address-search"

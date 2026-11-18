@@ -7,6 +7,8 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
 import { sidebarExtraIdsAtom, sidebarHiddenAtom } from "@/lib/atoms";
 import { ADDITIONAL_NAV, type AdditionalNavItem } from "@/lib/nav";
 import { cn } from "@/lib/utils";
@@ -230,7 +232,11 @@ function AdditionalRow({
       {href ? (
         <Link
           href={href}
-          onClick={onNavigate}
+          onClick={() => {
+            // Opened from More rather than the rail — still the module opened.
+            track(EVENTS.MODULE_CLICKED, { module_name: item.label, source: "more" });
+            onNavigate();
+          }}
           aria-label={`Open ${item.label}`}
           className="absolute inset-0 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring"
         />

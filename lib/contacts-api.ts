@@ -11,8 +11,6 @@
  */
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
 import {
   composeContactPeople,
@@ -29,6 +27,8 @@ import type {
   BulkRow,
 } from "@/lib/bulk-import";
 import { activeBaseCurrency } from "@/lib/country-context";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
 
 /** Accepts the same boolean/number/string-ish values the backend does. */
 function parseFlag(
@@ -386,10 +386,15 @@ export async function createContactApi(
     throw new Error("The contact saved but the server returned no id.");
   }
 
-  // How many people a contact carries is the thing worth knowing here — a
-  // company with six named contacts is a different kind of customer from a
-  // sole trader billing one person.
-  track(EVENTS.CONTACT_CREATED, { people_count: people.length });
+  track(EVENTS.CONTACT_CREATED, {
+    contact_type: values.type,
+    business_type: values.businessType,
+    contact_name:
+      (values.businessType === "Business"
+        ? values.businessName.trim()
+        : values.personName.trim()) || null,
+    contact_email: values.email.trim() || null,
+  });
 
   return {
     id: String(id),
@@ -453,7 +458,15 @@ async function updateContactPersonApi(
   personId: string,
   person: ContactPerson,
 ): Promise<void> {
-  const body = buildEncryptedRequestBody(contactPersonWriteFields(person));
+  /*
+   * `is_primary` goes only when it's being switched on. The server refuses a
+   * PATCH that sets the current primary to 0 ("make another contact primary"),
+   * and it demotes the old primary itself when a new one is promoted — so
+   * sending 0 for a person being demoted is what made changing the primary
+   * fail. Everyone else's flag is already 0 on the server.
+   */
+  const { is_primary: isPrimary, ...fields } = contactPersonWriteFields(person);
+  const body = buildEncryptedRequestBody(isPrimary ? { ...fields, is_primary: 1 } : fields);
   const response = await api.patch<{ success?: boolean; message?: string }>(
     `${apiRoutes.companyContact.update}/${personId}`,
     body,
@@ -523,6 +536,27 @@ export async function updateContactApi(
     const original = originalPeople.find((entry) => entry.id === person.id);
     if (!original || contactPersonChanged(original, person)) {
       toUpdate.push({ id: person.id, person });
+    }
+  }
+
+  /*
+   * The new primary goes first. The server won't delete the current primary
+   * and won't unflag it directly, so the person being promoted has to land
+   * (which demotes the old one server-side) before anything is removed or the
+   * rest are patched.
+   */
+  const originalPrimaryId = originalPeople.find((p) => p.isPrimary)?.id;
+  const newPrimary = submitted.find((p) => p.isPrimary);
+  const primaryChanged = !!newPrimary && newPrimary.id !== originalPrimaryId;
+
+  if (primaryChanged && newPrimary) {
+    if (newPrimary.id) {
+      await updateContactPersonApi(newPrimary.id, newPrimary);
+      const at = toUpdate.findIndex((entry) => entry.id === newPrimary.id);
+      if (at !== -1) toUpdate.splice(at, 1);
+    } else {
+      await createContactPersonApi(id, newPrimary);
+      toCreate.splice(toCreate.indexOf(newPrimary), 1);
     }
   }
 
@@ -646,13 +680,6 @@ export async function bulkCreateContactsApi(
         failed: Number(meta.failed ?? 0),
         skipped: Number(meta.skipped ?? 0),
       };
-
-  track(EVENTS.CONTACTS_IMPORTED, {
-    count: counts.created,
-    skipped_count: counts.skipped,
-    failed_count: counts.failed,
-    file_rows: rows.length,
-  });
 
   return {
     ...counts,

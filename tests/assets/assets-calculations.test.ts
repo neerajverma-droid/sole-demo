@@ -33,7 +33,7 @@ type Asset = import("@/lib/assets").Asset;
 type AssetDepreciation = import("@/lib/assets").AssetDepreciation;
 
 function asset(overrides: Partial<Asset> = {}): Asset {
-  return { ...emptyAssetDraft("2026-01-01"), id: "1", ...overrides };
+  return { ...emptyAssetDraft("2026-01-01"), category: "Equipment", id: "1", ...overrides };
 }
 
 function dep(overrides: Partial<AssetDepreciation> = {}): AssetDepreciation {
@@ -46,16 +46,16 @@ describe("assetValue / assetOwing / isPaid", () => {
     expect(assetValue({ costPrice: "abc" })).toBe(0);
   });
 
-  it("floors owing at zero, so a negative typed figure can't owe a negative amount", () => {
-    expect(assetOwing({ owing: "-50" })).toBe(0);
-    expect(assetOwing({ owing: "2,000" })).toBe(2000);
-    expect(assetOwing({ owing: "" })).toBe(0);
+  it("owes what is left after matched payments, and nothing once paid with cash", () => {
+    expect(assetOwing({ remainingAmount: 2000 })).toBe(2000);
+    expect(assetOwing({ remainingAmount: 2000, paidWithCash: true })).toBe(0);
+    expect(assetOwing({ remainingAmount: 0 })).toBe(0);
+    expect(assetOwing({})).toBe(0);
   });
 
-  it("treats an empty or zero owing as paid", () => {
-    expect(isPaid({ owing: "" })).toBe(true);
-    expect(isPaid({ owing: "0" })).toBe(true);
-    expect(isPaid({ owing: "10" })).toBe(false);
+  it("treats nothing left to pay as paid", () => {
+    expect(isPaid({ remainingAmount: 0 })).toBe(true);
+    expect(isPaid({ remainingAmount: 10 })).toBe(false);
   });
 });
 
@@ -140,6 +140,44 @@ describe("depreciationPreview", () => {
     );
     expect(preview.rate).toBe(0.25);
     expect(preview.annualDepreciation).toBe(2500);
+  });
+
+  it("uses IRD's published rates for a New Zealand asset, as the backend posts them", () => {
+    // 10-year life: IRD 20% DV / 13.5% SL — not the ATO's 20% / 10%.
+    const sl = depreciationPreview(
+      { costPrice: "10000", gst: false },
+      dep({ method: "Straight line", effectiveLife: "10" }),
+      15,
+      "NZ",
+    );
+    expect(sl.rate).toBeCloseTo(0.135);
+    expect(sl.annualDepreciation).toBeCloseTo(1350);
+
+    const dv = depreciationPreview(
+      { costPrice: "10000", gst: false },
+      dep({ method: "Diminishing value", effectiveLife: "3" }),
+      15,
+      "NZ",
+    );
+    expect(dv.rate).toBeCloseTo(0.67); // IR265: 3 years → 67% DV
+  });
+
+  it("still lets a typed rate win in New Zealand", () => {
+    const preview = depreciationPreview(
+      { costPrice: "10000", gst: false },
+      dep({ method: "Diminishing value", effectiveLife: "10", overrideRate: "25" }),
+      15,
+      "NZ",
+    );
+    expect(preview.rate).toBe(0.25);
+  });
+
+  it("is unchanged for Australia: 1 ÷ life straight line, 200% of it diminishing value", () => {
+    const values = dep({ method: "Straight line", effectiveLife: "3" });
+    const asset = { costPrice: "1000", gst: false };
+    expect(depreciationPreview(asset, values, 10, "AU")).toEqual(depreciationPreview(asset, values));
+    expect(depreciationPreview(asset, values).annualDepreciation).toBe(1000 / 3);
+    expect(depreciationPreview(asset, dep({ method: "Diminishing value", effectiveLife: "8" })).rate).toBe(2 / 8);
   });
 });
 
@@ -250,8 +288,8 @@ describe("depreciationSchedule", () => {
 describe("assetStats", () => {
   it("totals value and owing, and counts depreciating/paid/owing assets", () => {
     const stats = assetStats([
-      asset({ costPrice: "1000", owing: "" }),
-      asset({ costPrice: "2,000", owing: "500", depreciation: dep() }),
+      asset({ costPrice: "1000", remainingAmount: 0 }),
+      asset({ costPrice: "2,000", remainingAmount: 500, depreciation: dep() }),
     ]);
     expect(stats).toEqual({
       totalValue: 3000,
@@ -261,6 +299,31 @@ describe("assetStats", () => {
       paidCount: 1,
       owingCount: 1,
     });
+  });
+
+  it("leaves disposed assets out of the total value and the depreciating count", () => {
+    const stats = assetStats([
+      asset({ costPrice: "1000", remainingAmount: 0, depreciation: dep() }),
+      asset({
+        costPrice: "5000",
+        remainingAmount: 0,
+        depreciation: dep(),
+        disposedDate: "2026-03-01",
+      }),
+    ]);
+    expect(stats.totalValue).toBe(1000);
+    expect(stats.paidValue).toBe(1000);
+    expect(stats.depreciatingCount).toBe(1);
+  });
+
+  it("still counts what's owed on a disposed asset as owing", () => {
+    const stats = assetStats([
+      asset({ costPrice: "1000", remainingAmount: 0 }),
+      asset({ costPrice: "2000", remainingAmount: 800, disposedDate: "2026-03-01" }),
+    ]);
+    expect(stats.totalValue).toBe(1000);
+    expect(stats.paidValue).toBe(1000);
+    expect(stats.owingValue).toBe(800);
   });
 });
 
@@ -281,7 +344,7 @@ describe("filterAssets — query, filters and sorts", () => {
     supplierName: "Northside Motors",
     category: "Vehicle",
     costPrice: "38000",
-    owing: "10000",
+    remainingAmount: 10000,
     purchaseDate: "2025-01-15",
     depreciation: dep(),
   });
@@ -336,6 +399,7 @@ describe("assetIssues / firstIncompleteStep", () => {
       ...emptyAssetDraft("2026-01-01"),
       name: "Laptop",
       category: "Technology" as const,
+      supplierId: "12",
       supplierName: "Harvey Norman",
       costPrice: "2000",
       brand: "Dell",
@@ -356,15 +420,59 @@ describe("assetIssues / firstIncompleteStep", () => {
     expect(assetIssues({ ...inventory, unitType: "Items" })).toEqual([]);
   });
 
+  it("takes an optional sale price for the Inventory category, but not a bad one", () => {
+    const inventory = { ...completeDraft(), category: "Inventory" as const, unitType: "Items" };
+    expect(assetIssues({ ...inventory, salePrice: "" })).toEqual([]);
+    expect(assetIssues({ ...inventory, salePrice: "350" })).toEqual([]);
+    expect(assetIssues({ ...inventory, salePrice: "-5" }).map((i) => i.key)).toEqual(["salePrice"]);
+    // On the first step, so a bad value sends you back there.
+    expect(firstIncompleteStep(assetIssues({ ...inventory, salePrice: "abc" }))).toBe(0);
+  });
+
   it("validates effective life only when depreciation is enabled", () => {
     expect(assetIssues({ ...completeDraft(), depreciation: { ...EMPTY_DEPRECIATION } })).toEqual([]);
 
     expect(assetIssues({ ...completeDraft(), depreciation: dep() })).toEqual([
-      { key: "effectiveLife", message: "Enter an effective life." },
+      { key: "effectiveLife", message: "Effective life is required" },
     ]);
     expect(
-      assetIssues({ ...completeDraft(), depreciation: dep({ effectiveLife: "0" }) }),
-    ).toEqual([{ key: "effectiveLife", message: "Years must be a number." }]);
+      assetIssues({ ...completeDraft(), depreciation: dep({ effectiveLife: "abc" }) }),
+    ).toEqual([{ key: "effectiveLife", message: "Effective life must be a number" }]);
+  });
+
+  it("uses the depreciation screen's six-month floor for the effective life", () => {
+    for (const effectiveLife of ["0", "0.1", "0.49"]) {
+      expect(
+        assetIssues({ ...completeDraft(), depreciation: dep({ effectiveLife }) }),
+      ).toEqual([{ key: "effectiveLife", message: "Minimum 6 months" }]);
+    }
+    expect(
+      assetIssues({ ...completeDraft(), depreciation: dep({ effectiveLife: "0.5" }) }),
+    ).toEqual([]);
+  });
+
+  it("doesn't ask for an effective life on a full write-off", () => {
+    expect(
+      assetIssues({
+        ...completeDraft(),
+        depreciation: dep({ method: "Full depreciation on purchase", effectiveLife: "" }),
+      }),
+    ).toEqual([]);
+  });
+
+  it("requires a supplier from the contacts, not just a name read off a receipt", () => {
+    expect(assetIssues({ ...completeDraft(), supplierId: null })).toEqual([
+      { key: "supplier", message: "Pick the supplier from your contacts, or add it." },
+    ]);
+    expect(
+      assetIssues({ ...completeDraft(), supplierId: null, supplierName: "" }),
+    ).toEqual([{ key: "supplier", message: "Who did you buy it from?" }]);
+  });
+
+  it("requires a category to be chosen", () => {
+    expect(assetIssues({ ...completeDraft(), category: "" })).toEqual([
+      { key: "category", message: "Pick a category." },
+    ]);
   });
 
   it("rejects a missing, zero or malformed price", () => {

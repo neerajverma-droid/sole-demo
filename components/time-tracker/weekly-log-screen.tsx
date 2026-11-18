@@ -29,6 +29,8 @@ import {
   DAY_LIMIT_HOURS,
   TIME_TRACKER_ROOT,
   emptyWeeklyRow,
+  formatHoursInput,
+  limitHoursInput,
   hasWeeklyErrors,
   parseHoursInput,
   weekDays,
@@ -141,7 +143,10 @@ export function WeeklyLogScreen() {
         <h1 className="text-2xl font-semibold tracking-tight">Weekly Time Log</h1>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-border bg-muted/30 px-4 py-3">
+      <div
+        className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-border bg-muted/30 px-4 py-3"
+        data-usertour="time-week-nav"
+      >
         <p className="text-sm text-muted-foreground tabular">
           Year: {year} &nbsp;|&nbsp; Week: {week}
         </p>
@@ -251,6 +256,7 @@ export function WeeklyLogScreen() {
           <Button
             variant="outline"
             className="border-dashed border-primary/50 text-primary hover:text-primary"
+            data-usertour="time-week-add-row"
             onClick={() => {
               setRows((current) => [...current, emptyWeeklyRow()]);
             }}
@@ -259,7 +265,10 @@ export function WeeklyLogScreen() {
             Add new row
           </Button>
 
-          <div className="flex gap-3 rounded-lg border border-primary/20 bg-primary/[0.06] px-4 py-3.5 text-sm">
+          <div
+            className="flex gap-3 rounded-lg border border-primary/20 bg-primary/[0.06] px-4 py-3.5 text-sm"
+            data-usertour="time-week-formats"
+          >
             <Info className="size-5 shrink-0 text-primary" aria-hidden />
             <p>
               <span className="font-semibold">Supported time formats:</span>{" "}
@@ -272,7 +281,7 @@ export function WeeklyLogScreen() {
             </p>
           </div>
 
-          <div className="flex gap-3">
+          <div className="flex w-fit gap-3" data-usertour="time-week-actions">
             <Button variant="outline" disabled={save.isPending} onClick={guardNavigate(TIME_TRACKER_ROOT)}>
               Cancel
             </Button>
@@ -329,13 +338,39 @@ function WeeklyRowView({
   const rowError = errors.rows[row.key];
   const locked = row.isRunning;
 
+  // The seven day cells are separate table cells, so the first row carries an
+  // invisible box spanning all of them — one thing for the onboarding tour to
+  // point at ("hours for each day") rather than seven.
+  const rowRef = React.useRef<HTMLTableRowElement>(null);
+  const firstDayRef = React.useRef<HTMLTableCellElement>(null);
+  const lastDayRef = React.useRef<HTMLTableCellElement>(null);
+  const [daysWidth, setDaysWidth] = React.useState(0);
+  React.useLayoutEffect(() => {
+    if (index !== 0) return;
+    const measure = () => {
+      const first = firstDayRef.current;
+      const last = lastDayRef.current;
+      if (!first || !last) return;
+      setDaysWidth(last.getBoundingClientRect().right - first.getBoundingClientRect().left);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    if (rowRef.current) observer.observe(rowRef.current);
+    return () => observer.disconnect();
+  }, [index]);
+
   return (
     <>
-      <tr className={cn("border-t border-border align-middle", rowError && "bg-destructive/[0.04]")}>
-        <td className="px-2.5 py-2.5">
+      <tr
+        ref={rowRef}
+        className={cn("border-t border-border align-middle", rowError && "bg-destructive/[0.04]")}
+        data-usertour={index === 0 ? "time-week-row" : undefined}
+      >
+        <td className="px-2.5 py-2.5" data-usertour={index === 0 ? "time-week-client" : undefined}>
           <ProjectClientSelect
             value={row.client}
             disabled={locked}
+            askPhone={false}
             invalid={rowError === "Select a client"}
             onChange={(client) =>
               onChange({
@@ -351,7 +386,7 @@ function WeeklyRowView({
             }
           />
         </td>
-        <td className="px-2.5 py-2.5">
+        <td className="px-2.5 py-2.5" data-usertour={index === 0 ? "time-week-task" : undefined}>
           <RowSelect
             label={`Task, row ${index + 1}`}
             value={row.taskId}
@@ -364,7 +399,7 @@ function WeeklyRowView({
             onChange={(taskId) => onChange({ taskId, projectId: "", jobId: "", projectOptions: [], jobOptions: [] })}
           />
         </td>
-        <td className="px-2.5 py-2.5">
+        <td className="px-2.5 py-2.5" data-usertour={index === 0 ? "time-week-project" : undefined}>
           <RowSelect
             label={`Project, row ${index + 1}`}
             value={row.projectId}
@@ -375,7 +410,7 @@ function WeeklyRowView({
             onChange={(projectId) => onChange({ projectId })}
           />
         </td>
-        <td className="px-2.5 py-2.5">
+        <td className="px-2.5 py-2.5" data-usertour={index === 0 ? "time-week-job" : undefined}>
           <RowSelect
             label={`Job, row ${index + 1}`}
             value={row.jobId}
@@ -389,7 +424,19 @@ function WeeklyRowView({
         {row.times.map((time, day) => {
           const cellError = errors.cells[`${row.key}:${day}`];
           return (
-            <td key={day} className="px-1.5 py-2.5 text-center">
+            <td
+              key={day}
+              ref={day === 0 ? firstDayRef : day === 6 ? lastDayRef : undefined}
+              className={cn("px-1.5 py-2.5 text-center", day === 0 && "relative")}
+            >
+              {day === 0 && index === 0 && daysWidth > 0 && (
+                <span
+                  aria-hidden
+                  data-usertour="time-week-days"
+                  className="pointer-events-none absolute left-0 top-0 h-full"
+                  style={{ width: daysWidth }}
+                />
+              )}
               <input
                 aria-label={`Hours, row ${index + 1}, day ${day + 1}`}
                 inputMode="decimal"
@@ -400,8 +447,16 @@ function WeeklyRowView({
                 placeholder="0.00"
                 onChange={(event) => {
                   const times = [...row.times];
-                  times[day] = event.target.value;
+                  times[day] = limitHoursInput(event.target.value);
                   onChange({ times });
+                }}
+                onBlur={() => {
+                  const formatted = formatHoursInput(time);
+                  if (formatted === time) return;
+                  const times = [...row.times];
+                  times[day] = formatted;
+                  // Tidying the display, not an edit — don't mark the week dirty.
+                  onChange({ times }, false);
                 }}
                 className={cn(
                   "h-9 w-[72px] rounded-md border border-input bg-background px-2 text-center tabular outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60",

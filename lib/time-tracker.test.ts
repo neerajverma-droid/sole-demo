@@ -337,9 +337,9 @@ describe("weekly log", () => {
     const rows = rowsFromWeeklyLogs(logs);
     expect(rows).toHaveLength(3);
     expect(rows[0]).toMatchObject({ taskId: "7", projectId: "3", jobId: "4" });
-    expect(rows[0].times.slice(1, 3)).toEqual(["2.5", "1"]);
+    expect(rows[0].times.slice(1, 3)).toEqual(["2.50", "1.00"]);
     expect(rows[0].logIds.slice(1, 3)).toEqual(["1", "2"]);
-    expect(rows[1].times[1]).toBe("1");
+    expect(rows[1].times[1]).toBe("1.00");
     expect(rows[2].client).toBeNull();
   });
 

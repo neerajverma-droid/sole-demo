@@ -22,7 +22,8 @@ const GOOGLE_MAPS_SCRIPT_URL =
 
 const plusJakartaSans = Plus_Jakarta_Sans({
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700", "800"],
+  // Variable font (200–800). Listing static weights made Google return a
+  // `/l/font?kit=` URL for 800, which Turbopack's next/font loader can't parse.
   variable: "--font-sans",
   display: "swap",
 });

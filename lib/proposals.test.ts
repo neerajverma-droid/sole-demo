@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 import { decryptPayload } from "@/utils/encrypt";
 import apiRoutes from "@/config/api-routes";
+import type { EmailFile } from "@/lib/proposals";
 
 const apiMock = {
   get: vi.fn(),
@@ -24,6 +25,15 @@ const {
   deleteProposalApi,
   markProposalPaidApi,
   sendProposalApi,
+  sendProposalReminderApi,
+  canSendReminder,
+  reminderBlockedReason,
+  defaultReminderDraft,
+  defaultReminderTemplate,
+  emptyReminderDraft,
+  reminderFromTemplate,
+  reminderIssues,
+  reminderTemplateGroups,
   fetchProposalTemplates,
   createProposalFromTemplateApi,
   saveProposalTemplateApi,
@@ -33,6 +43,10 @@ const {
   fetchProposalContacts,
   fetchStripeConnected,
   builderStateFromProposal,
+  DEFAULT_EMAIL_SUBJECT,
+  defaultNotification,
+  MERGE_TAG_GROUPS,
+  SAMPLE_MERGE_VALUES,
   previewFromProposal,
   proposalReadiness,
   proposalLocks,
@@ -52,10 +66,13 @@ const {
   initialIntroBlocks,
   blocksForSave,
   normalisePaymentMethod,
+  paymentMethodLabel,
   sendOutcome,
   servicesStepSave,
   generalStepSave,
   documentsStepSave,
+  introductionStepSave,
+  thankYouStepSave,
   notificationStepSave,
   paymentStepSave,
   termsStepSave,
@@ -72,6 +89,13 @@ const {
   proxyHtmlImages,
   filterProposalTemplates,
   previewFromTemplate,
+  fetchTemplatesOfType,
+  servicePatchFromSuggestion,
+  templateSummary,
+  templateAsProposal,
+  updateProposalTemplateApi,
+  proposalTemplateSnapshot,
+  TEMPLATE_KINDS,
 } = await import("@/lib/proposals");
 
 import type { ApiProposal, ProposalGeneral, ServiceLine } from "@/lib/proposals";
@@ -160,7 +184,8 @@ describe("fetchProposalsPage", () => {
       currency: "USD",
       multicurrency: true,
       amountAud: 300,
-      payment: { required: true, method: "manual", paid: true, paidMethod: "stripe" },
+      // sole-webapp's "sole_pay" is SolePay again.
+      payment: { required: true, method: "solepay", paid: true, paidMethod: "stripe" },
     });
   });
 
@@ -309,7 +334,7 @@ describe("step payloads", () => {
     expect(generalStepSave(general({ client_id: "" }), null)).toMatchObject({
       status: "in_progress",
       summary: "Proposal saved without client",
-      next_step: "SERVICES",
+      next_step: "INTRODUCTION",
     });
     expect(generalStepSave(general(), null).status).toBe("completed");
   });
@@ -349,15 +374,27 @@ describe("step payloads", () => {
     expect(documentsStepSave([]).summary).toBe("No additional documents");
   });
 
-  it("Terms moves on to Notification", () => {
+  it("Terms moves on to Thank You, Thank You to Notification, and Notification is last", () => {
     expect(
       termsStepSave({ title: " T ", body: " <p>x</p> ", require_signature: false, signer_label: "" }),
-    ).toMatchObject({ next_step: "NOTIFICATION", data: { title: "T", body: "<p>x</p>" } });
+    ).toMatchObject({ next_step: "THANK_YOU", data: { title: "T", body: "<p>x</p>" } });
+    expect(thankYouStepSave({ title: "T", message: "M", button_label: "", button_url: "" }).next_step).toBe("NOTIFICATION");
+    expect(notificationStepSave(defaultNotification()).next_step).toBeUndefined();
+  });
+
+  it("walks the steps in the preview tabs' order", () => {
+    expect([
+      generalStepSave(general(), null).next_step,
+      introductionStepSave({ blocks: [] } as never).next_step,
+      servicesStepSave([], { multicurrency: false, rate: null, edited: false }).next_step,
+      documentsStepSave([]).next_step,
+    ]).toEqual(["INTRODUCTION", "SERVICES", "ADD_DOCS", "PAYMENTS"]);
   });
 
   it("Notification builds the email channel row", () => {
     const save = notificationStepSave({
       send_notification: false,
+      subject: "Your proposal",
       message_from: "me@example.com",
       email_body: "<p>Hi</p>",
       cc_emails: ["cc@example.com"],
@@ -367,8 +404,21 @@ describe("step payloads", () => {
       channel: "email",
       send_notification: false,
       recipients: ["cc@example.com"],
-      content: { message_from: "me@example.com", email_body: "<p>Hi</p>" },
+      content: { message_from: "me@example.com", subject: "Your proposal", email_body: "<p>Hi</p>" },
     });
+  });
+
+  it("Notification sends its attachments with the email row", () => {
+    const files = [{ name: "a.pdf", url: "https://s3/a.pdf", size: 10, content_type: null }];
+    const save = notificationStepSave({ ...defaultNotification(), attachments: files });
+    expect(save.notifications?.[0]).toMatchObject({ content: { attachments: files } });
+    expect(notificationStepSave({ ...defaultNotification(), attachments: undefined }).notifications?.[0]).toMatchObject({
+      content: { attachments: [] },
+    });
+  });
+
+  it("a proposal saved before subjects existed gets the default subject", () => {
+    expect(defaultNotification().subject).toBe(DEFAULT_EMAIL_SUBJECT);
   });
 });
 
@@ -578,7 +628,7 @@ describe("builder state", () => {
     expect(state.introduction.blocks[0].id).not.toBe("");
     expect(state.terms).toMatchObject({ title: "Ours", require_signature: true });
     expect(state.notification.cc_emails).toEqual([]);
-    expect(state.payment).toEqual({ payment_required: true, pay_method: "manual" });
+    expect(state.payment).toEqual({ payment_required: true, pay_method: "solepay" });
     expect(state.client).toMatchObject({ id: "7", contact_id: "21", name: "Acme Pty Ltd" });
   });
 
@@ -645,8 +695,17 @@ describe("readiness and locks", () => {
 
   it("lists progress in builder order", () => {
     const progress = stepProgress(rawProposal({ steps: [{ step_key: "PAYMENTS", status: "completed", summary: "Done" }] }));
-    expect(progress.map((item) => item.step)[2]).toBe("Payments");
-    expect(progress[2]).toMatchObject({ status: "completed", summary: "Done", isRequired: true });
+    expect(progress.map((item) => item.step)).toEqual([
+      "General",
+      "Introduction",
+      "Services",
+      "Add. Docs.",
+      "Payments",
+      "Terms & Sign",
+      "Thank You",
+      "Notification",
+    ]);
+    expect(progress[4]).toMatchObject({ status: "completed", summary: "Done", isRequired: true });
     expect(progress[0].status).toBe("not_started");
   });
 
@@ -740,6 +799,13 @@ describe("validation", () => {
   });
 });
 
+describe("template preview values", () => {
+  it("has sample data for every merge tag", () => {
+    const allTags = MERGE_TAG_GROUPS.flatMap((group) => group.tags.map((tag) => `{{${tag.key}}}`)).join(" ");
+    expect(renderMergeTags(allTags, SAMPLE_MERGE_VALUES)).not.toMatch(/\{\{/);
+  });
+});
+
 describe("helpers", () => {
   it("resolves known merge tags and leaves empty ones", () => {
     const values = mergeValues(
@@ -747,6 +813,8 @@ describe("helpers", () => {
       { name: "Firm", email: "f@x.com", phone: "" },
     );
     expect(values.client_business_structure).toBe("Individual");
+    expect(values.proposal_name).toBe("");
+    expect(mergeValues(null, { name: "", email: "", phone: "" }, { name: "Bookkeeping" }).proposal_name).toBe("Bookkeeping");
     expect(renderMergeTags("Hi {{ contact_addressee }} from {{firm_name}} {{firm_phone}} {{nope}}", values)).toBe(
       "Hi Jo from Firm {{firm_phone}} {{nope}}",
     );
@@ -772,16 +840,21 @@ describe("helpers", () => {
   });
 
   it("walks the steps and maps keys", () => {
-    expect(nextStep("Payments")).toBe("Introduction");
-    expect(nextStep("Thank You")).toBeNull();
+    expect(nextStep("General")).toBe("Introduction");
+    expect(nextStep("Payments")).toBe("Terms & Sign");
+    expect(nextStep("Thank You")).toBe("Notification");
+    expect(nextStep("Notification")).toBeNull();
     expect(stepFromKey("ADD_DOCS")).toBe("Add. Docs.");
     expect(stepFromKey("NPS")).toBeNull();
   });
 
-  it("falls back to manual for a removed pay method", () => {
+  it("reads SolePay (old and new spelling), and falls back to manual for anything unknown", () => {
     expect(normalisePaymentMethod("stripe")).toBe("stripe");
-    expect(normalisePaymentMethod("sole_pay")).toBe("manual");
+    expect(normalisePaymentMethod("solepay")).toBe("solepay");
+    expect(normalisePaymentMethod("sole_pay")).toBe("solepay");
+    expect(normalisePaymentMethod("bitcoin")).toBe("manual");
     expect(normalisePaymentMethod(undefined)).toBe("manual");
+    expect(paymentMethodLabel("solepay")).toBe("SolePay");
   });
 
   it("labels contract start and length", () => {
@@ -913,11 +986,7 @@ describe("template picker", () => {
 
   it("previews a template as the client will see it", () => {
     const business = { name: "Joshi PVT LTD", logo: "", bank: null };
-    const preview = previewFromTemplate(template() as never, business, {
-      name: "Joshi PVT LTD",
-      email: "demo@soleapp.com.au",
-      phone: "",
-    });
+    const preview = previewFromTemplate(template() as never, business);
 
     expect(preview.business).toBe(business);
     expect(preview.general.proposal_name).toBe("Bookkeeping");
@@ -926,18 +995,311 @@ describe("template picker", () => {
     expect(preview.services[0]).toMatchObject({ description: "Bookkeeping", amount: 880 });
     expect(preview.payment).toMatchObject({ payment_required: true, pay_method: "manual" });
     expect(preview.thankYou.title).toBe("Thanks!");
-    // The firm's own fields fill in; the client's wait for a client.
-    expect(preview.introduction.blocks[0].editorHtml).toBe("<p>Hi {{contact_addressee}}, from Joshi PVT LTD</p>");
-    expect(preview.terms.body).toBe("<p>Joshi PVT LTD terms</p>");
+    // Every merge field reads as sample data, the firm's included.
+    expect(preview.introduction.blocks[0].editorHtml).toBe("<p>Hi Alex Taylor, from Your Firm Pty Ltd</p>");
+    expect(preview.terms.body).toBe("<p>Your Firm Pty Ltd terms</p>");
   });
 
   it("previews an empty system template without failing", () => {
-    const preview = previewFromTemplate(template({ snapshot: {} }) as never, { name: "", logo: "", bank: null }, {
-      name: "",
-      email: "",
-      phone: "",
-    });
+    const preview = previewFromTemplate(template({ snapshot: {} }) as never, { name: "", logo: "", bank: null });
     expect(preview.general.proposal_name).toBe("Bookkeeping Services (Hourly)");
     expect(preview.services).toEqual([]);
+  });
+});
+
+describe("templates page", () => {
+  it("tabs exactly Proposal, Introduction, Terms & Sign, Thank You and Email", () => {
+    expect(TEMPLATE_KINDS.map((kind) => kind.label)).toEqual(["Proposal", "Introduction", "Terms & Sign", "Thank You", "Email"]);
+  });
+
+  it("fetches one kind, with its content and updated date", async () => {
+    apiMock.get.mockResolvedValue({
+      data: {
+        data: [
+          {
+            id: 1,
+            user_id: null,
+            template_type: "INTRODUCTION",
+            template_name: "Standard Welcome",
+            description: null,
+            html_content: "<p>Hi there,</p>",
+            updated_at: "2026-10-12T00:00:00.000Z",
+          },
+        ],
+      },
+    });
+    const [intro] = await fetchTemplatesOfType("INTRODUCTION");
+    expect(intro).toMatchObject({ subject: "", emailCategory: null, attachments: [], attachmentCount: 0 });
+    expect(apiMock.get).toHaveBeenCalledWith(apiRoutes.proposal.templates, { params: { template_type: "INTRODUCTION" } });
+    expect(intro).toMatchObject({
+      id: "1",
+      type: "INTRODUCTION",
+      name: "Standard Welcome",
+      isSystem: true,
+      html: "<p>Hi there,</p>",
+      updatedAt: "2026-10-12T00:00:00.000Z",
+    });
+  });
+
+  it("summarises a card from its description, else its content", () => {
+    const base = { id: "1", type: "INTRODUCTION", name: "x", isSystem: true, serviceCount: 0, snapshot: {}, content: null, updatedAt: null, full: true, summary: "", subject: "", emailCategory: null, attachments: [] as EmailFile[], attachmentCount: 0 } as const;
+    expect(templateSummary({ ...base, description: "Short intro", html: "<p>ignored</p>" })).toBe("Short intro");
+    expect(templateSummary({ ...base, description: "", html: "<p>Hi&nbsp;there,</p><p>Thank you &amp; welcome.</p>" })).toBe(
+      "Hi there, Thank you & welcome.",
+    );
+    expect(templateSummary({ ...base, description: "", html: `<p>${"a".repeat(200)}</p>` }, 20)).toHaveLength(20);
+    expect(templateSummary({ ...base, description: "", html: "<p><br></p>" })).toBe("");
+  });
+});
+
+describe("servicePatchFromSuggestion", () => {
+  const line = {
+    description: "",
+    quantity: "",
+    price: "",
+    discount_percent: 0,
+    discount_amount: 0,
+    gst_percent: 10,
+    gst_amount: 0,
+    amount: 0,
+  } as never;
+
+  it("takes the product's name and price, with a quantity of 1", () => {
+    expect(servicePatchFromSuggestion({ name: "Bookkeeping", price: "250" }, line, 10)).toEqual({
+      description: "Bookkeeping",
+      price: "250",
+      quantity: 1,
+    });
+  });
+
+  it("keeps a quantity and price already set when the product has none", () => {
+    const filled = { ...(line as object), quantity: 3, price: 99 } as never;
+    expect(servicePatchFromSuggestion({ name: "Advisory", price: "" }, filled, 10)).toEqual({
+      description: "Advisory",
+      price: 99,
+      quantity: 3,
+    });
+  });
+
+  it("follows the product's own GST setting", () => {
+    expect(servicePatchFromSuggestion({ name: "x", price: "1", gst: false }, line, 10)).toMatchObject({ gst_percent: 0 });
+    expect(servicePatchFromSuggestion({ name: "x", price: "1", gst: true }, line, 15)).toMatchObject({ gst_percent: 15 });
+  });
+});
+
+describe("proposal templates from the builder", () => {
+  it("saves a template over itself with PUT, client-free", async () => {
+    apiMock.put.mockResolvedValue({ data: { success: true } });
+    const state = builderStateFromProposal(
+      rawProposal({ client_id: 37058, general_data: { client_id: 37058, contact_id: 33287 } as never }),
+    );
+    await updateProposalTemplateApi("12", " Bookkeeping ", "", state);
+    const [url, body] = apiMock.put.mock.calls[0];
+    expect(url).toBe(apiRoutes.proposal.template("12"));
+    const sent = decrypted(body);
+    // The encryptor sends null as ""; the backend stores an empty description as null.
+    expect(sent).toMatchObject({ template_name: "Bookkeeping", description: "" });
+    const snapshot = sent.snapshot_data as { general: Record<string, unknown> };
+    expect(snapshot.general).toMatchObject({ client_id: "", contact_id: "" });
+  });
+
+  it("round-trips: a template read back into the builder keeps its content", () => {
+    const state = builderStateFromProposal(rawProposal());
+    const snapshot = proposalTemplateSnapshot(state);
+    const reloaded = builderStateFromProposal(
+      templateAsProposal({
+        id: "12",
+        type: "PROPOSAL",
+        name: "Bookkeeping",
+        description: "",
+        isSystem: false,
+        serviceCount: 0,
+        snapshot,
+        html: "",
+        content: null,
+        updatedAt: null,
+        full: true,
+        subject: "",
+        emailCategory: null,
+        attachments: [],
+        attachmentCount: 0,
+        summary: "",
+      }),
+    );
+    expect(reloaded.services).toEqual(state.services);
+    expect(reloaded.terms).toEqual(state.terms);
+    expect(reloaded.thankYou).toEqual(state.thankYou);
+    expect(reloaded.general.client_id).toBe("");
+    expect(reloaded.client).toBeNull();
+  });
+});
+
+describe("the slim template list", () => {
+  it("reads the card fields the list now sends instead of the content", async () => {
+    apiMock.get.mockResolvedValueOnce({
+      data: {
+        data: [
+          {
+            id: 52,
+            user_id: null,
+            template_type: "PROPOSAL",
+            template_name: "Bookkeeping Services (Hourly)",
+            description: null,
+            updated_at: "2026-10-28T07:12:00.000Z",
+            services_count: 5,
+            summary: "",
+          },
+        ],
+      },
+    });
+    apiMock.get.mockResolvedValueOnce({
+      data: {
+        data: [
+          {
+            id: 9,
+            user_id: 493,
+            template_type: "INTRODUCTION",
+            template_name: "Warm welcome",
+            services_count: "0",
+            summary: "Hi there, thank you",
+          },
+        ],
+      },
+    });
+    const [proposal] = await fetchTemplatesOfType("PROPOSAL");
+    expect(proposal).toMatchObject({ id: "52", isSystem: true, serviceCount: 5, html: "", full: false, snapshot: {} });
+
+    const [intro] = await fetchTemplatesOfType("INTRODUCTION");
+    // No HTML in a list row — the card's line comes ready-made as plain text.
+    expect(intro).toMatchObject({ serviceCount: 0, html: "", summary: "Hi there, thank you", full: false });
+    expect(templateSummary(intro)).toBe("Hi there, thank you");
+  });
+
+  it("marks a template from GET /templates/:id as full", async () => {
+    apiMock.get.mockResolvedValue({
+      data: { data: [{ id: 3, template_type: "TERMS", template_name: "T", html_content: "<p>x</p>", lexical_content: null }] },
+    });
+    const [terms] = await fetchTemplatesOfType("TERMS");
+    expect(terms.full).toBe(true);
+  });
+});
+
+describe("reminders", () => {
+  const email = (id: string, name: string, overrides: Record<string, unknown> = {}) =>
+    ({
+      id,
+      type: "EMAIL",
+      name,
+      description: "",
+      isSystem: true,
+      serviceCount: 0,
+      snapshot: {},
+      html: `<p>${name}</p>`,
+      content: null,
+      updatedAt: null,
+      full: true,
+      summary: "",
+      subject: `${name} subject`,
+      emailCategory: "PROPOSAL_REMINDER",
+      attachments: [],
+      attachmentCount: 0,
+      ...overrides,
+    }) as Parameters<typeof reminderFromTemplate>[1];
+
+  it("offers a reminder only while the client still has to answer", () => {
+    expect(canSendReminder("sent")).toBe(true);
+    expect(canSendReminder("viewed")).toBe(true);
+    for (const status of ["draft", "accepted", "rejected", "lost", "expired"] as const) {
+      expect(canSendReminder(status)).toBe(false);
+    }
+  });
+
+  it("says why a reminder can't go yet", () => {
+    expect(reminderBlockedReason("sent")).toBeNull();
+    expect(reminderBlockedReason("viewed")).toBeNull();
+    expect(reminderBlockedReason("draft")).toMatch(/Send the proposal first/);
+    expect(reminderBlockedReason("accepted")).toMatch(/accepted/);
+    expect(reminderBlockedReason("rejected")).toMatch(/declined/);
+    expect(reminderBlockedReason("expired")).toMatch(/expired/);
+    expect(reminderBlockedReason("lost")).toBeTruthy();
+  });
+
+  it("starts from Sole's Friendly Reminder, else any system reminder, else yours", () => {
+    const mine = email("1", "My nudge", { isSystem: false });
+    const checking = email("2", "Checking In");
+    const friendly = email("3", "Friendly Reminder");
+    const sent = email("4", "New Proposal Email", { emailCategory: "PROPOSAL_SENT" });
+    expect(defaultReminderTemplate([mine, checking, friendly, sent])?.id).toBe("3");
+    expect(defaultReminderTemplate([mine, checking, sent])?.id).toBe("2");
+    expect(defaultReminderTemplate([mine, sent])?.id).toBe("1");
+    expect(defaultReminderTemplate([sent])).toBeNull();
+  });
+
+  it("lists reminders first — yours, then Sole's — then every other email", () => {
+    const groups = reminderTemplateGroups([
+      email("1", "Checking In"),
+      email("2", "My nudge", { isSystem: false }),
+      email("3", "Thanks", { emailCategory: "PROPOSAL_THANK_YOU", isSystem: false }),
+    ]);
+    expect(groups).toEqual([
+      { label: "My reminder templates", options: [{ id: "2", label: "My nudge" }] },
+      { label: "System reminder templates", options: [{ id: "1", label: "Checking In · System" }] },
+      { label: "Other email templates", options: [{ id: "3", label: "Thanks" }] },
+    ]);
+  });
+
+  it("fills subject, message and files from a template, keeping the CCs", () => {
+    const file = { name: "a.pdf", url: "https://s3/a.pdf", size: 1, content_type: null };
+    const draft = reminderFromTemplate(
+      { ...emptyReminderDraft(), cc_emails: ["cc@x.com"] },
+      email("3", "Friendly Reminder", { attachments: [file] }),
+    );
+    expect(draft).toEqual({
+      templateId: "3",
+      subject: "Friendly Reminder subject",
+      email_body: "<p>Friendly Reminder</p>",
+      cc_emails: ["cc@x.com"],
+      attachments: [file],
+    });
+  });
+
+  it("has built-in reminder text for when there's no Reminder template", () => {
+    const draft = defaultReminderDraft();
+    expect(draft.templateId).toBeNull();
+    expect(draft.subject).toContain("{{firm_name}}");
+    expect(draft.email_body).toContain("{{contact_addressee}}");
+    expect(draft.email_body).toContain("{{proposal_name}}");
+    expect(reminderIssues(draft)).toEqual({});
+  });
+
+  it("needs a subject, a message and valid CCs", () => {
+    const ok = { ...emptyReminderDraft(), subject: "Hi", email_body: "<p>x</p>" };
+    expect(reminderIssues(ok)).toEqual({});
+    expect(reminderIssues({ ...ok, subject: " " }).subject).toMatch(/required/);
+    expect(reminderIssues({ ...ok, subject: "a".repeat(256) }).subject).toMatch(/255/);
+    expect(reminderIssues({ ...ok, email_body: "<p><br></p>" }).email_body).toMatch(/required/);
+    expect(reminderIssues({ ...ok, cc_emails: ["nope"] }).cc).toMatch(/nope/);
+  });
+
+  it("sends it encrypted to POST /proposal/:id/remind", async () => {
+    apiMock.post.mockResolvedValue({ data: { success: true, data: { client_email: "alex@example.com" } } });
+    const file = { name: "a.pdf", url: "https://s3/a.pdf", size: 1, content_type: "application/pdf" };
+    const result = await sendProposalReminderApi("12", {
+      templateId: "3",
+      subject: "  Reminder ",
+      email_body: "<p>Hi</p>",
+      cc_emails: ["cc@x.com"],
+      attachments: [file],
+    });
+    expect(result).toEqual({ clientEmail: "alex@example.com" });
+    const [url, body] = apiMock.post.mock.calls[0];
+    expect(url).toBe(apiRoutes.proposal.remind("12"));
+    expect(decrypted(body)).toEqual({
+      template_id: "3",
+      subject: "Reminder",
+      email_body: "<p>Hi</p>",
+      cc_emails: ["cc@x.com"],
+      attachments: [file],
+    });
   });
 });

@@ -301,6 +301,7 @@ export function PlannerToolbar({
               aria-pressed={selectMode}
               onClick={onToggleSelectMode}
               className={cn(selectMode && "border-primary text-primary")}
+              data-usertour="scheduling-planner-bulk"
             >
               <ArrowLeftRight />
               Bulk move
@@ -309,29 +310,32 @@ export function PlannerToolbar({
           <TooltipContent>Select tasks to move to Done</TooltipContent>
         </Tooltip>
 
-        <PlannerFilterPopover
-          clients={clients}
-          loadingClients={loadingClients}
-          filters={filters}
-          onApply={(patch) => onFiltersChange((prev) => ({ ...prev, ...patch }))}
-        />
+        {/* Filter and Sort read as one control, so the tour points at them together. */}
+        <div className="flex flex-wrap items-center gap-2" data-usertour="scheduling-planner-filter-sort">
+          <PlannerFilterPopover
+            clients={clients}
+            loadingClients={loadingClients}
+            filters={filters}
+            onApply={(patch) => onFiltersChange((prev) => ({ ...prev, ...patch }))}
+          />
 
-        <Select
-          value={currentSort(filters)}
-          onValueChange={(value) => onFiltersChange((prev) => applySort(prev, value as PlannerSort))}
-        >
-          <SelectTrigger className="h-9 w-[150px]" aria-label="Sort">
-            <span className="text-muted-foreground">Sort:</span>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {SORT_OPTIONS.map((option) => (
-              <SelectItem key={option.id} value={option.id}>
-                {option.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          <Select
+            value={currentSort(filters)}
+            onValueChange={(value) => onFiltersChange((prev) => applySort(prev, value as PlannerSort))}
+          >
+            <SelectTrigger className="h-9 w-[150px]" aria-label="Sort">
+              <span className="text-muted-foreground">Sort:</span>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SORT_OPTIONS.map((option) => (
+                <SelectItem key={option.id} value={option.id}>
+                  {option.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
     </div>
   );

@@ -140,7 +140,10 @@ export function JobCard({
   };
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-card">
+    <div
+      className="overflow-hidden rounded-lg border border-border bg-card"
+      data-usertour="project-job-card"
+    >
       <div
         role="button"
         tabIndex={0}
@@ -171,6 +174,7 @@ export function JobCard({
             size="sm"
             disabled={count === 0}
             onClick={stop(createInvoice)}
+            data-usertour="project-job-invoice"
           >
             Create invoice{count > 0 ? ` (${count})` : ""}
           </Button>
@@ -190,7 +194,7 @@ export function JobCard({
               <Copy className="!size-3.5" />
             </Button>
           </span>
-          <span className="text-[13px] text-muted-foreground">
+          <span className="text-[13px] text-muted-foreground" data-usertour="project-job-budget">
             Budget Allocated:{" "}
             <b className="font-semibold text-foreground tabular">
               {money(job.usedBudget)} / {money(job.budget)}
@@ -200,6 +204,7 @@ export function JobCard({
             variant="outline"
             size="sm"
             onClick={stop(() => onAddTask(job))}
+            data-usertour="project-job-add-task"
           >
             <Plus />
             Task
@@ -250,6 +255,7 @@ export function JobCard({
               size="icon"
               className="size-8 text-muted-foreground"
               aria-label={expanded ? "Collapse job" : "Expand job"}
+              data-usertour="project-job-expand"
               onClick={() => onExpandedChange(!expanded)}
             >
               {expanded ? <ChevronUp /> : <ChevronDown />}

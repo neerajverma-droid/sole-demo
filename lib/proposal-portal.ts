@@ -18,6 +18,7 @@ export const PORTAL_MESSAGES = {
   loadFailed: "This proposal link is invalid or has expired.",
   eventFailed: "Failed to record your response.",
   stripeFailed: "Failed to start Stripe checkout.",
+  solePayFailed: "Couldn't open SolePay. Please try again.",
   uploadFailed: "Failed to save the signed document.",
   pdfFailed: "Couldn't generate the signed document. Please try again.",
 } as const;
@@ -107,6 +108,22 @@ export async function uploadSignedProposalPdf(
     throw new Error(result.message || PORTAL_MESSAGES.uploadFailed);
   }
   return result.data;
+}
+
+/**
+ * The SolePay link for an accepted SolePay proposal — the invoice the backend
+ * raised for it, paid on the existing SolePay pages. Refused before
+ * acceptance or once paid; the message says why.
+ */
+export async function fetchProposalSolePayLink(token: string): Promise<string> {
+  const result = await apiGet<{ url?: string }>(apiRoutes.proposal.publicSolePayPay(enc(token)), {
+    auth: "public",
+  });
+  const url = result.data?.url;
+  if (!result.success || !url) {
+    throw new Error(result.message || PORTAL_MESSAGES.solePayFailed);
+  }
+  return url;
 }
 
 /**

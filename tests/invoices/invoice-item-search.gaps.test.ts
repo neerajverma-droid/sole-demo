@@ -39,7 +39,7 @@ describe("searchInvoiceItems — which dictionary", () => {
     await searchInvoiceItems("tap", false);
 
     expect(apiMock.get).toHaveBeenCalledWith(apiRoutes.servicesAll.autocomplete, {
-      params: { query: "tap", page: 1, limit: 10, txnType: "Credit" },
+      params: { query: "tap", page: 1, limit: 10, txnType: "Credit", exclude_ndis: 1 },
     });
   });
 

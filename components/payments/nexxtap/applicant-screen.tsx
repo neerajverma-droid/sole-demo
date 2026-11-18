@@ -62,6 +62,7 @@ export function NexxtapApplicantScreen() {
         <FormSection
           icon={User}
           title="Authorised applicant"
+          tourId="nexttap-applicant-details"
           description="Whoever signs for the business."
           headerClassName={NEXXTAP_SECTION_HEADER}
           className="space-y-4 p-4 sm:p-6"
@@ -161,6 +162,7 @@ export function NexxtapApplicantScreen() {
         <FormSection
           icon={MapPin}
           title="Residential address"
+          tourId="nexttap-applicant-address"
           description="Where the applicant lives, which NextTap verifies separately from the business."
           headerClassName={NEXXTAP_SECTION_HEADER}
           className="space-y-4 p-4 sm:p-6"

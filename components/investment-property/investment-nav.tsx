@@ -17,7 +17,11 @@ export function InvestmentNav() {
   const pathname = usePathname() ?? "";
 
   return (
-    <nav aria-label="Investment property" className="flex gap-6 border-b border-border">
+    <nav
+      aria-label="Investment property"
+      className="flex gap-6 border-b border-border"
+      data-usertour="investment-nav"
+    >
       {TABS.map((tab) => {
         const active =
           tab.href === INVESTMENT_ROOT
@@ -73,6 +77,7 @@ export function PropertyTabs({ propertyId, active }: { propertyId: string; activ
     <nav
       aria-label="Property sections"
       className="-mb-2 flex gap-6 overflow-x-auto border-b border-border"
+      data-usertour="property-tabs"
     >
       {PROPERTY_TABS.map((tab) => (
         <Link
@@ -80,6 +85,7 @@ export function PropertyTabs({ propertyId, active }: { propertyId: string; activ
           href={propertyTabHref(propertyId, tab.key)}
           scroll={false}
           aria-current={tab.key === active ? "page" : undefined}
+          data-usertour={`property-tab-${tab.key}`}
           className={cn(
             "-mb-px shrink-0 border-b-2 px-0.5 pb-2.5 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
             tab.key === active

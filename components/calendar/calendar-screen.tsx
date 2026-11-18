@@ -251,6 +251,15 @@ export function CalendarScreen() {
     setForm({ mode: "create", taskData: null, initialDateTime: dateTime ?? null });
   }, []);
 
+  // `?new=1` opens the Add task form — the calendar tour's last step links here.
+  // Taken off the address afterwards, so a refresh or a back doesn't reopen it.
+  const newParam = searchParams.get("new");
+  React.useEffect(() => {
+    if (newParam !== "1") return;
+    openCreate();
+    replaceParams((params) => params.delete("new"));
+  }, [newParam, openCreate, replaceParams]);
+
   const openEdit = React.useCallback((taskData: RawCalendarEvent) => {
     setForm({ mode: "edit", taskData, initialDateTime: null });
   }, []);
@@ -393,17 +402,30 @@ export function CalendarScreen() {
 
         <FilterChips filters={filters} calendars={calendars} onApply={setFilters} />
 
-        {eventsQuery.isPending ? (
-          <CalendarSkeleton view={view} />
-        ) : view === "day" ? (
-          <DayView singleDayEvents={singleDayEvents} multiDayEvents={multiDayEvents} />
-        ) : view === "week" ? (
-          <WeekView singleDayEvents={singleDayEvents} multiDayEvents={multiDayEvents} />
-        ) : view === "month" ? (
-          <MonthView singleDayEvents={singleDayEvents} multiDayEvents={multiDayEvents} />
-        ) : (
-          <YearView events={visibleEvents} />
-        )}
+        {/* The tour's handle sits on this wrapper, not on a view: the skeleton and
+            each view replace one another, and an anchor inside them would vanish
+            for as long as a reload takes. */}
+        <div
+          data-usertour="scheduling-calendar-grid"
+          // Set only on the way back from Google's consent screen, until its
+          // result dialog is closed. The calendar tour keys on it: the address
+          // can't say so (the tour's URL checks ignore the query), and without
+          // it the tour reads "no dialog open" at load, before the result
+          // dialog has mounted, and moves on while the dialog is on screen.
+          data-google-return={googleStatus === "success" || googleStatus === "failed" ? "1" : undefined}
+        >
+          {eventsQuery.isPending ? (
+            <CalendarSkeleton view={view} />
+          ) : view === "day" ? (
+            <DayView singleDayEvents={singleDayEvents} multiDayEvents={multiDayEvents} />
+          ) : view === "week" ? (
+            <WeekView singleDayEvents={singleDayEvents} multiDayEvents={multiDayEvents} />
+          ) : view === "month" ? (
+            <MonthView singleDayEvents={singleDayEvents} multiDayEvents={multiDayEvents} />
+          ) : (
+            <YearView events={visibleEvents} />
+          )}
+        </div>
       </div>
       {dialogs}
     </CalendarProvider>

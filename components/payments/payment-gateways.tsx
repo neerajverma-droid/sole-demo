@@ -209,7 +209,10 @@ export function PaymentGateways({ status }: { status: LoadStatus }) {
           solution gets its own top billing rather than sharing equal weight
           with the other gateways below. */}
       {solePayGateway ? (
-        <div className="rounded-2xl border-2 border-primary bg-gradient-to-br from-primary/[0.06] to-card p-5 md:p-8">
+        <div
+          className="rounded-2xl border-2 border-primary bg-gradient-to-br from-primary/[0.06] to-card p-5 md:p-8"
+          data-usertour="payments-solepay"
+        >
           <div className="grid gap-8 md:grid-cols-[1fr_380px] md:items-center">
             <div>
               <Badge className="mb-3 uppercase tracking-wide">
@@ -395,7 +398,7 @@ function StripeGatewayCard({ gateway }: { gateway: Gateway }) {
   const ButtonIcon = isComplete ? ExternalLink : hasStarted ? ArrowRight : Zap;
 
   return (
-    <Card className="flex flex-col rounded-[14px]">
+    <Card className="flex flex-col rounded-[14px]" data-usertour="payments-stripe-card">
       <CardContent className="flex flex-1 flex-col gap-4 pt-6">
         {/* Header */}
         <div className="flex items-start gap-3">
@@ -432,7 +435,7 @@ function StripeGatewayCard({ gateway }: { gateway: Gateway }) {
         </ul>
 
         {/* Progress bar — always shown once account exists */}
-        <div className="mt-auto space-y-3">
+        <div className="mt-auto space-y-3" data-usertour="payments-stripe-actions">
           {accountLoading ? (
             <Skeleton className="h-5 w-full" />
           ) : (
@@ -647,7 +650,7 @@ function SolePayGatewayCard({ gateway }: { gateway: Gateway }) {
           : "Not Started";
 
   return (
-    <Card className="flex flex-col rounded-[14px]">
+    <Card className="flex flex-col rounded-[14px]" data-usertour="payments-solepay-card">
       <CardContent className="flex flex-1 flex-col gap-4 pt-6">
         {/* Header */}
         <div className="flex items-start gap-3">
@@ -710,7 +713,7 @@ function SolePayGatewayCard({ gateway }: { gateway: Gateway }) {
         </ul>
 
         {/* Progress bar */}
-        <div className="mt-auto space-y-3">
+        <div className="mt-auto space-y-3" data-usertour="payments-solepay-actions">
           {merchantLoading ? (
             <Skeleton className="h-5 w-full" />
           ) : (
@@ -844,7 +847,7 @@ function NexxtapGatewayCard({ gateway }: { gateway: Gateway }) {
         : Zap;
 
   return (
-    <Card className="flex flex-col rounded-[14px]">
+    <Card className="flex flex-col rounded-[14px]" data-usertour="payments-nexttap-card">
       <CardContent className="flex flex-1 flex-col gap-4 pt-6">
         {/* Header */}
         <div className="flex items-start gap-3">
@@ -906,7 +909,7 @@ function NexxtapGatewayCard({ gateway }: { gateway: Gateway }) {
         </ul>
 
         {/* Progress bar */}
-        <div className="mt-auto space-y-3">
+        <div className="mt-auto space-y-3" data-usertour="payments-nexttap-actions">
           {query.isLoading ? (
             <Skeleton className="h-5 w-full" />
           ) : (

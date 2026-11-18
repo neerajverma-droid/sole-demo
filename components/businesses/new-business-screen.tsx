@@ -38,8 +38,9 @@ import {
   logoFileName as resolveLogoFileName,
 } from "@/lib/businesses";
 import { apiErrorMessage } from "@/lib/api-error";
-import { track } from "@/lib/analytics";
+import { planSelectionProps, track } from "@/lib/analytics";
 import { EVENTS } from "@/lib/analytics-events";
+import { activeBaseCurrency } from "@/lib/country-context";
 import { createCheckoutSession } from "@/lib/subscription";
 import { useBusinessesStore } from "@/stores/businesses";
 import { useBusinessesQuery } from "@/hooks/use-businesses-query";
@@ -47,6 +48,7 @@ import { useCheckoutReturn } from "@/hooks/use-checkout-return";
 import { useCountriesQuery } from "@/hooks/use-countries-query";
 import { useCountryContext } from "@/hooks/use-country-context";
 import { useIndustriesQuery } from "@/hooks/use-industries-query";
+import { useTrackOnce } from "@/hooks/use-track-once";
 
 const STEPS = ["Business details", "Payment"] as const;
 
@@ -103,6 +105,8 @@ export function NewBusinessScreen() {
     queryFn: () => fetchBusinessDetail(resumeId as string),
     enabled: isResuming,
   });
+
+  useTrackOnce(EVENTS.ADD_BUSINESS_INITIATED, !isResuming);
 
   const [step, setStep] = React.useState(0);
   const [draft, setDraft] =
@@ -211,6 +215,14 @@ export function NewBusinessScreen() {
       // rather than after the payment step, so `finishPayment` finds the
       // business it just made.
       await queryClient.invalidateQueries({ queryKey: ["businesses"] });
+      track(EVENTS.BUSINESS_DETAILS_ADDED, {
+        business_name: draft.businessName.trim(),
+        business_id: String(created.id),
+        business_email: draft.email.trim() || null,
+        industry: draft.industry || null,
+        abn_number: draft.abn.trim() || null,
+        country: newCountry?.name ?? (countryIso2 || null),
+      });
       setCreatedId(String(created.id));
       setStep(1);
     } catch (error) {
@@ -248,11 +260,25 @@ export function NewBusinessScreen() {
           returnPath: `/businesses/new?business=${encodeURIComponent(createdId)}&step=payment`,
         },
       );
-      track(EVENTS.UPGRADE_INTENT, {
-        plan: selection.planSlug,
-        billing: selection.billing,
-        amount: selection.monthlyTotal,
-        context: "add_business",
+      track(EVENTS.SUBSCRIPTION_PLAN_SELECTED, {
+        ...planSelectionProps({
+          planName: selection.planName,
+          interval: selection.billing,
+          addons: selection.addons,
+          paidAmount:
+            selection.billing === "annual"
+              ? selection.monthlyTotal * 12
+              : selection.monthlyTotal,
+          // The new business's own currency — the open one may be another
+          // country's.
+          currency: newCountry?.currency || activeBaseCurrency(),
+          businessId: createdId,
+          isOnboarding: false,
+        }),
+        // Explicit, because the super properties still describe the business
+        // that is open, not the one being paid for.
+        business_name: businessName(createdId),
+        industry: draft.industry || null,
       });
       window.location.href = url;
     } catch (error) {
@@ -279,20 +305,13 @@ export function NewBusinessScreen() {
       return list.businesses.some((entry) => entry.id === resumeId && entry.paid);
     },
     {
-      onConfirmed: (result) => {
+      onConfirmed: () => {
         const list = latestList.current;
         if (!list || !resumeId) return;
         // Straight into the store rather than waiting for the query's mirror
         // effect — `select` refuses a business it still believes is locked.
         setBusinesses(list.businesses, list.defaultId);
         selectBusiness(resumeId);
-        const paidFor = list.businesses.find((entry) => entry.id === resumeId);
-        track(EVENTS.PLAN_UPGRADED, {
-          plan: result.planSlug ?? "",
-          billing: result.billing ?? undefined,
-          amount: paidFor?.subscription?.price ?? 0,
-          via: "add_business",
-        });
       },
     },
   );

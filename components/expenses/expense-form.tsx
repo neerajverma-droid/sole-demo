@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   Loader2,
@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { FormSection } from "@/components/ui/form-section";
-import { Input } from "@/components/ui/input";
+import { PrefixInput } from "@/components/ui/prefix-input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -37,6 +37,7 @@ import {
 } from "@/components/shared/multi-attachment-upload";
 import { useUnsavedChanges } from "@/components/ui/unsaved-changes";
 import {
+  markExpenseChanged,
   useCreateExpenseMutation,
   useUpdateExpenseMutation,
 } from "@/hooks/use-expenses-query";
@@ -46,7 +47,6 @@ import { deleteSourceDocument, uploadSourceDocument } from "@/lib/file-upload";
 import { searchExpenseDescriptions } from "@/lib/invoice-item-search";
 import { toIsoDate } from "@/lib/invoices";
 import {
-  amountError,
   draftFromExpense,
   duplicateExpenseDraft,
   emptyExpenseDraft,
@@ -59,7 +59,6 @@ import {
 import { invoiceMoney } from "@/lib/invoices";
 import { countryCurrencySymbol, documentTax, inclusiveTaxHint, inclusiveTaxSplitHint } from "@/lib/country-context";
 import { useCountryContext } from "@/hooks/use-country-context";
-import { cn } from "@/lib/utils";
 import { useCaptureStore } from "@/stores/capture";
 
 /** How the Business amount field is entered — a dollar figure, or a percent of the price. */
@@ -74,6 +73,7 @@ export function ExpenseForm({
   copyOfId?: string;
 }) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const createExpense = useCreateExpenseMutation();
   const updateExpense = useUpdateExpenseMutation();
 
@@ -122,9 +122,14 @@ export function ExpenseForm({
   // (the server would drop it anyway). Switched off in Settings is not the same:
   // its expenses have always been able to carry GST, and still can.
   const taxOffered = country.effectiveTax.registered;
-  /** Errors surface once the form has been edited, as Save is disabled. */
+  /** Whether anything's been changed — the unsaved-changes guard's dirty flag. */
   const [edited, setEdited] = React.useState(false);
-  // `edited` doubles as the dirty flag: it's set by the same patch calls.
+  /**
+   * Field errors only show once Save has been pressed, so typing in one field
+   * never flags the ones not filled in yet. After that they track the values
+   * live: fixing a field clears its error as you type.
+   */
+  const [submitted, setSubmitted] = React.useState(false);
   const { guardNavigate, dialog: unsavedDialog } = useUnsavedChanges(edited);
 
   /**
@@ -237,7 +242,6 @@ export function ExpenseForm({
       ]);
     };
     reader.readAsDataURL(file);
-    // Marked edited so the amount's own validation shows if it wasn't read.
     setEdited(true);
     toast.success(
       `Receipt data extracted with ${Math.round(confidence * 100)}% confidence`,
@@ -309,10 +313,9 @@ export function ExpenseForm({
     setDraft((current) => ({ ...current, ...values }));
   };
 
-  const liveAmountError = amountError(amountInput);
   const issues = expenseIssues(draft, amountInput);
   const issueFor = (key: string) =>
-    edited ? issues.find((issue) => issue.key === key)?.message : undefined;
+    submitted ? issues.find((issue) => issue.key === key)?.message : undefined;
 
   const amount = Number(amountInput) || 0;
   // The split worked through on the price as typed, so the hint shows the GST this
@@ -406,6 +409,7 @@ export function ExpenseForm({
           editing.id,
           file,
         );
+        void markExpenseChanged(queryClient, editing.id);
         setAttachmentRows((current) =>
           current.map((row) =>
             row.key === placeholder.key
@@ -438,6 +442,7 @@ export function ExpenseForm({
     );
     try {
       await deleteSourceDocument(key);
+      void markExpenseChanged(queryClient, editing.id);
       setAttachmentRows((current) => current.filter((row) => row.key !== key));
     } catch (error) {
       toast.error(
@@ -452,6 +457,16 @@ export function ExpenseForm({
   };
 
   const onSave = () => {
+    setSubmitted(true);
+    if (issues.length > 0) {
+      // Bring the first flagged field into view once the errors have rendered.
+      requestAnimationFrame(() =>
+        document
+          .querySelector("[data-expense-form] p.text-destructive")
+          ?.scrollIntoView({ behavior: "smooth", block: "center" }),
+      );
+      return;
+    }
     const values: ExpenseDraft = { ...draft, amount };
     if (editing) {
       updateExpense.mutate(
@@ -518,7 +533,7 @@ export function ExpenseForm({
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="mx-auto max-w-3xl space-y-6" data-expense-form>
       <div className="space-y-3">
         <Button
           variant="ghost"
@@ -590,34 +605,26 @@ export function ExpenseForm({
         <Field
           label={`Price (${currencyMark})`}
           required
-          error={liveAmountError ?? issueFor("amount")}
+          error={issueFor("amount")}
           hint={
             amountLocked
               ? "This expense is matched, so the amount can't be changed — unmatch it first to change it."
               : undefined
           }
         >
-          <div className="relative">
-            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-              {currencyMark}
-            </span>
-            <Input
-              value={amountInput}
-              inputMode="decimal"
-              disabled={amountLocked}
-              onChange={(event) => {
-                setEdited(true);
-                setAmountInput(event.target.value);
-              }}
-              placeholder="0.00"
-              aria-invalid={!!(liveAmountError ?? issueFor("amount"))}
-              className={cn(
-                "pl-7 tabular",
-                (liveAmountError ?? issueFor("amount")) &&
-                  "border-destructive focus-visible:ring-destructive",
-              )}
-            />
-          </div>
+          <PrefixInput
+            prefix={currencyMark}
+            value={amountInput}
+            inputMode="decimal"
+            disabled={amountLocked}
+            onChange={(event) => {
+              setEdited(true);
+              setAmountInput(event.target.value);
+            }}
+            placeholder="0.00"
+            aria-invalid={!!(issueFor("amount"))}
+            className="tabular"
+          />
         </Field>
 
         <Field label="Date" required error={issueFor("date")}>
@@ -625,6 +632,7 @@ export function ExpenseForm({
             label="Date"
             value={draft.date}
             onChange={(iso) => patch({ date: iso })}
+            invalid={!!issueFor("date")}
           />
         </Field>
 
@@ -729,23 +737,16 @@ export function ExpenseForm({
                   <SelectItem value="%">%</SelectItem>
                 </SelectContent>
               </Select>
-              <div className="relative flex-1">
-                <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-                  {splitMode}
-                </span>
-                <Input
-                  value={businessInput}
-                  inputMode="decimal"
-                  onChange={(event) => setBusinessInput(event.target.value)}
-                  placeholder="0.00"
-                  aria-invalid={!!issueFor("businessAmount")}
-                  className={cn(
-                    "pl-7 tabular",
-                    issueFor("businessAmount") &&
-                      "border-destructive focus-visible:ring-destructive",
-                  )}
-                />
-              </div>
+              <PrefixInput
+                prefix={splitMode}
+                wrapperClassName="flex-1"
+                value={businessInput}
+                inputMode="decimal"
+                onChange={(event) => setBusinessInput(event.target.value)}
+                placeholder="0.00"
+                aria-invalid={!!issueFor("businessAmount")}
+                className="tabular"
+              />
             </div>
             <div className="mt-2 flex items-center justify-between rounded-md bg-muted/40 px-3 py-2 text-xs">
               <span className="text-muted-foreground">
@@ -830,8 +831,8 @@ export function ExpenseForm({
         <Button variant="outline" onClick={guardNavigate("/expenses")}>
           Cancel
         </Button>
-        {/* Disabled until valid; the hint says what's still outstanding. */}
-        {issues.length > 0 && (
+        {/* After a Save attempt, says what's still outstanding. */}
+        {submitted && issues.length > 0 && (
           <p className="self-center text-xs text-muted-foreground">
             {issues.length === 1
               ? issues[0].message
@@ -840,7 +841,7 @@ export function ExpenseForm({
         )}
         <Button
           onClick={onSave}
-          disabled={issues.length > 0 || saving || savingAttachment}
+          disabled={saving || savingAttachment}
         >
           {(saving || savingAttachment) && <Loader2 className="animate-spin" />}
           {editing ? "Save changes" : "Save expense"}

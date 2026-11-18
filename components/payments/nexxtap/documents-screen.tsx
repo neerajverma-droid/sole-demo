@@ -199,6 +199,7 @@ export function NexxtapDocumentsScreen() {
         <FormSection
           icon={FileText}
           title="Supporting documents"
+          tourId="nexttap-documents"
           description="The paperwork NextTap verifies the application against."
           headerClassName={NEXXTAP_SECTION_HEADER}
           className="space-y-4 p-4 sm:p-6"

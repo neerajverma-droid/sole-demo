@@ -13,7 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
+import { PrefixInput } from "@/components/ui/prefix-input";
 import {
   Select,
   SelectContent,
@@ -30,7 +30,6 @@ import { useProjectSettingsQuery } from "@/hooks/use-projects-query";
 import { apiErrorMessage } from "@/lib/api-error";
 import type { ActiveTimer } from "@/lib/project-timer";
 import type { ProjectClient } from "@/lib/projects";
-import { cn } from "@/lib/utils";
 import { activeCurrencySymbol } from "@/lib/country-context";
 
 type Draft = {
@@ -245,24 +244,20 @@ export function TimerDetailsDialog({
 
           {draft.isBillable && (
             <Field label="Hourly rate" htmlFor="timer-rate" error={rateError || undefined}>
-              <div className="relative">
-                <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-                  {activeCurrencySymbol()}
-                </span>
-                <Input
-                  id="timer-rate"
-                  inputMode="decimal"
-                  value={draft.hourlyRate}
-                  onChange={(event) => {
-                    setRateError("");
-                    const hourlyRate = event.target.value.replace(/[^\d.]/g, "");
-                    setDraft((current) => ({ ...current, hourlyRate }));
-                  }}
-                  placeholder="0"
-                  aria-invalid={!!rateError}
-                  className={cn("pl-7 tabular", rateError && "border-destructive")}
-                />
-              </div>
+              <PrefixInput
+                prefix={activeCurrencySymbol()}
+                id="timer-rate"
+                inputMode="decimal"
+                value={draft.hourlyRate}
+                onChange={(event) => {
+                  setRateError("");
+                  const hourlyRate = event.target.value.replace(/[^\d.]/g, "");
+                  setDraft((current) => ({ ...current, hourlyRate }));
+                }}
+                placeholder="0"
+                aria-invalid={!!rateError}
+                className="tabular"
+              />
             </Field>
           )}
         </div>

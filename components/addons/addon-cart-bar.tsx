@@ -8,6 +8,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { clearSelectedAddonsAtom, selectedAddonsAtom } from "@/lib/atoms";
 import { useAddons } from "@/hooks/use-addons";
+import { trackAddonsAddedToPlan } from "@/lib/addon-analytics";
+import { addonById } from "@/lib/addons";
 
 /**
  * The cart, pinned to the foot of whatever is showing the catalogue.
@@ -39,7 +41,7 @@ import { useAddons } from "@/hooks/use-addons";
 export function AddonCartBar() {
   const selected = useAtomValue(selectedAddonsAtom);
   const clearSelected = useSetAtom(clearSelectedAddonsAtom);
-  const { buy, busy, costOf, mode, subscription } = useAddons();
+  const { buy, busy, catalogue, costOf, mode, subscription } = useAddons();
 
   if (selected.length === 0) return null;
 
@@ -63,6 +65,11 @@ export function AddonCartBar() {
   const confirm = async () => {
     try {
       const { checkoutUrl } = await buy(selected);
+      trackAddonsAddedToPlan(
+        selected.map(addonById).filter((addon) => addon != null),
+        { catalogue, interval: subscription?.planInterval ?? "monthly" },
+        Boolean(checkoutUrl),
+      );
 
       if (checkoutUrl) {
         // Nothing is on the plan yet — Stripe is. The cart stays put so coming

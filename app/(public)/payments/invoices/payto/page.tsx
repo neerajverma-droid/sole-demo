@@ -1,4 +1,10 @@
+import type { Metadata } from "next";
+
 import { PayToScreen } from "@/components/payments/public-pay/payto-screen";
+
+export const metadata: Metadata = {
+  title: "Pay invoice · Sole",
+};
 
 export default async function PayToPage({
   searchParams,

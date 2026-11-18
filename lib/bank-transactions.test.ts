@@ -10,6 +10,8 @@ const {
   aiSuggestionsFrom,
   approveAllApi,
   bulkApprovalIssue,
+  fetchSuggestedTransactions,
+  fetchSuggestionsCount,
   fetchSuggestionsPage,
   rejectSuggestionsApi,
   bulkMatchApi,
@@ -18,6 +20,8 @@ const {
   markTransactionsApi,
   approvalIssue,
   approveTransactionApi,
+  DuplicateTransactionError,
+  isDuplicateReply,
   confidencePercent,
   currentFinancialYearLabel,
   deleteUnmatchedTransactionApi,
@@ -174,6 +178,74 @@ describe("row mapping", () => {
       deletable: true,
       gst: false,
     });
+  });
+
+  it("maps the invoice the model paired a line with, ahead of any category", () => {
+    const row = mapUnmatchedRow({
+      bank_transacton_id: 12,
+      amount: 250,
+      direction: "credit",
+      classification_prediction: {
+        type: "invoice",
+        document: { type: "invoice", id: 55, reference: "INV-0021", amount: "250.00", client_name: "Acme Pty Ltd" },
+        client: { client_id: 9, name: "Acme Pty Ltd" },
+        account_subcategory_id: null,
+        name: null,
+        confidence: 0.91,
+        reason: "Matched invoice #55",
+      },
+    });
+    expect(row).toMatchObject({
+      suggestedDocument: {
+        type: "invoice",
+        id: "55",
+        reference: "INV-0021",
+        clientName: "Acme Pty Ltd",
+        amount: 250,
+        confidence: 91,
+      },
+      suggestedClient: { id: "9", name: "Acme Pty Ltd" },
+      suggestedMatch: "INV-0021 · Acme Pty Ltd",
+      suggestedCategory: null,
+      suggestedCategoryId: null,
+      aiSuggestions: null,
+    });
+  });
+
+  it("maps a category prediction with the client the model knew, and no document", () => {
+    const row = mapUnmatchedRow({
+      bank_transacton_id: 13,
+      amount: 30,
+      direction: "debit",
+      classification_prediction: {
+        type: "category",
+        document: null,
+        client: { client_id: 14, name: "Domino's" },
+        account_subcategory_id: 187,
+        name: "Meals",
+        confidence: 0.8,
+      },
+    });
+    expect(row).toMatchObject({
+      suggestedDocument: null,
+      suggestedClient: { id: "14", name: "Domino's" },
+      suggestedMatch: "",
+      suggestedCategory: { category: "Meals", confidence: 80 },
+    });
+  });
+
+  it("ignores a document it does not recognise and a client with no name", () => {
+    const row = mapUnmatchedRow({
+      bank_transacton_id: 14,
+      amount: 5,
+      direction: "debit",
+      classification_prediction: {
+        document: { type: "bill", id: 3, reference: "B-3" },
+        client: { client_id: 4, name: " " },
+      },
+    });
+    expect(row.suggestedDocument).toBeNull();
+    expect(row.suggestedClient).toBeNull();
   });
 
   it("maps a matched row with split lines", () => {
@@ -396,6 +468,28 @@ describe("approve", () => {
     });
   });
 
+  it("asks for neither category nor client when approving a document match", async () => {
+    const invoice = { transactionId: "12", categoryId: "", clientId: "", gstIncluded: true, document: { type: "invoice" as const, id: "55" } };
+    expect(approvalIssue(invoice)).toBeNull();
+
+    apiMock.post.mockResolvedValue({ data: { success: true } });
+    expect(await approveTransactionApi(invoice)).toBe("Transaction matched successfully.");
+    expect(apiMock.post.mock.calls[0][0]).toBe(apiRoutes.bankTransaction.setMatchInvoices);
+    expect(decrypted(apiMock.post.mock.calls[0][1])).toEqual({
+      bank_transaction_id: 12,
+      invoices: [55],
+    });
+  });
+
+  it("matches an expense or asset through the asset/expense endpoint", async () => {
+    apiMock.post.mockResolvedValue({ data: { success: true } });
+    await approveTransactionApi({ transactionId: "13", categoryId: "", clientId: "", gstIncluded: true, document: { type: "expense", id: "8" } });
+    await approveTransactionApi({ transactionId: "14", categoryId: "", clientId: "", gstIncluded: true, document: { type: "asset", id: "3" } });
+    expect(apiMock.post.mock.calls[0][0]).toBe(apiRoutes.bankTransaction.setMatchExpenses);
+    expect(decrypted(apiMock.post.mock.calls[0][1])).toEqual({ bank_transaction_id: "13", expenses: ["8"] });
+    expect(decrypted(apiMock.post.mock.calls[1][1])).toEqual({ bank_transaction_id: "14", assets: ["3"] });
+  });
+
   it("refuses an incomplete row without calling the server", async () => {
     await expect(approveTransactionApi({ ...ready, clientId: "" })).rejects.toThrow(
       "Please select a client/supplier before approving.",
@@ -516,6 +610,70 @@ describe("AI suggestions review", () => {
     });
   });
 
+  it("walks every page but keeps only the lines the model had a suggestion for", async () => {
+    const unmatchedRow = (id: number, withSuggestion: boolean) => ({
+      bank_transacton_id: id,
+      amount: 10,
+      direction: "debit",
+      ...(withSuggestion
+        ? { classification_prediction: { name: "Utilities", account_subcategory_id: 9, confidence: 0.9 } }
+        : {}),
+    });
+    apiMock.get
+      .mockResolvedValueOnce({
+        data: {
+          success: true,
+          data: {
+            bank_transactions: {
+              bank_transaction_details: [
+                unmatchedRow(1, true),
+                ...Array.from({ length: 24 }, (_, index) => unmatchedRow(index + 2, false)),
+              ],
+              total: 26,
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          success: true,
+          data: {
+            bank_transactions: {
+              bank_transaction_details: [unmatchedRow(26, true)],
+              total: 26,
+            },
+          },
+        },
+      });
+
+    const rows = await fetchSuggestedTransactions();
+    expect(rows.map((row) => row.id)).toEqual(["1", "26"]);
+    expect(apiMock.get).toHaveBeenCalledTimes(2);
+  });
+
+  it("counts only the lines with a suggestion, for the banner", async () => {
+    apiMock.get.mockResolvedValue({
+      data: {
+        success: true,
+        data: {
+          bank_transactions: {
+            bank_transaction_details: [
+              { bank_transacton_id: 1, amount: 10, direction: "debit" },
+              {
+                bank_transacton_id: 2,
+                amount: 10,
+                direction: "debit",
+                classification_prediction: { name: "Utilities", account_subcategory_id: 9, confidence: 0.9 },
+              },
+            ],
+            total: 2,
+          },
+        },
+      },
+    });
+    expect(await fetchSuggestionsCount()).toBe(1);
+  });
+
   const row = (overrides = {}) => ({
     transactionId: "1",
     categoryId: "12",
@@ -553,6 +711,43 @@ describe("AI suggestions review", () => {
     expect(body.transactions[1]).toMatchObject({ transaction_id: "2", gst_included: 0 });
   });
 
+  it("lets document matches through the bulk check without a category or client", () => {
+    const invoice = row({ transactionId: "3", categoryId: "", clientId: "", document: { type: "invoice", id: "55" } });
+    expect(bulkApprovalIssue([invoice])).toBeNull();
+    expect(bulkApprovalIssue([invoice, row({ transactionId: "4", categoryId: "" })])).toBe(
+      "Please select a suggested category for all transactions to approve.",
+    );
+  });
+
+  it("approves coded rows in one call, then matches each document", async () => {
+    apiMock.post.mockResolvedValue({ data: { success: true, message: "Done" } });
+    const message = await approveAllApi([
+      row(),
+      row({ transactionId: "3", categoryId: "", clientId: "", document: { type: "invoice", id: "55" } }),
+      row({ transactionId: "4", categoryId: "", clientId: "", document: { type: "expense", id: "8" } }),
+    ]);
+    expect(message).toBe("Done");
+    expect(apiMock.post).toHaveBeenCalledTimes(3);
+    expect(apiMock.post.mock.calls[0][0]).toBe(apiRoutes.bankTransaction.setMatch);
+    const body = decrypted(apiMock.post.mock.calls[0][1]) as { transactions: Record<string, unknown>[] };
+    expect(body.transactions).toHaveLength(1);
+    expect(apiMock.post.mock.calls[1][0]).toBe(apiRoutes.bankTransaction.setMatchInvoices);
+    expect(apiMock.post.mock.calls[2][0]).toBe(apiRoutes.bankTransaction.setMatchExpenses);
+  });
+
+  it("keeps matching after one document is refused, then reports how many went through", async () => {
+    apiMock.post
+      .mockResolvedValueOnce({ data: { success: false, message: "Invoice already paid" } })
+      .mockResolvedValueOnce({ data: { success: true } });
+    await expect(
+      approveAllApi([
+        row({ transactionId: "3", categoryId: "", clientId: "", document: { type: "invoice", id: "55" } }),
+        row({ transactionId: "4", categoryId: "", clientId: "", document: { type: "invoice", id: "56" } }),
+      ]),
+    ).rejects.toThrow("1 of 2 document matches approved. Invoice already paid");
+    expect(apiMock.post).toHaveBeenCalledTimes(2);
+  });
+
   it("refuses an incomplete Approve All without calling the server", async () => {
     await expect(approveAllApi([row({ clientId: "" })])).rejects.toThrow(/client\/supplier/);
     expect(apiMock.post).not.toHaveBeenCalled();
@@ -566,5 +761,51 @@ describe("AI suggestions review", () => {
       transaction_ids: ["1", "2"],
       action: "reject",
     });
+  });
+});
+
+describe("a duplicate reply", () => {
+  const ready = { transactionId: "91", categoryId: "12", clientId: "7", gstIncluded: true };
+
+  it("is recognised only by data.direction === \"duplicate\"", () => {
+    expect(isDuplicateReply({ direction: "duplicate" })).toBe(true);
+    expect(isDuplicateReply({ direction: "debit" })).toBe(false);
+    expect(isDuplicateReply(null)).toBe(false);
+    expect(isDuplicateReply(undefined)).toBe(false);
+    expect(isDuplicateReply("duplicate")).toBe(false);
+  });
+
+  it("is not reported as a success — approve throws with the server's message", async () => {
+    apiMock.post.mockResolvedValue({
+      data: {
+        success: true,
+        message: "A matching asset already exists for this transaction.",
+        data: { direction: "duplicate" },
+      },
+    });
+
+    const attempt = approveTransactionApi(ready);
+    await expect(attempt).rejects.toBeInstanceOf(DuplicateTransactionError);
+    await expect(approveTransactionApi(ready)).rejects.toThrow(
+      "A matching asset already exists for this transaction.",
+    );
+  });
+
+  it("falls back to a clear message when the server sends none", async () => {
+    apiMock.post.mockResolvedValue({
+      data: { success: true, data: { direction: "duplicate" } },
+    });
+
+    await expect(approveTransactionApi(ready)).rejects.toThrow(
+      /duplicate .*nothing was created/,
+    );
+  });
+
+  it("does not affect an ordinary success", async () => {
+    apiMock.post.mockResolvedValue({
+      data: { success: true, message: "Done", data: { direction: "debit" } },
+    });
+
+    expect(await approveTransactionApi(ready)).toBe("Done");
   });
 });

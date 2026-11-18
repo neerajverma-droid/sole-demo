@@ -21,7 +21,6 @@ import {
   markLogsInvoicedApi,
   saveWeeklyLogsApi,
   startTimerApi,
-  trackTimerEntryLogged,
   updateActiveTimerApi,
   updateLogApi,
   updateTaskApi,
@@ -101,6 +100,8 @@ export function useInvalidateTime() {
       queryClient.invalidateQueries({ queryKey: ["project-tasks"] }),
       queryClient.invalidateQueries({ queryKey: ["project-jobs"] }),
       queryClient.invalidateQueries({ queryKey: ["project-stats"] }),
+      // Quick Actions' Time tracker card lists the same sessions.
+      queryClient.invalidateQueries({ queryKey: ["unibox", "timeTracker"] }),
     ]);
 }
 
@@ -145,13 +146,10 @@ export function useSaveAndStopTimerMutation() {
       timer,
       description,
       selection,
-      seconds,
     }: {
       timer: ActiveTimer;
       description: string;
       selection: TimerSelection;
-      /** On the clock when saved, for analytics. */
-      seconds: number;
     }) => {
       await updateActiveTimerApi(description, selection);
       const stopped = await stopTimerApi({
@@ -159,7 +157,6 @@ export function useSaveAndStopTimerMutation() {
         clientId: selection.client?.clientId ?? timer.clientId,
         contactId: selection.client?.contactId ?? timer.contactId,
       });
-      trackTimerEntryLogged(seconds);
       return stopped;
     },
     onSuccess: () => {

@@ -8,6 +8,7 @@ import {
   ArrowRight,
   Check,
   Lock,
+  LockOpen,
   Minus,
   Puzzle,
   Search,
@@ -30,11 +31,21 @@ import { AddonCartBar } from "@/components/addons/addon-cart-bar";
 import { AddonsMarketplace } from "@/components/addons/addons-marketplace";
 import { AdditionalItems } from "@/components/layout/additional-items";
 import { useAddons } from "@/hooks/use-addons";
-import { addonMonthlyPrice } from "@/lib/addon-entitlements";
+import { trackAddonSelected } from "@/lib/addon-analytics";
+import { useActiveBusiness } from "@/hooks/use-active-business";
+import { usePayrollSeatsQuery } from "@/hooks/use-payroll-query";
+import { payrollEnabled } from "@/lib/payroll";
+import { SUBSCRIPTION_SETTINGS_PATH } from "@/lib/subscription";
+import {
+  addonBilledPrice,
+  type AddonBilledPrice,
+} from "@/lib/addon-entitlements";
 import { RemoveAddonDialog } from "@/components/addons/remove-addon-dialog";
+import { AddonRecommendedBadge } from "@/components/addons/addon-overview";
 import { CustomiseSidebarPanel } from "@/components/layout/customise-sidebar-panel";
 import {
   customiseSidebarRecommendedAtom,
+  moreAddonsDetailAtom,
   moreAddonsOpenAtom,
   moreAddonsTabAtom,
   selectedAddonsAtom,
@@ -48,6 +59,11 @@ import {
   ADDON_FILTERS_WORTHWHILE,
   addonById,
   addonLayout,
+  addonMoney,
+  addonPriceShort,
+  addonRecommendedFor,
+  addonSoldBySeat,
+  withCatalogueContent,
   type Addon,
   type AddonAccent,
 } from "@/lib/addons";
@@ -83,13 +99,33 @@ export function MoreAddonsDialog() {
   const [open, setOpen] = useAtom(moreAddonsOpenAtom);
   const {
     activeIds: added,
+    includedIds: included,
     remove,
+    refresh,
     currentCost,
     activeSlugs,
     busy,
     catalogue,
     subscription,
   } = useAddons();
+
+  /*
+   * The plan is re-read every time this opens.
+   *
+   * This modal is mounted next to the sidebar rather than when it's asked for,
+   * so without this it draws whatever the subscription query last cached — five
+   * minutes old at most, and no refetch on focus. Which is long enough to open
+   * the catalogue on a plan that has since changed: an add-on bought in another
+   * tab, a Stripe webhook that landed while this page sat idle, a purchase made
+   * on another device. Every card here is a statement about what the business
+   * has, and a stale one offers to sell something it already owns.
+   *
+   * Cheap when nothing moved — an invalidate refetches and hands the same
+   * object back, so no card re-renders.
+   */
+  React.useEffect(() => {
+    if (open) refresh();
+  }, [open, refresh]);
   const planInterval = subscription?.planInterval ?? "monthly";
   const [cart] = useAtom(selectedAddonsAtom);
   const toggleSelected = useSetAtom(toggleSelectedAddonAtom);
@@ -110,14 +146,30 @@ export function MoreAddonsDialog() {
    * that have to agree with each other.
    */
   const [detailId, setDetailId] = React.useState<string | null>(null);
-  const detailAddon = detailId ? addonById(detailId) : undefined;
+  const [requestedDetail, setRequestedDetail] = useAtom(moreAddonsDetailAtom);
+  React.useEffect(() => {
+    if (!open || !requestedDetail) return;
+    setTab("addons");
+    setDetailId(requestedDetail);
+    setRequestedDetail(null);
+  }, [open, requestedDetail, setRequestedDetail, setTab]);
+  const { business } = useActiveBusiness();
+  const industryId =
+    business?.industryId != null ? String(business.industryId) : null;
+  const catalogueAddon = detailId ? addonById(detailId) : undefined;
+  const detailAddon = catalogueAddon
+    ? withCatalogueContent(catalogueAddon, catalogue)
+    : undefined;
 
   /*
    * Two rows rather than one grid. Every card looking the same made the page
    * flat: nothing led, and a catalogue where the $15 payroll add-on and the $5
    * km tracker are drawn identically leaves the reader to do the ranking.
    */
-  const { featured, compact } = addonLayout(filter, query);
+  const { featured, compact } = addonLayout(filter, query, {
+    catalogue,
+    industryId,
+  });
   const results = [...featured, ...compact];
   /*
    * Counted from the resolved add-ons rather than from the stored ids, so the
@@ -150,9 +202,17 @@ export function MoreAddonsDialog() {
    */
   const monthly = currentCost;
 
-  /** This add-on's real price, at the interval this plan is billed on. */
+  /*
+   * Payroll is open when its seats are, not when the plan says — it's billed
+   * per employee, outside the add-on array.
+   */
+  const payrollOn = payrollEnabled(usePayrollSeatsQuery().data);
+  const unlockedByPlanOrSeats = (addon: Addon) =>
+    included.includes(addon.id) || (addonSoldBySeat(addon) && payrollOn);
+
+  /** This add-on's real price, as charged at the interval this plan is billed on. */
   const priceOf = (addon: Addon) =>
-    addonMonthlyPrice(addon, catalogue, planInterval);
+    addonBilledPrice(addon, catalogue, planInterval);
 
   /**
    * Where the grid was scrolled to when someone left it for a detail view.
@@ -184,7 +244,13 @@ export function MoreAddonsDialog() {
    * No toast: the cart bar appearing is the feedback, and one notification per
    * tick in a multi-select talks over the thing already saying it.
    */
-  const toggle = (addon: Addon) => toggleSelected(addon.id);
+  const toggle = (addon: Addon) => {
+    // Into the cart only; taking one back out isn't a selection.
+    if (!cart.includes(addon.id)) {
+      trackAddonSelected(addon, { catalogue, interval: planInterval });
+    }
+    toggleSelected(addon.id);
+  };
 
   /**
    * Which add-on is waiting on a confirmation to be taken off the plan.
@@ -426,7 +492,9 @@ export function MoreAddonsDialog() {
                             <FeaturedCard
                               addon={addon}
                               price={priceOf(addon)}
+                              recommended={addonRecommendedFor(addon, industryId)}
                               onPlan={added.includes(addon.id)}
+                              included={unlockedByPlanOrSeats(addon)}
                               inCart={cart.includes(addon.id)}
                               onToggleSelect={() => toggle(addon)}
                               onRemove={() => drop(addon)}
@@ -445,7 +513,9 @@ export function MoreAddonsDialog() {
                             <AddonCard
                               addon={addon}
                               price={priceOf(addon)}
+                              recommended={addonRecommendedFor(addon, industryId)}
                               onPlan={added.includes(addon.id)}
+                              included={unlockedByPlanOrSeats(addon)}
                               inCart={cart.includes(addon.id)}
                               onToggleSelect={() => toggle(addon)}
                               onRemove={() => drop(addon)}
@@ -520,19 +590,46 @@ export function MoreAddonsDialog() {
 function AddonAction({
   accent,
   locked,
+  included,
+  seatBilled,
   inCart,
   onToggleSelect,
   onRemove,
+  onNavigate,
   className,
 }: {
   accent: AddonAccent;
   locked: boolean;
+  /** Unlocked by the package (or its seats) rather than bought — nothing to remove. */
+  included: boolean;
+  /** Bought as seats from the seat picker, never put in the cart. */
+  seatBilled: boolean;
+  /** Closes More on the way to a page. */
+  onNavigate: () => void;
   /** Chosen but not paid for. Only meaningful while `locked`. */
   inCart: boolean;
   onToggleSelect: () => void;
   onRemove: () => void;
   className?: string;
 }) {
+  if (locked && seatBilled) {
+    // Seats need a count and an interval, which the seat picker has and a
+    // cart toggle doesn't — see `addonSoldBySeat`.
+    return (
+      <Button
+        size="sm"
+        asChild
+        className={cn(accent.cta, className)}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <Link href={SUBSCRIPTION_SETTINGS_PATH} onClick={onNavigate}>
+          <Lock aria-hidden />
+          Enable payroll
+        </Link>
+      </Button>
+    );
+  }
+
   if (locked) {
     /*
      * Select, not add. The charge happens once for the whole cart, so a card's
@@ -568,6 +665,21 @@ function AddonAction({
           </>
         )}
       </Button>
+    );
+  }
+
+  /*
+   * The package includes it, so it's open but not an add-on on the bill — no
+   * Remove, because there is no subscription item to take off.
+   */
+  if (included) {
+    return (
+      <div className={cn("flex items-center gap-2", className)}>
+        <Badge variant="success" className="gap-1">
+          <LockOpen className="size-3" aria-hidden />
+          {seatBilled ? "Unlocked · seats active" : "Unlocked · in your plan"}
+        </Badge>
+      </div>
     );
   }
 
@@ -614,7 +726,9 @@ function AddonAction({
 function FeaturedCard({
   addon,
   price,
+  recommended,
   onPlan,
+  included,
   inCart,
   onToggleSelect,
   onRemove,
@@ -623,15 +737,20 @@ function FeaturedCard({
 }: {
   addon: Addon;
   /**
-   * What it costs per month, from the price list rather than from the card.
+   * What it's charged, and how often, from the price list rather than from the
+   * card.
    *
    * Passed in rather than read off `addon`: the figure written into the
    * catalogue here is copy, and the one the subscription charges is in the
    * database. A card quoting its own number is a card that goes stale the
    * moment somebody edits a price.
    */
-  price: number;
+  price: AddonBilledPrice;
+  /** Tagged for the active business's industry. */
+  recommended: boolean;
   onPlan: boolean;
+  /** Unlocked by the package, not bought as an add-on. */
+  included: boolean;
   inCart: boolean;
   onToggleSelect: () => void;
   onRemove: () => void;
@@ -639,7 +758,7 @@ function FeaturedCard({
   onNavigate: () => void;
 }) {
   const Icon = addon.icon;
-  const locked = !onPlan;
+  const locked = !onPlan && !included;
   const accent = ADDON_ACCENT[addon.group];
   const category = ADDON_GROUPS.find((group) => group.key === addon.group);
 
@@ -690,11 +809,15 @@ function FeaturedCard({
             <h3 className="text-base font-semibold leading-tight">
               {addon.name}
             </h3>
+            {recommended && (
+              <AddonRecommendedBadge className="mt-1.5 px-1.5 py-0 text-[10px]" />
+            )}
           </div>
           <p className="shrink-0 text-right text-sm font-semibold tabular">
-            ${price}
+            {addonMoney(price.amount)}
             <span className="block text-[11px] font-normal text-muted-foreground">
-              {addon.priceUnit ? `per ${addon.priceUnit} / month` : "per month"}
+              {addon.priceUnit ? `per ${addon.priceUnit} / ` : "per "}
+              {price.interval === "annual" ? "year" : "month"}
             </span>
           </p>
         </div>
@@ -710,9 +833,12 @@ function FeaturedCard({
           <AddonAction
             accent={accent}
             locked={locked}
+            included={included}
+            seatBilled={addonSoldBySeat(addon)}
             inCart={inCart}
             onToggleSelect={onToggleSelect}
             onRemove={onRemove}
+            onNavigate={onNavigate}
             className="w-full"
           />
           <button
@@ -757,7 +883,9 @@ function FeaturedCard({
 function AddonCard({
   addon,
   price,
+  recommended,
   onPlan,
+  included,
   inCart,
   onToggleSelect,
   onRemove,
@@ -766,15 +894,20 @@ function AddonCard({
 }: {
   addon: Addon;
   /**
-   * What it costs per month, from the price list rather than from the card.
+   * What it's charged, and how often, from the price list rather than from the
+   * card.
    *
    * Passed in rather than read off `addon`: the figure written into the
    * catalogue here is copy, and the one the subscription charges is in the
    * database. A card quoting its own number is a card that goes stale the
    * moment somebody edits a price.
    */
-  price: number;
+  price: AddonBilledPrice;
+  /** Tagged for the active business's industry. */
+  recommended: boolean;
   onPlan: boolean;
+  /** Unlocked by the package, not bought as an add-on. */
+  included: boolean;
   inCart: boolean;
   onToggleSelect: () => void;
   onRemove: () => void;
@@ -782,7 +915,7 @@ function AddonCard({
   onNavigate: () => void;
 }) {
   const Icon = addon.icon;
-  const locked = !onPlan;
+  const locked = !onPlan && !included;
   const accent = ADDON_ACCENT[addon.group];
 
   return (
@@ -821,13 +954,15 @@ function AddonCard({
               {addon.name}
             </h3>
             <span className="shrink-0 text-xs font-medium text-muted-foreground tabular">
-              ${price}
-              {addon.priceUnit ? `/${addon.priceUnit}` : ""}/mo
+              {addonPriceShort(addon, price.amount, price.interval)}
             </span>
           </div>
           <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">
             {addon.subtext}
           </p>
+          {recommended && (
+            <AddonRecommendedBadge className="px-1.5 py-0 text-[10px]" />
+          )}
         </div>
       </div>
 
@@ -838,9 +973,12 @@ function AddonCard({
         <AddonAction
           accent={accent}
           locked={locked}
+          included={included}
+          seatBilled={addonSoldBySeat(addon)}
           inCart={inCart}
           onToggleSelect={onToggleSelect}
           onRemove={onRemove}
+          onNavigate={onNavigate}
         />
       </div>
 

@@ -200,7 +200,7 @@ export function DocumentsStep({
         )}
       </div>
 
-      <StepFooter saving={saving} nextLabel="Terms & Sign" onSave={onSave} />
+      <StepFooter saving={saving} nextLabel="Payments" onSave={onSave} />
 
       <PdfPreviewDialog
         proposalId={proposalId}

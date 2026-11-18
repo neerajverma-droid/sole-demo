@@ -29,6 +29,8 @@ import {
   useOnboardingStore,
   type OnboardingStep,
 } from "@/stores/onboarding";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
 
 /** Shared header pair — present on every page. */
 export function HeaderActions() {
@@ -38,9 +40,14 @@ export function HeaderActions() {
         variant="outline"
         size="sm"
         className="hidden sm:inline-flex"
-        onClick={() =>
-          window.open(SCHEDULE_SUPPORT_URL, "_blank", "noopener,noreferrer")
-        }
+        onClick={() => {
+          track(EVENTS.SCHEDULE_SUPPORT_CLICKED);
+          // Sent on the click, not on a confirmed booking: no TidyCal webhook
+          // is wired up, and this is accepted as an approximation — it will
+          // always equal `schedule_support_clicked`.
+          track(EVENTS.SUPPORT_MEETING_BOOKED);
+          window.open(SCHEDULE_SUPPORT_URL, "_blank", "noopener,noreferrer");
+        }}
       >
         <CalendarClock className="text-muted-foreground" />
         Schedule support

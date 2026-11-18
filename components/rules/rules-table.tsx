@@ -48,6 +48,7 @@ export function RulesTable({
   loading,
   onAdd,
   onEdit,
+  hideSync = false,
 }: {
   loading: boolean;
   /**
@@ -56,6 +57,12 @@ export function RulesTable({
    */
   onAdd?: () => void;
   onEdit?: (rule: Rule) => void;
+  /**
+   * Drops the Sync matching column. Sync runs rules over transactions already
+   * saved, so on the bulk upload's step — where the file isn't saved yet — it
+   * could only ever report 0 for the rows being imported.
+   */
+  hideSync?: boolean;
 }) {
   const rules = useRulesStore((state) => state.rules);
   const [filter, setFilter] = useAtom(rulesFilterAtom);
@@ -84,7 +91,9 @@ export function RulesTable({
               <TableHead>Account category</TableHead>
               <TableHead>Subcategory</TableHead>
               <TableHead>Client</TableHead>
-              <TableHead className="w-[132px]">Sync matching</TableHead>
+              {!hideSync && (
+                <TableHead className="w-[132px]">Sync matching</TableHead>
+              )}
               <TableHead className="w-[88px] text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -109,9 +118,11 @@ export function RulesTable({
                 <TableCell>
                   <Shimmer className="h-4 w-24" />
                 </TableCell>
-                <TableCell>
-                  <Shimmer className="h-8 w-24 rounded-md" />
-                </TableCell>
+                {!hideSync && (
+                  <TableCell>
+                    <Shimmer className="h-8 w-24 rounded-md" />
+                  </TableCell>
+                )}
                 <TableCell>
                   <Shimmer className="ml-auto h-8 w-16 rounded-md" />
                 </TableCell>
@@ -125,7 +136,7 @@ export function RulesTable({
 
   if (rules.length === 0) {
     return (
-      <Empty>
+      <Empty data-usertour="rules-empty">
         <EmptyMedia>
           <Workflow aria-hidden />
         </EmptyMedia>
@@ -151,7 +162,7 @@ export function RulesTable({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" data-usertour="rules-list">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <FilterPills
           label="Filter rules by transaction type"
@@ -211,16 +222,20 @@ export function RulesTable({
                 <TableHead>Account category</TableHead>
                 <TableHead>Subcategory</TableHead>
                 <TableHead>Client</TableHead>
-                <TableHead className="w-[132px]">Sync matching</TableHead>
+                {!hideSync && (
+                  <TableHead className="w-[132px]">Sync matching</TableHead>
+                )}
                 <TableHead className="w-[88px] text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((rule) => (
+              {rows.map((rule, index) => (
                 <RuleRow
                   key={rule.id}
                   rule={rule}
                   query={query}
+                  syncTourId={index === 0 ? "rules-row-sync" : undefined}
+                  hideSync={hideSync}
                   onEdit={onEdit && (() => onEdit(rule))}
                   onDelete={() => setDeleteId(rule.id)}
                 />
@@ -236,11 +251,16 @@ export function RulesTable({
 function RuleRow({
   rule,
   query,
+  syncTourId,
+  hideSync,
   onEdit,
   onDelete,
 }: {
   rule: Rule;
   query: string;
+  /** Rendered as `data-usertour` on the sync button, for a tour to point at. */
+  syncTourId?: string;
+  hideSync: boolean;
   /** Edits in place; without it, Edit links to the rule's page. */
   onEdit?: () => void;
   onDelete: () => void;
@@ -273,29 +293,32 @@ function RuleRow({
       <TableCell className="text-muted-foreground">
         {rule.clientName || "—"}
       </TableCell>
-      <TableCell>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-8"
-          disabled={anySyncing}
-          onClick={() =>
-            syncMutation.mutate({ ruleId: rule.id, ruleName: rule.name })
-          }
-        >
-          {syncing ? (
-            <>
-              <Loader2 className="animate-spin" />
-              Syncing
-            </>
-          ) : (
-            <>
-              <RefreshCw />
-              Start sync
-            </>
-          )}
-        </Button>
-      </TableCell>
+      {!hideSync && (
+        <TableCell>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8"
+            disabled={anySyncing}
+            data-usertour={syncTourId}
+            onClick={() =>
+              syncMutation.mutate({ ruleId: rule.id, ruleName: rule.name })
+            }
+          >
+            {syncing ? (
+              <>
+                <Loader2 className="animate-spin" />
+                Syncing
+              </>
+            ) : (
+              <>
+                <RefreshCw />
+                Start sync
+              </>
+            )}
+          </Button>
+        </TableCell>
+      )}
       <TableCell>
         <div className="flex items-center justify-end gap-1">
           {onEdit ? (

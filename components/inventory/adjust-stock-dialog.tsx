@@ -17,6 +17,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { PrefixInput } from "@/components/ui/prefix-input";
 import {
   Select,
   SelectContent,
@@ -28,9 +29,11 @@ import { Field } from "@/components/documents/field";
 import { adjustStockIdAtom } from "@/lib/atoms";
 import { apiErrorMessage } from "@/lib/api-error";
 import {
+  ADJUST_REASON_MODE,
   ADJUST_REASONS,
   adjustStockApi,
   priceError,
+  setStockCountApi,
   stockLabel,
   stockStatus,
   stockStatusVariant,
@@ -43,8 +46,22 @@ import { activeCurrencySymbol } from "@/lib/country-context";
 
 const NOTE_MAX_LENGTH = 200;
 
+type ManualReason = Exclude<StockAdjustReason, "opening">;
+
+const INPUT_LABEL = {
+  add: "Quantity to add",
+  remove: "Quantity to remove",
+  set: "New counted total",
+} as const;
+
 /**
- * Sets stock on hand after a count, a delivery or a breakage.
+ * Records a delivery, a breakage or a stock take.
+ *
+ * The reason decides what the number means, because people think about each
+ * differently: a delivery is "200 arrived" (100 → 300), a breakage is "5 broke"
+ * (100 → 95), and only a stock take is "I counted 200" (100 → 200). Asking for
+ * a new total on a delivery made people do the sum themselves — and typing the
+ * delivered quantity there silently *lowered* stock.
  *
  * A dialog rather than a trip to the item form: adjusting a count is a different
  * job from editing an item, and the form's pricing and tax fields are noise when
@@ -56,10 +73,8 @@ export function AdjustStockDialog() {
   const items = useInventoryStore((state) => state.items);
   const item = items.find((entry) => entry.id === id);
 
+  const [reason, setReason] = React.useState<ManualReason | "">("");
   const [value, setValue] = React.useState("");
-  const [reason, setReason] = React.useState<
-    Exclude<StockAdjustReason, "opening"> | ""
-  >("");
   const [unitCost, setUnitCost] = React.useState("");
   const [note, setNote] = React.useState("");
   const [saving, setSaving] = React.useState(false);
@@ -71,8 +86,8 @@ export function AdjustStockDialog() {
   // refetch, not just when a different item is actually opened.
   React.useEffect(() => {
     if (!item) return;
-    setValue(item.openingStock || "0");
     setReason("");
+    setValue("");
     // Same default sole-webapp's adjust form uses — the item's own current
     // cost, ready to confirm or change rather than typed from scratch.
     setUnitCost(item.costPrice || "");
@@ -80,24 +95,45 @@ export function AdjustStockDialog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  const countError = wholeNumberError(value);
-  const blank = !value.trim();
+  const mode = reason ? ADJUST_REASON_MODE[reason] : undefined;
   const current = Number(item?.openingStock) || 0;
-  const next = Number(value) || 0;
-  const unchanged = !blank && !countError && next === current;
-  const adding = !blank && !countError && next > current;
+  const entered = Number(value) || 0;
+  const blank = !value.trim();
+  const formatError = wholeNumberError(value);
 
-  // A unit cost only means anything when stock is being added — it's what
-  // the backend uses to recalculate the weighted-average cost, and a
-  // decrement never touches that figure.
-  const unitCostError = adding ? priceError(unitCost) : undefined;
-  const unitCostRequired = adding && !unitCost.trim();
+  // The resulting count and the signed change, whichever way it was entered.
+  const next =
+    mode === "add"
+      ? current + entered
+      : mode === "remove"
+        ? current - entered
+        : entered;
+  const change = next - current;
+
+  const amountError =
+    formatError ??
+    (blank || !mode
+      ? undefined
+      : mode !== "set" && entered === 0
+        ? "Enter a quantity above 0."
+        : mode === "remove" && entered > current
+          ? `Only ${current} in stock.`
+          : mode === "set" && change === 0
+            ? `Stock is already ${current}.`
+            : undefined);
+
+  // A unit cost only matters for a delivery — it's what recalculates the
+  // weighted-average cost. A return or a correction re-counts units already
+  // valued at the current average, so the backend ignores a cost for those.
+  const askUnitCost = reason === "received" && change > 0;
+  const unitCostError = askUnitCost ? priceError(unitCost) : undefined;
+  const unitCostRequired = askUnitCost && !unitCost.trim();
 
   const canSave =
-    !countError &&
-    !blank &&
-    !unchanged &&
     !!reason &&
+    !blank &&
+    !amountError &&
+    change !== 0 &&
     !unitCostError &&
     !unitCostRequired &&
     !saving;
@@ -106,13 +142,17 @@ export function AdjustStockDialog() {
     setValue(String(Math.max(0, (Number(value) || 0) + by)));
 
   const onSave = async () => {
-    if (!item || !reason) return;
+    if (!item || !reason || !mode) return;
     setSaving(true);
     try {
-      await adjustStockApi(item.id, next - current, reason, {
-        unitCost: adding && unitCost.trim() ? Number(unitCost) : undefined,
-        note,
-      });
+      const result =
+        mode === "set"
+          ? await setStockCountApi(item.id, next, reason, { note })
+          : await adjustStockApi(item.id, change, reason, {
+              unitCost:
+                askUnitCost && unitCost.trim() ? Number(unitCost) : undefined,
+              note,
+            });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["inventory-items"] }),
         // Otherwise an open accordion or drawer for this item keeps showing
@@ -121,7 +161,7 @@ export function AdjustStockDialog() {
           queryKey: ["inventory-history", item.id],
         }),
       ]);
-      toast.success(`${item.name} stock set to ${next}`);
+      toast.success(`${item.name} stock is now ${result.newCount}`);
       setId(null);
     } catch (error) {
       toast.error(apiErrorMessage(error, "Couldn't adjust stock"));
@@ -158,57 +198,15 @@ export function AdjustStockDialog() {
               </Badge>
             </div>
 
-            <Field label="New count" error={countError} required>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="size-9 shrink-0"
-                  onClick={() => step(-1)}
-                  disabled={next <= 0}
-                  aria-label="One fewer"
-                >
-                  <Minus />
-                </Button>
-                <Input
-                  className={cn(
-                    "tabular",
-                    countError &&
-                      "border-destructive focus-visible:ring-destructive",
-                  )}
-                  inputMode="numeric"
-                  value={value}
-                  onChange={(event) => setValue(event.target.value)}
-                  aria-label="New stock count"
-                  aria-invalid={!!countError}
-                />
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="size-9 shrink-0"
-                  onClick={() => step(1)}
-                  aria-label="One more"
-                >
-                  <Plus />
-                </Button>
-              </div>
-            </Field>
-
-            {/* The movement this represents, so a typo is obvious before saving. */}
-            {!countError && !blank && next !== current && (
-              <p className="text-xs text-muted-foreground tabular">
-                {next > current
-                  ? `Adding ${next - current} ${item.quantityType || "units"}`
-                  : `Removing ${current - next} ${item.quantityType || "units"}`}
-              </p>
-            )}
-
             <Field label="Reason" required>
               <Select
                 value={reason}
-                onValueChange={(next) =>
-                  setReason(next as Exclude<StockAdjustReason, "opening">)
-                }
+                onValueChange={(next) => {
+                  setReason(next as ManualReason);
+                  // The number means something different per reason — don't
+                  // carry "200 to add" over as "set to 200".
+                  setValue("");
+                }}
               >
                 <SelectTrigger aria-label="Reason for this adjustment">
                   <SelectValue placeholder="Select a reason…" />
@@ -223,9 +221,57 @@ export function AdjustStockDialog() {
               </Select>
             </Field>
 
-            {/* Only when stock is going up — this is what recalculates the
-                item's weighted-average cost, which a decrement never touches. */}
-            {adding && (
+            {mode && (
+              <Field label={INPUT_LABEL[mode]} error={amountError} required>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="size-9 shrink-0"
+                    onClick={() => step(-1)}
+                    disabled={entered <= 0}
+                    aria-label="One fewer"
+                  >
+                    <Minus />
+                  </Button>
+                  <Input
+                    className={cn(
+                      "tabular",
+                      amountError &&
+                        "border-destructive focus-visible:ring-destructive",
+                    )}
+                    inputMode="numeric"
+                    value={value}
+                    placeholder={mode === "set" ? String(current) : "0"}
+                    onChange={(event) => setValue(event.target.value)}
+                    aria-label={INPUT_LABEL[mode]}
+                    aria-invalid={!!amountError}
+                  />
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="size-9 shrink-0"
+                    onClick={() => step(1)}
+                    aria-label="One more"
+                  >
+                    <Plus />
+                  </Button>
+                </div>
+              </Field>
+            )}
+
+            {/* The result, so a typo is obvious before saving. */}
+            {mode && !blank && !amountError && change !== 0 && (
+              <p className="text-xs text-muted-foreground tabular">
+                {current} → <span className="font-medium text-foreground">{next}</span>{" "}
+                {item.quantityType || "units"} ({change > 0 ? "+" : "−"}
+                {Math.abs(change)})
+              </p>
+            )}
+
+            {/* Only for a delivery — this is what recalculates the item's
+                weighted-average cost. */}
+            {askUnitCost && (
               <Field
                 label="Unit cost"
                 required
@@ -235,24 +281,16 @@ export function AdjustStockDialog() {
                 }
                 hint="Recalculates this item's average cost."
               >
-                <div className="relative">
-                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-                    {activeCurrencySymbol()}
-                  </span>
-                  <Input
-                    value={unitCost}
-                    inputMode="decimal"
-                    onChange={(event) => setUnitCost(event.target.value)}
-                    placeholder="0.00"
-                    aria-label="Unit cost"
-                    aria-invalid={!!unitCostError || unitCostRequired}
-                    className={cn(
-                      "pl-7 tabular",
-                      (unitCostError || unitCostRequired) &&
-                        "border-destructive focus-visible:ring-destructive",
-                    )}
-                  />
-                </div>
+                <PrefixInput
+                  prefix={activeCurrencySymbol()}
+                  value={unitCost}
+                  inputMode="decimal"
+                  onChange={(event) => setUnitCost(event.target.value)}
+                  placeholder="0.00"
+                  aria-label="Unit cost"
+                  aria-invalid={!!unitCostError || unitCostRequired}
+                  className="tabular"
+                />
               </Field>
             )}
 
@@ -274,7 +312,7 @@ export function AdjustStockDialog() {
           </Button>
           <Button onClick={onSave} disabled={!canSave}>
             {saving && <Loader2 className="animate-spin" aria-hidden />}
-            Save count
+            Save
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/command";
 import { CONTROL_SURFACE_TRIGGER } from "@/components/ui/control-surface";
 import { Input } from "@/components/ui/input";
+import { Shimmer } from "@/components/ui/shimmer";
 import {
   Popover,
   PopoverContent,
@@ -51,6 +52,7 @@ export function GeneralStep({
   onSave,
   saving,
   loading,
+  templateMode = false,
 }: {
   general: ProposalGeneral;
   client: ClientSnapshot | null;
@@ -59,9 +61,14 @@ export function GeneralStep({
   onSave: () => void;
   saving: boolean;
   loading: boolean;
+  /** Building a template: there's no client — each proposal made from it picks its own. */
+  templateMode?: boolean;
 }) {
   const { show, submit } = useTouched();
-  const issues = generalIssues(general);
+  const allIssues = generalIssues(general);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { client_id: _clientIssue, ...withoutClient } = allIssues;
+  const issues = templateMode ? withoutClient : allIssues;
 
   const save = () => {
     submit();
@@ -91,6 +98,7 @@ export function GeneralStep({
         />
       </Field>
 
+      {!templateMode && (
       <Field
         label="Client"
         required
@@ -112,6 +120,7 @@ export function GeneralStep({
           }}
         />
       </Field>
+      )}
 
       <div className="grid gap-6 border-b border-border pb-5 xl:grid-cols-[1fr_1.35fr]">
         <div className="space-y-3">
@@ -233,7 +242,7 @@ export function GeneralStep({
       <StepFooter
         saving={saving}
         disabled={loading}
-        nextLabel="Services"
+        nextLabel="Introduction"
         onSave={save}
       />
     </section>
@@ -300,7 +309,7 @@ function ContactSelect({
                   )}
                 </>
               ) : contactsQuery.isLoading ? (
-                "Loading clients…"
+                <Shimmer className="h-3.5 w-40" aria-label="Loading clients" />
               ) : (
                 "Select a client"
               )}
@@ -316,7 +325,21 @@ function ContactSelect({
               onValueChange={setSearch}
             />
             <CommandList>
+              {/* Skeleton rows while the client list loads (or reloads after
+                  a client is added). */}
+              {contactsQuery.isFetching && contacts.length === 0 ? (
+                <div className="space-y-1 p-2" role="status" aria-label="Loading clients">
+                  {Array.from({ length: 5 }).map((_, index) => (
+                    <div key={index} className="flex items-center gap-2 px-2 py-1.5">
+                      <Shimmer className="h-3.5 w-28" />
+                      <Shimmer className="h-3 w-36" />
+                      <Shimmer className="ml-auto h-4 w-10 rounded" />
+                    </div>
+                  ))}
+                </div>
+              ) : (
               <CommandEmpty>No clients found.</CommandEmpty>
+              )}
               <CommandGroup>
                 {contacts.map((contact) => (
                   <CommandItem

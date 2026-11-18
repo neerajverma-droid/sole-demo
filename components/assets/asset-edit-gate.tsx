@@ -5,8 +5,11 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useSetAtom } from "jotai";
 import { toast } from "sonner";
 
+import { useAssetAccess } from "@/components/assets/asset-access";
 import { ASSETS_ROOT } from "@/components/assets/assets-table";
 import { useAssetQuery } from "@/hooks/use-asset-query";
+import { apiErrorMessage } from "@/lib/api-error";
+import { canEditAsset } from "@/lib/assets";
 import { editAssetAfterUndoAtom, undoAssetMatchIdAtom } from "@/lib/atoms";
 
 /**
@@ -25,20 +28,29 @@ export function AssetEditGate() {
   const raw = useSearchParams()?.get("edit");
   const id = raw && /^\d+$/.test(raw) ? raw : null;
   const asset = useAssetQuery(id ?? undefined);
+  const access = useAssetAccess();
   const setUndoId = useSetAtom(undoAssetMatchIdAtom);
   const setEditAfter = useSetAtom(editAssetAfterUndoAtom);
   const handled = React.useRef<string | null>(null);
 
   React.useEffect(() => {
     if (!id || handled.current === id) return;
+    // An accountant without the asset:edit grant: no undo, no edit form.
+    if (!access.canEdit) {
+      handled.current = id;
+      toast.error("You don't have access to editing assets.");
+      router.replace(ASSETS_ROOT);
+      return;
+    }
     if (asset.isError) {
       handled.current = id;
-      toast.error("Couldn't open that asset.");
+      toast.error(apiErrorMessage(asset.error, "Couldn't open that asset."));
       return;
     }
     if (!asset.data) return;
     handled.current = id;
-    if (asset.data.isReconciled) {
+    // Matched to a bank transaction or paid with cash — the register's rule.
+    if (!canEditAsset(asset.data)) {
       setEditAfter(id);
       setUndoId(id);
       // The dialog is driven by state from here, not by the link. Taking
@@ -48,7 +60,16 @@ export function AssetEditGate() {
     } else {
       router.replace(`${ASSETS_ROOT}/${id}`);
     }
-  }, [id, asset.data, asset.isError, router, setEditAfter, setUndoId]);
+  }, [
+    id,
+    asset.data,
+    asset.isError,
+    asset.error,
+    access.canEdit,
+    router,
+    setEditAfter,
+    setUndoId,
+  ]);
 
   return null;
 }

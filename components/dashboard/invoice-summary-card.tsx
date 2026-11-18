@@ -30,10 +30,10 @@ import {
   segmentHighlight,
   type ProportionSegment,
 } from "@/components/dashboard/proportion-bar";
-import { useFiscalYearStart } from "@/hooks/use-fiscal-year-start";
+import { useDashboardPeriod } from "@/hooks/use-dashboard-period";
+import { inWindow } from "@/lib/dashboard-period";
 import { money } from "@/lib/dashboard-data";
 import {
-  currentFinancialYear,
   formatInvoiceDate,
   invoiceAmount,
   invoiceOverview,
@@ -43,7 +43,7 @@ import {
   type InvoiceStatus,
 } from "@/lib/invoices";
 import { cn } from "@/lib/utils";
-import { useInvoicesStore } from "@/stores/invoices";
+import { useDashboardInvoices } from "@/hooks/use-dashboard-source";
 
 /** How many of the latest invoices the table shows. */
 const RECENT_COUNT = 5;
@@ -106,12 +106,18 @@ const invoiceWord = (count: number) =>
  * guaranteed is for them not to exist until they're drawn.
  */
 export function InvoiceSummaryCard() {
-  const invoices = useInvoicesStore((state) => state.invoices);
-  const hydrated = useInvoicesStore((state) => state.hydrated);
+  const { invoices, hydrated } = useDashboardInvoices();
   const [hovered, setHovered] = React.useState<string | null>(null);
-  const fiscalYearStart = useFiscalYearStart();
+  /*
+   * Only invoices issued in the period the header's dropdown picks — the
+   * card's subtitle names that period, and sole-webapp's summary and recent
+   * list were both fetched over it. It used to count every invoice ever while
+   * its label claimed the financial year.
+   */
+  const { window: periodWindow } = useDashboardPeriod();
+  const inPeriod = invoices.filter((invoice) => inWindow(invoice.issued, periodWindow));
 
-  const overview = invoiceOverview(invoices);
+  const overview = invoiceOverview(inPeriod);
 
   const stats: StatCard[] = [
     {
@@ -170,19 +176,19 @@ export function InvoiceSummaryCard() {
    * holds them in — "recent" is a fact about the document, not about when it
    * was typed.
    */
-  const recent = [...invoices]
+  const recent = [...inPeriod]
     .sort((a, b) => b.issued.localeCompare(a.issued))
     .slice(0, RECENT_COUNT);
 
   return (
     <Card data-usertour="dashboard-invoice-summary">
-      <CardHeader className="flex-row items-center justify-between space-y-0 pb-4">
+      <CardHeader className="flex-row items-center justify-between space-y-0">
         <div className="space-y-1">
           <CardTitle className="text-base">Invoice summary</CardTitle>
           {/* The shared label, so this card names the year the same way the
               revenue goal and the snapshot strip do. */}
           <p className="text-xs text-muted-foreground tabular">
-            {currentFinancialYear(new Date(), fiscalYearStart).label}
+            {periodWindow.label}
           </p>
         </div>
         {/*
@@ -204,9 +210,9 @@ export function InvoiceSummaryCard() {
         </div>
       </CardHeader>
 
-      <CardContent className="space-y-6">
+      <CardContent className="space-y-4">
         {!hydrated ? (
-          <div className="space-y-6">
+          <div className="space-y-4">
             <Shimmer className="h-24 w-full" />
             <Shimmer className="h-16 w-full" />
             <Shimmer className="h-40 w-full" />
@@ -223,7 +229,7 @@ export function InvoiceSummaryCard() {
             would read as five things of the same kind, and this one is the sum
             of the others' neighbours.
           */}
-          <div className="flex items-center justify-between gap-4 rounded-[9px] bg-primary/5 px-4 py-3">
+          <div className="flex items-center justify-between gap-4 rounded-lg bg-primary/5 px-4 py-3">
             <div className="min-w-0">
               <p className="text-xs text-muted-foreground">Overall total</p>
               <p

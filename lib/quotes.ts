@@ -6,8 +6,6 @@
 import { formatEventDateTime } from "@/lib/datetime";
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
 import {
   accentForId,
@@ -518,6 +516,8 @@ export type QuoteTemplate = {
   scopeLabel?: string;
   /** A template Sole ships (`user_id = 0`) — shared, never editable or deletable. */
   standard?: boolean;
+  /** The current user's star — the same per-user toggle the invoice gallery uses. */
+  favourite?: boolean;
   /** The row's industry, sent back to the preview endpoint. */
   industryId?: number | null;
   /** "general" or "industry" — which collection the template belongs to. */
@@ -775,10 +775,11 @@ function mapApiQuote(raw: ApiQuote): Quote {
   return {
     id: String(raw.quote_id),
     number: raw.quote_no ?? "",
+    // 0 is the backend's "no client yet" (a draft saved before one was picked).
     clientId:
-      raw.client_id != null
+      raw.client_id != null && Number(raw.client_id) > 0
         ? String(raw.client_id)
-        : raw.client?.client_id != null
+        : raw.client?.client_id != null && Number(raw.client.client_id) > 0
           ? String(raw.client.client_id)
           : null,
     clientName: raw.client?.name ?? "",
@@ -971,6 +972,74 @@ export async function fetchQuoteStatusCounts(
   }, {} as QuoteStatusCounts);
 }
 
+/** One period of the summary card, as the server adds it up. */
+export type QuotePeriodStats = {
+  /** Converted + open + lost, in the business's currency. */
+  quoted: number;
+  /** Drafts in the period — counted, but not part of `quoted`. */
+  draftCount: number;
+  converted: { count: number; amount: number };
+  /** `accepted` is how many of the open ones have been accepted but not billed. */
+  open: { count: number; accepted: number; amount: number };
+  lost: { count: number; amount: number };
+};
+
+export type QuoteSummaryStats = {
+  /** The business's current financial year, by quote date. */
+  year: QuotePeriodStats;
+  /** The current calendar month, by quote date. */
+  month: QuotePeriodStats;
+};
+
+type ApiQuotePeriodStats = {
+  quoted?: number | string;
+  draft_count?: number;
+  converted?: { count?: number; amount?: number | string };
+  open?: { count?: number; accepted?: number; amount?: number | string };
+  lost?: { count?: number; amount?: number | string };
+};
+
+function mapQuotePeriodStats(raw: ApiQuotePeriodStats | undefined): QuotePeriodStats {
+  return {
+    quoted: apiNumber(raw?.quoted),
+    draftCount: apiNumber(raw?.draft_count),
+    converted: {
+      count: apiNumber(raw?.converted?.count),
+      amount: apiNumber(raw?.converted?.amount),
+    },
+    open: {
+      count: apiNumber(raw?.open?.count),
+      accepted: apiNumber(raw?.open?.accepted),
+      amount: apiNumber(raw?.open?.amount),
+    },
+    lost: {
+      count: apiNumber(raw?.lost?.count),
+      amount: apiNumber(raw?.lost?.amount),
+    },
+  };
+}
+
+/**
+ * The quote summary card's Converted / Open / Declined-or-expired figures for
+ * this financial year and this month, added up on the server — so they cover
+ * every quote, not just the newest 200 `fetchQuotes` returns. The server picks
+ * the financial year from the business's country and applies the rules the
+ * card used to apply itself (billed beats every status, lapsed sent quotes, a
+ * foreign quote put back into the business's currency, drafts left out).
+ */
+export async function fetchQuoteSummaryStats(): Promise<QuoteSummaryStats> {
+  const response = await api.get<{
+    success: boolean;
+    data?: { stats?: { year?: ApiQuotePeriodStats; month?: ApiQuotePeriodStats } };
+  }>(apiRoutes.quote.statusCounts, { params: { include_stats: 1 } });
+
+  const stats = response.data?.data?.stats;
+  return {
+    year: mapQuotePeriodStats(stats?.year),
+    month: mapQuotePeriodStats(stats?.month),
+  };
+}
+
 /** One quote, by the row's own delete route. */
 export async function deleteQuoteApi(id: string): Promise<void> {
   const response = await api.delete<{ success: boolean; message?: string }>(
@@ -1061,6 +1130,7 @@ export function mapApiQuoteTemplate(raw: ApiDefaultInvoice): QuoteTemplate {
     ndis,
     scopeLabel: label,
     standard: isGlobalTemplateOwner(raw.user_id),
+    ...(raw.is_favourite ? { favourite: true } : {}),
     industryId:
       raw.industry_id != null && raw.industry_id !== ""
         ? Number(raw.industry_id)
@@ -1639,6 +1709,92 @@ export async function sendQuoteApi(id: string): Promise<void> {
   assertApiSuccess(response.data, "Couldn't send that quote.");
 }
 
+/** What the quote list's send action can do for a quote, and why not when it can't. */
+export type QuoteSendAction =
+  | { kind: "send"; label: "Send to client" }
+  | { kind: "resend"; label: "Send again"; hint: string }
+  | { kind: "blocked"; label: "Send to client"; reason: string };
+
+/**
+ * The list's one send action, in words a user reads at a glance:
+ *
+ * - Draft, or Saved (finalised with Save & print, never emailed) → "Send to client"
+ * - Declined or Expired → "Send again" — the client gets a fresh link to answer
+ *   (an expired quote's expiry is moved forward by the server first)
+ * - Sent and still open → greyed out, "Already sent"
+ * - Accepted / Converted → greyed out with the reason
+ *
+ * Mirrors the server's own rules (POST /v2/quote/:id/send), which refuse the
+ * same cases, so a stale row can't send something the user was told it wouldn't.
+ */
+export function quoteSendAction(
+  quote: Quote,
+  today: string = todayIso(),
+): QuoteSendAction {
+  const status = quoteDisplayStatus(quote, today);
+  switch (status) {
+    case "Converted":
+      return {
+        kind: "blocked",
+        label: "Send to client",
+        reason: `Already converted to ${quote.convertedInvoice}`,
+      };
+    case "Accepted":
+      return {
+        kind: "blocked",
+        label: "Send to client",
+        reason: "The client has already accepted this quote",
+      };
+    case "Sent":
+      return { kind: "blocked", label: "Send to client", reason: "Already sent" };
+    case "Declined":
+      return {
+        kind: "resend",
+        label: "Send again",
+        hint: "The client declined — send it again for another look",
+      };
+    case "Expired":
+      return {
+        kind: "resend",
+        label: "Send again",
+        hint: "This quote expired — sending it again gives it a new expiry date",
+      };
+    default:
+      // Draft and Saved: it has never reached the client.
+      return { kind: "send", label: "Send to client" };
+  }
+}
+
+/**
+ * Emails a quote to its client from the list — a first send, or a send again
+ * for one that was declined or has expired. Resolves to every address it went
+ * to (client first) and the new expiry when the server had to move it.
+ */
+export async function sendQuoteToClientApi(id: string): Promise<{
+  recipients: string[];
+  resent: boolean;
+  expiryExtendedTo: string | null;
+}> {
+  const response = await api.post<{
+    success: boolean;
+    message?: string;
+    data?: {
+      resent?: boolean;
+      valid_till?: string | null;
+      expiry_extended?: boolean;
+      recipients?: { to?: string[]; cc?: string[] };
+    };
+  }>(apiRoutes.quote.sendToClient(id));
+  assertApiSuccess(response.data, "Couldn't send that quote.");
+  const data = response.data?.data;
+  return {
+    recipients: [...(data?.recipients?.to ?? []), ...(data?.recipients?.cc ?? [])],
+    resent: !!data?.resent,
+    expiryExtendedTo:
+      data?.expiry_extended && data.valid_till ? data.valid_till : null,
+  };
+}
+
 /* ------------------------------------------------------------------ *
  * PDF — GET /quote/preview/:templateId?render_type=pdf
  *
@@ -1700,10 +1856,12 @@ export async function fetchQuotePdfBlob(quote: Quote): Promise<Blob> {
  */
 export async function convertQuoteToInvoiceApi(
   quote: Quote,
-  /** The business's own currency, which `quoteAmountAud` is in. */
-  baseCurrency = "AUD",
-): Promise<void> {
-  const response = await api.post<{ success: boolean; message?: string }>(
+): Promise<{ invoiceId: string | null }> {
+  const response = await api.post<{
+    success: boolean;
+    message?: string;
+    data?: { invoice_id?: string | number | null };
+  }>(
     apiRoutes.invoice.convertToInvoice,
     buildEncryptedRequestBody({
       id: quote.id,
@@ -1711,20 +1869,8 @@ export async function convertQuoteToInvoiceApi(
     }),
   );
   assertApiSuccess(response.data, "Couldn't convert that quote.");
-
-  /*
-   * Converting is what winning a quote looks like in this product — there is
-   * no separate "mark accepted" action, and the comment above `statusVariant`
-   * says as much: "Converted" is not a status a quote is put into, it is what
-   * an accepted quote becomes. So this is the honest place for the event, and
-   * the AUD figure is used so quotes raised in different currencies can be
-   * summed against each other.
-   */
-  track(EVENTS.QUOTE_ACCEPTED, {
-    amount: quoteAmountAud(quote),
-    // `amount` is in the books' currency, so that is the currency to report it in.
-    currency: baseCurrency,
-  });
+  const invoiceId = response.data.data?.invoice_id;
+  return { invoiceId: invoiceId == null ? null : String(invoiceId) };
 }
 
 /**

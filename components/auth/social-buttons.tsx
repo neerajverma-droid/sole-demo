@@ -21,12 +21,19 @@ import { registerDevice } from "@/lib/api/device";
  * request. They are third-party trademarks: using them in production needs each
  * provider's permission and compliance with their sign-in branding guidelines.
  */
-export function SocialButtons({ verb = "" }: { verb?: string }) {
+export function SocialButtons({
+  verb = "",
+  onStart,
+}: {
+  verb?: string;
+  onStart?: (provider: string) => void;
+}) {
   const [redirecting, setRedirecting] = React.useState<string | null>(null);
 
   const start = async (provider: string) => {
     if (redirecting) return;
     setRedirecting(provider);
+    onStart?.(provider);
 
     // Without a device id the backend falls back to a shared default device
     // row, and issuing a session against it logs out everyone else sitting on

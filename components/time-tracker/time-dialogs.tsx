@@ -99,22 +99,26 @@ export function ManualLogDialog({ open, onOpenChange }: { open: boolean; onOpenC
         </DialogHeader>
 
         <div className="space-y-4">
-          <Field label="Description" htmlFor="log-description" required error={errors.description}>
-            <Textarea
-              id="log-description"
-              value={draft.description}
-              onChange={(event) => setDraft({ ...draft, description: event.target.value })}
-              placeholder="What did you work on?"
-              aria-invalid={!!errors.description || undefined}
-            />
-          </Field>
+          <div data-usertour="time-log-description">
+            <Field label="Description" htmlFor="log-description" required error={errors.description}>
+              <Textarea
+                id="log-description"
+                value={draft.description}
+                onChange={(event) => setDraft({ ...draft, description: event.target.value })}
+                placeholder="What did you work on?"
+                aria-invalid={!!errors.description || undefined}
+              />
+            </Field>
+          </div>
 
-          <DurationFields
-            idPrefix="log"
-            value={draft}
-            error={errors.time}
-            onChange={(patch) => setDraft({ ...draft, ...patch })}
-          />
+          <div data-usertour="time-log-duration">
+            <DurationFields
+              idPrefix="log"
+              value={draft}
+              error={errors.time}
+              onChange={(patch) => setDraft({ ...draft, ...patch })}
+            />
+          </div>
 
           <Field label="Date" htmlFor="log-date" required error={errors.date}>
             <DatePicker
@@ -132,7 +136,7 @@ export function ManualLogDialog({ open, onOpenChange }: { open: boolean; onOpenC
           <Button variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={submit} disabled={busy}>
+          <Button onClick={submit} disabled={busy} data-usertour="time-log-submit">
             {busy && <Loader2 className="animate-spin" />}
             Submit
           </Button>
@@ -332,7 +336,8 @@ export function StopTimerDialog({
   /** The running timer's project · job, which can't change after start. */
   projectLabel: string;
   onOpenChange: (open: boolean) => void;
-  onDone: () => void;
+  /** Closed by a save or a discard — the bar only scrolls to the list on a save. */
+  onDone: (outcome: "saved" | "discarded") => void;
 }) {
   const saveAndStop = useSaveAndStopTimerMutation();
   const discard = useDiscardTimerMutation();
@@ -361,11 +366,11 @@ export function StopTimerDialog({
       return;
     }
     saveAndStop.mutate(
-      { timer, description: draft.description, selection: { ...draft, assignProject: false }, seconds },
+      { timer, description: draft.description, selection: { ...draft, assignProject: false } },
       {
         onSuccess: () => {
           toast.success("Time entry saved", { description: formatDuration(seconds / 60) });
-          onDone();
+          onDone("saved");
         },
         onError: (err) => toast.error(apiErrorMessage(err, "Failed to stop timer")),
       },
@@ -377,7 +382,7 @@ export function StopTimerDialog({
     discard.mutate(timer, {
       onSuccess: () => {
         toast.success("Timer discarded");
-        onDone();
+        onDone("discarded");
       },
       onError: (err) => toast.error(apiErrorMessage(err, "Couldn't discard the timer")),
     });
@@ -391,29 +396,23 @@ export function StopTimerDialog({
           <DialogDescription>Confirm the details before this tracked time is saved.</DialogDescription>
         </DialogHeader>
 
-        <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-muted/40 px-4 py-3">
-          <div>
-            <p className="text-xs text-muted-foreground">Tracked duration</p>
-            <p className="text-lg font-semibold tabular">{formatDuration(seconds / 60)}</p>
-          </div>
-          <p className="max-w-[60%] truncate text-right text-xs text-muted-foreground">
-            {draft.client ? `Client: ${draft.client.name}` : "No client yet"}
-            {projectLabel ? ` · ${projectLabel}` : ""}
-          </p>
-        </div>
-
+        {/* No running-duration panel here: the clock is still going while
+            this is open, and the client it repeated is the field below. The
+            saved length shows in the toast. */}
         <div className="space-y-4">
-          <Field label="Description" htmlFor="stop-description" required>
-            <Textarea
-              id="stop-description"
-              value={draft.description}
-              onChange={(event) => {
-                setError(null);
-                setDraft({ ...draft, description: event.target.value });
-              }}
-              placeholder="What did you work on?"
-            />
-          </Field>
+          <div data-usertour="time-stop-description">
+            <Field label="Description" htmlFor="stop-description" required>
+              <Textarea
+                id="stop-description"
+                value={draft.description}
+                onChange={(event) => {
+                  setError(null);
+                  setDraft({ ...draft, description: event.target.value });
+                }}
+                placeholder="What did you work on?"
+              />
+            </Field>
+          </div>
           <TimeDetailsFields
             idPrefix="stop"
             value={draft}
@@ -438,11 +437,17 @@ export function StopTimerDialog({
         </div>
 
         <DialogFooter className="mt-2 gap-2 sm:justify-between">
-          <Button variant="outline" className="text-destructive" disabled={busy} onClick={discardTimer}>
+          <Button
+            variant="outline"
+            className="text-destructive"
+            disabled={busy}
+            onClick={discardTimer}
+            data-usertour="time-stop-discard"
+          >
             {discard.isPending && <Loader2 className="animate-spin" />}
             Discard
           </Button>
-          <Button onClick={save} disabled={busy}>
+          <Button onClick={save} disabled={busy} data-usertour="time-stop-save">
             {saveAndStop.isPending && <Loader2 className="animate-spin" />}
             Save entry
           </Button>

@@ -4,7 +4,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useAtom } from "jotai";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, Eye, FileText, Loader2, Plus, Search } from "lucide-react";
+import { ArrowRight, Plus, Search } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -17,16 +17,20 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Shimmer } from "@/components/ui/shimmer";
+import {
+  TemplateCard,
+  TemplateGridSkeleton,
+  TemplateSection,
+} from "@/components/proposals/proposal-template-cards";
 import { proposalTemplatePickerOpenAtom } from "@/lib/atoms";
 import { apiErrorMessage } from "@/lib/api-error";
+import { templatePreviewUrl } from "@/lib/proposal-templates";
 import {
   createProposalFromTemplateApi,
   fetchProposalTemplates,
   filterProposalTemplates,
   type ProposalTemplate,
 } from "@/lib/proposals";
-import { cn } from "@/lib/utils";
 
 /**
  * "New proposal": start blank, or from one of your own templates or Sole's
@@ -78,7 +82,7 @@ export function ProposalTemplatePickerDialog() {
   // Its own screen, in this tab. The picker's open state is left as it is,
   // so closing the preview comes back to the picker where it was.
   const previewTemplate = (template: ProposalTemplate) =>
-    router.push(`/proposals/templates/${template.id}/preview`);
+    router.push(templatePreviewUrl(template.id));
 
   return (
     <>
@@ -89,7 +93,7 @@ export function ProposalTemplatePickerDialog() {
             <DialogDescription>Pick a template — or start with a blank proposal.</DialogDescription>
           </DialogHeader>
 
-          <div className="min-h-0 flex-1 space-y-[15px] overflow-y-auto px-6 py-5">
+          <div className="min-h-0 flex-1 space-y-[15px] overflow-y-auto px-4 py-5 sm:px-6">
             <div className="relative">
               <Search
                 className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
@@ -122,12 +126,8 @@ export function ProposalTemplatePickerDialog() {
               <ArrowRight className="size-4 shrink-0 text-primary transition-transform group-hover:translate-x-0.5" />
             </button>
 
-            {templatesQuery.isLoading ? (
-              <TemplateSection title="Templates" tone="primary">
-                {Array.from({ length: 3 }).map((_, index) => (
-                  <Shimmer key={index} className="h-[104px] rounded-lg" />
-                ))}
-              </TemplateSection>
+            {templatesQuery.isLoading || templatesQuery.isFetching ? (
+              <TemplateGridSkeleton count={6} compact className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3" />
             ) : templatesQuery.isError ? (
               <p className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
                 Couldn&apos;t load templates.{" "}
@@ -196,91 +196,5 @@ export function ProposalTemplatePickerDialog() {
         </DialogContent>
       </Dialog>
     </>
-  );
-}
-
-function TemplateSection({
-  title,
-  count,
-  tone,
-  children,
-}: {
-  title: string;
-  count?: number;
-  tone: "primary" | "success";
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="space-y-3">
-      <h3 className="flex items-center gap-2 text-sm font-semibold">
-        <span className={cn("size-1.5 rounded-full", tone === "primary" ? "bg-primary" : "bg-success")} />
-        {title}
-        {count !== undefined && (
-          <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground tabular">
-            {count}
-          </span>
-        )}
-      </h3>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{children}</div>
-    </section>
-  );
-}
-
-function TemplateCard({
-  template,
-  applying,
-  disabled,
-  onSelect,
-  onPreview,
-}: {
-  template: ProposalTemplate;
-  applying: boolean;
-  disabled: boolean;
-  onSelect: () => void;
-  onPreview: () => void;
-}) {
-  return (
-    <div
-      className={cn(
-        "relative flex min-h-[104px] flex-col rounded-lg border bg-card shadow-sm transition-colors",
-        applying ? "border-primary ring-1 ring-primary" : "border-border hover:border-primary/40 hover:bg-primary/5",
-        disabled && !applying && "opacity-50",
-      )}
-    >
-      {/* The whole card applies the template; the eye on top of it previews. */}
-      <button
-        type="button"
-        disabled={disabled}
-        aria-busy={applying}
-        onClick={onSelect}
-        className="flex flex-1 flex-col gap-3 p-4 pr-12 text-left disabled:cursor-not-allowed"
-      >
-        <span className="line-clamp-2 font-medium leading-snug">{template.name}</span>
-        <span className="mt-auto flex items-center gap-1.5 text-xs text-muted-foreground">
-          {applying ? (
-            <>
-              <Loader2 className="size-3.5 animate-spin text-primary" aria-hidden />
-              <span className="font-medium text-primary">Creating proposal…</span>
-            </>
-          ) : (
-            <>
-              <FileText className="size-3.5" aria-hidden />
-              {template.serviceCount} {template.serviceCount === 1 ? "service" : "services"}
-            </>
-          )}
-        </span>
-      </button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="absolute right-2 top-2 size-8 text-muted-foreground hover:text-foreground"
-        aria-label={`Preview ${template.name}`}
-        disabled={disabled}
-        onClick={onPreview}
-      >
-        <Eye className="size-4" />
-      </Button>
-    </div>
   );
 }

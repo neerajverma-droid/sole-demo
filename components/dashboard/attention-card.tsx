@@ -25,10 +25,13 @@ import {
   useOnboardingStore,
 } from "@/stores/onboarding";
 import { useAccountsStore } from "@/stores/accounts";
-import { useExpensesStore } from "@/stores/expenses";
 import { useInvoicesStore } from "@/stores/invoices";
-import { useQuotesStore } from "@/stores/quotes";
 import { useTransactionsStore } from "@/stores/transactions";
+import {
+  useDashboardExpenses,
+  useDashboardInvoices,
+  useDashboardQuotes,
+} from "@/hooks/use-dashboard-source";
 
 /** Setup checklist for a new account, the live job list once there's data. */
 export function AttentionCard() {
@@ -45,12 +48,9 @@ export function AttentionCard() {
  * the card says so rather than manufacturing a fifth thing to worry about.
  */
 function KeyActions() {
-  const invoices = useInvoicesStore((state) => state.invoices);
-  const invoicesHydrated = useInvoicesStore((state) => state.hydrated);
-  const expenses = useExpensesStore((state) => state.expenses);
-  const expensesHydrated = useExpensesStore((state) => state.hydrated);
-  const quotes = useQuotesStore((state) => state.quotes);
-  const quotesHydrated = useQuotesStore((state) => state.hydrated);
+  const { invoices, hydrated: invoicesHydrated } = useDashboardInvoices();
+  const { expenses, hydrated: expensesHydrated } = useDashboardExpenses();
+  const { quotes, hydrated: quotesHydrated } = useDashboardQuotes();
   const { data: gst, isLoading: gstLoading } = useDashboardGstQuery();
 
   // "You're all caught up" is a false reassurance if it's shown before the
@@ -86,7 +86,7 @@ function KeyActions() {
 
   return (
     <Card data-tour="needs-attention" data-usertour="dashboard-attention" className="flex flex-col">
-      <CardHeader className="space-y-1">
+      <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle className="text-base">
             If you&apos;ve got 5 minutes
@@ -117,7 +117,7 @@ function KeyActions() {
         {actions.length === 0 ? (
           <AllClear />
         ) : (
-          <ul className="divide-y divide-border rounded-md border">
+          <ul className="divide-y divide-border overflow-hidden rounded-lg border">
             {actions.map((action) => (
               <li key={action.key}>
                 <ActionRow action={action} />
@@ -139,7 +139,7 @@ function KeyActions() {
  */
 function ActionRow({ action }: { action: KeyAction }) {
   return (
-    <div className="flex items-center gap-3 p-3">
+    <div className="flex items-center gap-3 px-3 py-2">
       <span
         className={cn(
           "grid size-8 shrink-0 place-items-center rounded-lg [&_svg]:size-4",
@@ -254,7 +254,7 @@ function FinishSetup() {
 
   return (
     <Card data-usertour="dashboard-attention" className="flex flex-col">
-      <CardHeader className="space-y-1.5">
+      <CardHeader>
         <div className="flex items-center justify-between">
           <CardTitle className="text-base">Finish setting up</CardTitle>
           <span className="text-xs tabular text-muted-foreground">

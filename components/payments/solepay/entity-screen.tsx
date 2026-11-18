@@ -172,6 +172,7 @@ export function SolePayEntityScreen() {
         <FormSection
           icon={Building2}
           title="Entity details"
+          tourId="solepay-entity-details"
           description="The business SolePay settles to."
           headerClassName={SECTION_HEADER}
           className="space-y-4 p-4 sm:p-6"
@@ -275,7 +276,10 @@ export function SolePayEntityScreen() {
             about the trading rather than about the business, and they're the
             ones people pause on.
           */}
-          <div className="space-y-4 border-t border-border pt-4">
+          <div
+            className="space-y-4 border-t border-border pt-4"
+            data-usertour="solepay-entity-trading"
+          >
             <p className="text-sm font-medium">Expected trading</p>
 
             <div className="grid gap-4 sm:grid-cols-2">
@@ -366,6 +370,7 @@ export function SolePayEntityScreen() {
         <FormSection
           icon={MapPin}
           title="Address information"
+          tourId="solepay-entity-address"
           description="Where the business trades from."
           headerClassName={SECTION_HEADER}
           className="space-y-4 p-4 sm:p-6"

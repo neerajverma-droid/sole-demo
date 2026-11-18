@@ -42,13 +42,15 @@ import { resolveTransactionFilters } from "@/lib/transaction-filters";
 import {
   currentFinancialYearLabel,
   tabForFilter,
+  filterFromStatusParam,
+  listLoadState,
 } from "@/lib/bank-transactions";
 import type { PageInfo } from "@/lib/products";
-import { TRANSACTION_FILTERS } from "@/lib/transactions";
 import { useRulesStore } from "@/stores/rules";
 import { useSessionStore } from "@/stores/session";
 import { useCountryContext } from "@/hooks/use-country-context";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { useTransactionsFilter } from "@/hooks/use-transactions-filter";
 import { useFiscalYearStart } from "@/hooks/use-fiscal-year-start";
 import {
   useBankTransactionBalances,
@@ -73,8 +75,10 @@ function pageInfo(page: number, pageSize: number, total: number): PageInfo {
 export function TransactionsScreen() {
   const router = useRouter();
   const setConnectOpen = useSetAtom(connectBankIntroOpenAtom);
-  const setFilter = useSetAtom(transactionsFilterAtom);
-  const filter = useAtomValue(transactionsFilterAtom);
+  // Tab changes go through the URL too, so a refresh keeps the open tab.
+  const [filter, setFilter] = useTransactionsFilter();
+  // Applying a deep link only moves the atom: the URL already says it.
+  const setFilterFromUrl = useSetAtom(transactionsFilterAtom);
   const period = useAtomValue(transactionsPeriodAtom);
   const setPeriod = useSetAtom(transactionsPeriodAtom);
   const filterDrafts = useAtomValue(transactionsFiltersAtom);
@@ -123,12 +127,19 @@ export function TransactionsScreen() {
   );
   const statusParam = params.get("status");
   React.useEffect(() => {
-    if (!statusParam) return;
-    const match = TRANSACTION_FILTERS.find(
-      (option) => option.toLowerCase() === statusParam.toLowerCase(),
-    );
-    if (match) setFilter(match);
-  }, [statusParam, setFilter]);
+    const match = filterFromStatusParam(statusParam);
+    if (match) setFilterFromUrl(match);
+  }, [statusParam, setFilterFromUrl]);
+
+  // The tab outlives the page in the atom: back on plain /transactions (from
+  // the sidebar, say) with Matched still open, write it to the URL once so a
+  // refresh doesn't drop it.
+  const tabRestored = React.useRef(false);
+  React.useEffect(() => {
+    if (tabRestored.current) return;
+    tabRestored.current = true;
+    if (!statusParam && filter !== "Review") setFilter(filter);
+  }, [statusParam, filter, setFilter]);
 
   /*
    * Deep link from a rule chip on the Matching rules page.
@@ -314,11 +325,21 @@ export function TransactionsScreen() {
           offers all three routes in, so the banner, the figures and the
           table's own "No transactions yet" would only be noise around it. */}
       {isEmpty ? (
-        <TransactionsIntro
-          onConnect={() => setConnectOpen(true)}
-          onManualEntry={() => router.push("/transactions/new")}
-          onBulkUpload={() => router.push("/transactions/bulk")}
-        />
+        <>
+          {/* The figures stay for an account with no transactions yet, as
+              zeroes, with the intro below as the way to the first one. */}
+          <TransactionsMetrics
+            totals={{
+              unmatched: { count: 0, total: 0 },
+              matched: { count: 0, total: 0 },
+            }}
+          />
+          <TransactionsIntro
+            onConnect={() => setConnectOpen(true)}
+            onManualEntry={() => router.push("/transactions/new")}
+            onBulkUpload={() => router.push("/transactions/bulk")}
+          />
+        </>
       ) : (
         <>
           {/* Between the feeds and the figures: it's about the rows below, but
@@ -347,17 +368,9 @@ export function TransactionsScreen() {
           {(() => {
             const tableProps = {
               transactions,
-              // First load, and the refetch after an undo, delete, match or
-              // approve — the rows on screen are stale then, so skeleton
-              // them. (Focus refetching is off app-wide, so nothing else
-              // refetches the same list.)
-              loading:
-                listQuery.isPending ||
-                (listQuery.isFetching && !listQuery.isPlaceholderData),
-              // A page/size change's own fetch, still in flight, while the
-              // previous page's rows stay on screen rather than resetting to
-              // a skeleton — `placeholderData` above is what keeps them.
-              fetching: listQuery.isFetching && listQuery.isPlaceholderData,
+              // Skeleton for a first load or a refetch after an action; a
+              // fade for a page change — see `listLoadState`.
+              ...listLoadState(listQuery),
               error:
                 listQuery.isError && !listQuery.data
                   ? listQuery.error.message || "Something went wrong."

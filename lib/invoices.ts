@@ -87,7 +87,59 @@ export type InvoiceLineItem = {
   claimType?: NdisClaimType;
   /** NDIS supports only — the date the support was delivered. ISO `YYYY-MM-DD`. */
   date?: string;
+  /**
+   * NDIS supports only. The prices the Pricing Schedule publishes for the picked
+   * support — what the Price tier dropdown offers. Not saved with the invoice: it
+   * is known only for a support picked from the catalogue in this session, and the
+   * price the user ends up with is whatever is in the price field.
+   */
+  priceOptions?: NdisPriceOptions;
+  /** NDIS supports only. The schedule `priceOptions` come from, e.g. `2026-27`. */
+  priceSchedule?: string;
 };
+
+/** The Pricing Schedule's three prices for one support. A tier it doesn't publish is absent. */
+export type NdisPriceOptions = {
+  national?: string;
+  remote?: string;
+  veryRemote?: string;
+};
+
+/**
+ * The tiers of the NDIS Pricing Schedule, in the order it prints them. A tier is
+ * picked from the Price dropdown on an NDIS line; "custom" is what the dropdown
+ * shows once the price has been typed over.
+ */
+export const NDIS_PRICE_TIERS = [
+  { value: "national", label: "National", key: "national" },
+  { value: "remote", label: "Remote", key: "remote" },
+  { value: "very_remote", label: "Very remote", key: "veryRemote" },
+] as const;
+export type NdisPriceTier = (typeof NDIS_PRICE_TIERS)[number]["value"];
+
+/**
+ * The NDIS Pricing Schedule the support catalogue's prices currently come from
+ * (the `price_schedule` stored with each support), and when it took effect.
+ */
+export const NDIS_PRICING_SCHEDULE = "2026-27";
+export const NDIS_PRICING_SCHEDULE_EFFECTIVE = "1 July 2026";
+
+/**
+ * Which published tier a price equals, or `"custom"` for anything else. Compared
+ * as numbers so `73.5` and `73.50` are the same price.
+ */
+export function ndisPriceTierOf(
+  price: string,
+  options: NdisPriceOptions | undefined,
+): NdisPriceTier | "custom" {
+  const current = Number.parseFloat(price);
+  if (!options || !Number.isFinite(current)) return "custom";
+  for (const tier of NDIS_PRICE_TIERS) {
+    const published = Number.parseFloat(options[tier.key] ?? "");
+    if (Number.isFinite(published) && published === current) return tier.value;
+  }
+  return "custom";
+}
 
 /**
  * How a line's discount is measured — percentage points off the line, or a
@@ -110,21 +162,46 @@ export function toDiscountType(value: string | undefined): DiscountType {
   );
 }
 
-/** What a line's quantity counts. Sent as `qty_type`. */
+/**
+ * What a line's quantity counts. Sent as `qty_type`. These four are what an
+ * ordinary invoice or quote line offers.
+ */
 export const QTY_TYPES = [
   { value: "items", label: "Items" },
   { value: "hours", label: "Hours" },
   { value: "days", label: "Days" },
   { value: "km", label: "Km" },
 ] as const;
-export type QtyType = (typeof QTY_TYPES)[number]["value"];
+
+/**
+ * What an NDIS support line's quantity counts: the four an ordinary line has,
+ * plus the Week, Month and Year units the NDIS Pricing Schedule adds (weekly
+ * SIL, Plan Management's monthly fee, yearly Transport). So a support still
+ * offers Items and Km — the schedule's "Each" is `items`, its "Hour" is
+ * `hours` — and only NDIS lines offer weeks, months and years.
+ */
+export const NDIS_QTY_TYPES = [
+  ...QTY_TYPES,
+  { value: "weeks", label: "Weeks" },
+  { value: "months", label: "Months" },
+  { value: "years", label: "Years" },
+] as const;
+
+export type QtyType =
+  | (typeof QTY_TYPES)[number]["value"]
+  | (typeof NDIS_QTY_TYPES)[number]["value"];
 
 export const DEFAULT_QTY_TYPE: QtyType = "items";
 
-/** Only the four the server understands; anything else falls back to items. */
+/**
+ * Reads a stored quantity type back. Accepts everything the server stores,
+ * including the NDIS-only weeks / months / years, so a saved claim line keeps
+ * its unit when it's opened; anything else falls back to items.
+ */
 export function toQtyType(value: string | undefined): QtyType {
   return (
-    QTY_TYPES.find((entry) => entry.value === value)?.value ?? DEFAULT_QTY_TYPE
+    [...QTY_TYPES, ...NDIS_QTY_TYPES].find((entry) => entry.value === value)
+      ?.value ?? DEFAULT_QTY_TYPE
   );
 }
 
@@ -180,6 +257,17 @@ export type InvoiceDeposit = {
   selectedItems?: number[];
   /** When the deposit itself falls due, if it's earlier than the invoice. ISO `YYYY-MM-DD`. */
   dueDate?: string;
+};
+
+export type InvoiceMatchedEntry = {
+  /** The journal entry the match posted — the handle the undo endpoint takes. */
+  journalEntryId: string;
+  /** What the bank feed called the transaction, when it has a name for it. */
+  description: string | null;
+  /** How much of the invoice this transaction covered. */
+  amount: number;
+  /** When it was matched, as the server sent it. */
+  matchedAt: string | null;
 };
 
 export type InvoiceAttachment = {
@@ -290,10 +378,50 @@ export const NDIS_CLAIM_TYPES = [
   "Report Writing",
   "Irregular SIL (Supported Independent Living)",
   "NDIA Requested Reports",
+  // The "…Telehealth" items of the NDIS Pricing Schedule 2026-27.
+  "Telehealth",
 ] as const;
 export type NdisClaimType = (typeof NDIS_CLAIM_TYPES)[number];
 
 export const DEFAULT_NDIS_CLAIM_TYPE: NdisClaimType = "Standard Service";
+
+/**
+ * The claim type a catalogue item stands for, from the last part of its name in
+ * the NDIS Pricing Schedule ("… - Cancellation", "… - Provider Travel"). The
+ * list above is the fixed set a claim can use, so the catalogue's wording is
+ * translated onto it:
+ *
+ *   Direct Service          → Standard Service
+ *   Provider Travel         → Travel – Time
+ *   non-labour costs        → Travel – Non-Labour Costs
+ *   Cancellation, Non-Face-to-Face, NDIA Requested Reports, Telehealth → as named
+ *
+ * Anything else — a rate band such as "Weekday Daytime", or a product sub-type —
+ * isn't a claim type, so it returns undefined and the line keeps the type it has.
+ */
+export function claimTypeFromCatalogue(
+  value: string | null | undefined,
+): NdisClaimType | undefined {
+  const key = (value ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  switch (key) {
+    case "directservice":
+      return "Standard Service";
+    case "providertravel":
+      return "Travel – Time";
+    case "nonlabourcosts":
+      return "Travel – Non-Labour Costs";
+    case "cancellation":
+      return "Cancellation";
+    case "nonfacetoface":
+      return "Non-Face-to-Face (NF2F)";
+    case "ndiarequestedreports":
+      return "NDIA Requested Reports";
+    case "telehealth":
+      return "Telehealth";
+    default:
+      return undefined;
+  }
+}
 
 /**
  * Reads a stored claim type back to one of the list above. Matched on the
@@ -313,6 +441,12 @@ export function toNdisClaimType(value: string | undefined): NdisClaimType {
 export type Invoice = {
   id: string;
   number: string;
+  /**
+   * Whether this invoice currently holds stock for its tracked lines. A draft
+   * holds none — stock is taken when it's sent. Only the detail endpoint says;
+   * absent elsewhere.
+   */
+  stockDeducted?: boolean;
   /** Null once the contact is deleted; `clientName` is then the only record. */
   clientId: string | null;
   /** Snapshot of the name at issue time, so deleting a contact can't blank it. */
@@ -450,6 +584,19 @@ export type Invoice = {
    * drives.
    */
   possibleMatch: number;
+
+  /** Raised by a bulk upload rather than in the editor, which can't edit it afterwards. */
+  bulkUpload?: boolean;
+
+  /**
+   * Each bank transaction matched to this invoice, newest first, as the server
+   * has them on the books. One row per journal entry, which is also what an
+   * undo is addressed by — so this is what "Undo" acts on, not
+   * `matchedTransactionId`, which a fully matched invoice no longer carries.
+   */
+  matchedEntries?: InvoiceMatchedEntry[];
+  /** Paid through SolePay (Payrix), which is settled online and has nothing to undo here. */
+  paidWithPayrix?: boolean;
 
   /**
    * Which visual/PDF layout this invoice was raised on — the server's own id,
@@ -804,6 +951,79 @@ export function invoiceOutstanding(invoice: Invoice): number {
 }
 
 /**
+ * How an invoice's money divides between what has been paid and what is still
+ * owed, in AUD. A part-paid invoice is both: the part received counts as paid
+ * and only the balance is still owed — neither the whole amount as paid nor
+ * the whole amount as owed. A draft hasn't been issued, so it is neither.
+ */
+export function invoiceSplit(invoice: Invoice): { paid: number; owed: number } {
+  if (invoice.status === "Draft") return { paid: 0, owed: 0 };
+  const total = invoiceAmount(invoice);
+  if (invoice.status === "Paid") return { paid: total, owed: 0 };
+  // Never more than the invoice is for, whatever the payments add up to.
+  const paid = Math.min(total, Math.max(0, invoice.paidAmount));
+  return { paid, owed: Math.max(0, total - paid) };
+}
+
+export type InvoiceMoneyBand = {
+  /** Invoices with money in this band. */
+  count: number;
+  /** Of those, how many are part-paid. */
+  partPaid: number;
+  amount: number;
+};
+
+/**
+ * The Paid / Pending / Overdue figures on the invoice summary, split by money
+ * rather than by status. Paid is what has been received — a part-paid invoice
+ * contributes the part it has been paid; Pending and Overdue are only what is
+ * still owed, so a half-paid invoice is half in Paid and half in Pending. The
+ * three add up to what was invoiced (drafts, which aren't issued, are left out).
+ */
+export function invoiceMoneyBands(invoices: Invoice[]): {
+  paid: InvoiceMoneyBand;
+  pending: InvoiceMoneyBand;
+  overdue: InvoiceMoneyBand;
+} {
+  const rows = invoices.map((invoice) => ({ invoice, ...invoiceSplit(invoice) }));
+
+  const band = (
+    statuses: InvoiceStatus[],
+    money: "paid" | "owed",
+  ): InvoiceMoneyBand => {
+    const matching = rows.filter(
+      (row) => statuses.includes(row.invoice.status) && row[money] > 0,
+    );
+    return {
+      count: matching.length,
+      partPaid: matching.filter((row) => row.invoice.status === "Partially paid")
+        .length,
+      amount: matching.reduce((sum, row) => sum + row[money], 0),
+    };
+  };
+
+  return {
+    paid: band(["Paid", "Partially paid"], "paid"),
+    pending: band(["Outstanding", "Partially paid"], "owed"),
+    overdue: band(["Overdue"], "owed"),
+  };
+}
+
+/**
+ * Whether an invoice has been issued and still has something to collect — the
+ * one rule behind both the Match column and the row's Mark as paid button, so
+ * the two appear and disappear together. Only a draft (not issued yet) and a
+ * settled invoice (nothing owing) are left out. Whether the client was emailed
+ * doesn't matter: Save & Print leaves an invoice saved but unsent, and it can
+ * still be paid or matched. An invoice the bank feed already has a candidate
+ * for counts regardless (`suggestions`).
+ */
+export function invoiceAwaitingPayment(invoice: Invoice, suggestions = 0): boolean {
+  if (invoice.status === "Draft" || invoiceOutstanding(invoice) <= 0) return false;
+  return suggestions > 0 || OUTSTANDING_STATUSES.includes(invoice.status);
+}
+
+/**
  * The balance still owed, in the invoice's own currency. Payments are
  * recorded in AUD with no independent "remaining in NZD" figure to read, so
  * this holds the same *proportion* of the document total that the AUD
@@ -816,6 +1036,231 @@ export function invoiceDocumentOutstanding(invoice: Invoice): number {
   return (
     (invoiceOutstanding(invoice) / audTotal) * invoiceDocumentAmount(invoice)
   );
+}
+
+/**
+ * Whether the editor may offer "Save as draft".
+ *
+ * A new invoice and a copy can; an invoice being edited can only if it is still
+ * a draft itself. Once it has gone out — sent, overdue, partially paid or paid —
+ * it can't go back to being a draft, and the server wouldn't honour it anyway
+ * (an edit keeps the status the invoice already has). `status` is undefined
+ * while the record loads, which counts as "not known to be a draft".
+ */
+export function canSaveInvoiceAsDraft(
+  editing: boolean,
+  status: InvoiceStatus | undefined,
+): boolean {
+  return !editing || status === "Draft";
+}
+
+/**
+ * What "Undo" does on a paid or partially paid invoice, or null when there is
+ * nothing to undo from this list.
+ *
+ * The old list's rule: a cash payment (not one taken through SolePay) is
+ * reversed by marking the invoice unpaid; otherwise the payment is a bank match
+ * and is reversed by undoing the matched transaction(s). Anything else —
+ * settled online, say — has no record here to take back.
+ */
+export function invoiceUndoAction(
+  invoice: Pick<
+    Invoice,
+    "status" | "paidWithCash" | "paidWithPayrix" | "matchedEntries"
+  >,
+): "cash" | "match" | null {
+  if (invoice.status !== "Paid" && invoice.status !== "Partially paid") {
+    return null;
+  }
+  if (invoice.paidWithCash && !invoice.paidWithPayrix) return "cash";
+  return (invoice.matchedEntries?.length ?? 0) > 0 ? "match" : null;
+}
+
+/**
+ * Why an invoice can't be edited, or undefined when it can.
+ *
+ * The old app's rule: a paid invoice opened in view mode only, a partially paid
+ * one had no Edit at all, and a bulk-uploaded one was never editable. (The
+ * server independently refuses to change a settled invoice's amounts or client.)
+ */
+export function invoiceEditBlock(
+  invoice: Pick<Invoice, "status" | "bulkUpload">,
+): string | undefined {
+  if (invoice.bulkUpload) return "Bulk-uploaded invoices can't be edited.";
+  if (invoice.status === "Paid") {
+    return "This invoice is already paid and can't be edited. You can open it in view mode only.";
+  }
+  if (invoice.status === "Partially paid") {
+    return "Partially paid invoices can't be edited.";
+  }
+  return undefined;
+}
+
+/** A document that bills nothing can't be raised. */
+export function invoiceTotalIssue(total: number): string | undefined {
+  return total > 0 ? undefined : "Invoice total must be greater than 0.";
+}
+
+const INVOICE_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** The address an invoice is sent from has to be an address. */
+export function invoiceEmailError(value: string): string | undefined {
+  return INVOICE_EMAIL_PATTERN.test(value.trim())
+    ? undefined
+    : "Please enter a valid invoice email.";
+}
+
+/**
+ * What is wrong with the deposit as it stands *now*. The deposit dialog checks
+ * its own fields when it is applied, but the invoice can change afterwards — a
+ * line removed, a discount added — and a deposit that no longer fits the total
+ * would otherwise only be found by the server rejecting the save.
+ */
+export function depositIssue(
+  deposit: InvoiceDeposit | null,
+  context: {
+    total: number;
+    items: InvoiceLineItem[];
+    gstPercent: number;
+    issued: string;
+    due: string;
+  },
+): string | undefined {
+  if (!deposit) return undefined;
+  const { total, items, gstPercent, issued, due } = context;
+
+  if (total <= 0) return "Add at least one item to request a deposit.";
+
+  const value = toNumber(deposit.value);
+  if (deposit.mode === "percent") {
+    if (value <= 0) return "Deposit percentage must be greater than 0.";
+    if (value >= 100) return "Deposit percentage must be less than 100.";
+  } else if (deposit.mode === "amount") {
+    if (value <= 0) return "Deposit amount must be greater than 0.";
+    if (value >= total - 0.005) {
+      return `Deposit amount must be less than ${total.toFixed(2)}.`;
+    }
+  } else {
+    // The lines that can be chosen are the ones with something on them, which
+    // is what the deposit dialog lists.
+    const selectable = items
+      .map((item, index) => ({
+        index,
+        amount: lineTotals(item, gstPercent).amount,
+        described: item.description.trim().length > 0,
+      }))
+      .filter((entry) => entry.described || entry.amount > 0);
+    if (selectable.length <= 1) {
+      return "Add at least two invoice items to use chosen line items.";
+    }
+    const chosen = selectable.filter((entry) =>
+      (deposit.selectedItems ?? []).includes(entry.index),
+    );
+    if (chosen.length === 0) {
+      return "Select at least one invoice item for the deposit.";
+    }
+    if (chosen.length >= selectable.length) {
+      return "At least one item must remain unchecked.";
+    }
+    const amount = chosen.reduce((sum, entry) => sum + entry.amount, 0);
+    if (amount <= 0) {
+      return "Selected deposit items must have an amount greater than 0.";
+    }
+    if (amount >= total - 0.005) {
+      return "Deposit amount must be less than the invoice total.";
+    }
+  }
+
+  if (!deposit.dueDate) return "Choose when the deposit is due.";
+  if (deposit.dueDate < issued) {
+    return "Deposit due date cannot be earlier than the invoice date.";
+  }
+  if (due && deposit.dueDate > due) {
+    return "Deposit due date cannot be later than the invoice due date.";
+  }
+  return undefined;
+}
+
+/**
+ * The follow-up reminder, when it is switched on: how many days before the due
+ * date, and what it is about. Both were required by the old app, and the days
+ * couldn't reach back past the invoice date (a reminder can't fire before the
+ * invoice exists).
+ */
+export function followUpIssue(
+  draft: Pick<
+    InvoiceDraft,
+    "followUpReminder" | "followUpDays" | "followUpNote" | "issued" | "due"
+  >,
+): string | undefined {
+  if (!draft.followUpReminder) return undefined;
+
+  const raw = (draft.followUpDays ?? "").trim();
+  if (!raw) return "Enter how many days before the due date to follow up.";
+  const days = Number(raw);
+  if (!Number.isInteger(days) || days < 1) {
+    return "Follow-up days must be a whole number, 1 or more.";
+  }
+  const available = daysBetween(draft.issued, draft.due);
+  if (days > available) {
+    return `Follow-up can't be more than ${available} ${
+      available === 1 ? "day" : "days"
+    } before the due date — that's all the invoice has.`;
+  }
+  if (!(draft.followUpNote ?? "").trim()) {
+    return "Describe the follow-up work.";
+  }
+  return undefined;
+}
+
+/**
+ * Lines that ask for more of a tracked product than there is.
+ *
+ * `available` is the stock on hand per product id (tracked products only);
+ * `onInvoice` is what this same invoice already holds (only a sent invoice holds
+ * any — a draft takes no stock), because the server only moves the difference
+ * when it's edited — editing an invoice that sold 5 of 5 shouldn't be refused
+ * for selling 5. Quotes pass nothing: a quote never holds stock. Quantities
+ * are added up per product, so two lines of the same item can't each fit while
+ * together exceeding the shelf.
+ */
+export function stockIssues(
+  items: InvoiceLineItem[],
+  available: ReadonlyMap<string, number>,
+  onInvoice: ReadonlyMap<string, number> = new Map(),
+): InvoiceIssue[] {
+  const wanted = new Map<string, number>();
+  for (const item of items) {
+    if (!item.productId || !available.has(item.productId)) continue;
+    wanted.set(
+      item.productId,
+      (wanted.get(item.productId) ?? 0) + toNumber(item.quantity),
+    );
+  }
+
+  const issues: InvoiceIssue[] = [];
+  for (const item of items) {
+    if (!item.productId) continue;
+    const have = available.get(item.productId);
+    if (have === undefined) continue;
+    // Stock is counted in whole units, so a tracked line can't sell 2.5.
+    const quantity = item.quantity.trim();
+    if (quantity && !/^\d+$/.test(quantity)) {
+      issues.push({
+        key: `item-${item.id}-quantity`,
+        message: "Stock items need a whole-number quantity.",
+      });
+      continue;
+    }
+    const limit = have + (onInvoice.get(item.productId) ?? 0);
+    if ((wanted.get(item.productId) ?? 0) > limit) {
+      issues.push({
+        key: `item-${item.id}-quantity`,
+        message: `Only ${limit} in stock.`,
+      });
+    }
+  }
+  return issues;
 }
 
 /**
@@ -851,6 +1296,14 @@ function isBlankOrValid(value: string, whole: boolean): boolean {
   return whole ? Number.isInteger(parsed) : true;
 }
 
+/** Money fields (a price, a discount) stop at cents. */
+export const MONEY_DECIMALS = 2;
+
+function hasTooManyDecimals(value: string): boolean {
+  const fraction = value.trim().split(".")[1];
+  return !!fraction && fraction.length > MONEY_DECIMALS;
+}
+
 /**
  * Live numeric errors — shown the moment a value is invalid, not gated on
  * submit, because silently correcting the field reads as broken.
@@ -866,11 +1319,10 @@ export function lineItemErrors(item: InvoiceLineItem): {
     discountPercent?: string;
   } = {};
 
-  // NDIS supports are claimed in hours, so 1.5 is a legitimate quantity there
-  // — and so is any line counted in hours or kilometres (a KM Tracker trip is
-  // billed as 12.38 km, never rounded to a whole one).
-  const wholeOnly =
-    !isNdisLineItem(item) && item.qtyType !== "hours" && item.qtyType !== "km";
+  // Only a line counted in hours or kilometres can carry a fraction (a KM
+  // Tracker trip is billed as 12.38 km, never rounded to a whole one) — on an
+  // NDIS support as much as on an ordinary line.
+  const wholeOnly = item.qtyType !== "hours" && item.qtyType !== "km";
   if (!isBlankOrValid(item.quantity, wholeOnly)) {
     errors.quantity = wholeOnly
       ? "Enter a whole number (0 or more)."
@@ -878,6 +1330,8 @@ export function lineItemErrors(item: InvoiceLineItem): {
   }
   if (!isBlankOrValid(item.price, false)) {
     errors.price = "Enter a valid price — no letters or negatives.";
+  } else if (hasTooManyDecimals(item.price)) {
+    errors.price = "Price can have up to 2 decimal places.";
   }
   const amountDiscount =
     (item.discountType ?? DEFAULT_DISCOUNT_TYPE) === "amount";
@@ -885,6 +1339,8 @@ export function lineItemErrors(item: InvoiceLineItem): {
     errors.discountPercent = amountDiscount
       ? "Enter a valid amount — no letters or negatives."
       : "Enter a valid percentage.";
+  } else if (hasTooManyDecimals(item.discountPercent)) {
+    errors.discountPercent = "Discount can have up to 2 decimal places.";
   } else if (!amountDiscount && toNumber(item.discountPercent) > 100) {
     errors.discountPercent = "Discount can't exceed 100%.";
   } else if (amountDiscount) {
@@ -901,6 +1357,12 @@ export type InvoiceIssue = {
   /** Matches the field's key in the editor's focus map. */
   key: string;
   message: string;
+  /**
+   * A required value that is simply not there yet. Shown only once a save has
+   * been attempted: while someone is still typing a line, its other boxes are
+   * empty because they haven't got to them, not because they forgot.
+   */
+  submitOnly?: boolean;
 };
 
 /** The parts of a draft that validate identically for invoices and quotes. */
@@ -910,6 +1372,59 @@ export type DocumentDraft = {
   number: string;
   items: InvoiceLineItem[];
 };
+
+/**
+ * What is missing from each line, field by field, so the editor can mark the
+ * very box that was forgotten rather than say something about the table.
+ *
+ * A line someone has started (anything typed in its description, quantity or
+ * price) has to be complete. A line with nothing in it is a spare row and is
+ * left alone — unless nothing has been typed in any line, when the first one
+ * stands in for "you haven't billed anything yet" and gets all three marked.
+ */
+function lineItemIssues(items: InvoiceLineItem[]): InvoiceIssue[] {
+  const started = (item: InvoiceLineItem) =>
+    !!(item.description.trim() || item.quantity.trim() || item.price.trim());
+  const anyStarted = items.some(started);
+
+  const issues: InvoiceIssue[] = [];
+  items.forEach((item, index) => {
+    const errors = lineItemErrors(item);
+    const incomplete =
+      !isLineItemFilled(item) && (started(item) || (!anyStarted && index === 0));
+
+    if (incomplete && !item.description.trim()) {
+      issues.push({
+        key: `item-${item.id}-description`,
+        message: "Enter a description.",
+        submitOnly: true,
+      });
+    }
+    for (const field of ["quantity", "price"] as const) {
+      const message = errors[field];
+      // Letters and negatives already have their own live message.
+      if (message) {
+        issues.push({ key: `item-${item.id}-${field}`, message });
+      } else if (incomplete && toNumber(item[field]) <= 0) {
+        const name = field === "quantity" ? "Quantity" : "Price";
+        issues.push({
+          key: `item-${item.id}-${field}`,
+          message: item[field].trim()
+            ? `${name} must be more than 0.`
+            : `Enter a ${name.toLowerCase()}.`,
+          submitOnly: true,
+        });
+      }
+    }
+    if (errors.discountPercent) {
+      issues.push({
+        key: `item-${item.id}-discountPercent`,
+        message: errors.discountPercent,
+      });
+    }
+  });
+  return issues;
+}
 
 /**
  * Required-field issues, in the order the fields appear on screen — so the
@@ -924,12 +1439,18 @@ export function documentIssues(
   const issues: InvoiceIssue[] = [];
 
   // "0" is the backend's "no client" (a template's client_id), never a real one.
+  // A name with no id behind it doesn't count either: the document is billed to
+  // a client record, so the client has to be picked from the list rather than
+  // merely have a name (the old app said "Please select a valid client from the
+  // list" for the same case).
   const clientId =
     draft.clientId && draft.clientId !== "0" ? draft.clientId : null;
-  if (!clientId && !draft.clientName.trim()) {
+  if (!clientId) {
     issues.push({
       key: "client",
-      message: `Select a client for this ${noun}.`,
+      message: draft.clientName.trim()
+        ? `Pick this ${noun}'s client from the list.`
+        : `Select a client for this ${noun}.`,
     });
   }
 
@@ -937,24 +1458,37 @@ export function documentIssues(
     issues.push({ key: "number", message: `Enter a ${noun} number.` });
   }
 
-  if (!draft.items.some(isLineItemFilled)) {
-    issues.push({
-      key: `item-${draft.items[0]?.id ?? "0"}-description`,
-      message:
-        "Add at least one line item with a description, quantity and price.",
-    });
-  }
-
-  for (const item of draft.items) {
-    const errors = lineItemErrors(item);
-    for (const field of ["quantity", "price", "discountPercent"] as const) {
-      const message = errors[field];
-      if (message) issues.push({ key: `item-${item.id}-${field}`, message });
-    }
-  }
+  issues.push(...lineItemIssues(draft.items));
 
   return issues;
 }
+
+/**
+ * Whether a document has anything in it worth saving as a draft.
+ *
+ * A draft may be incomplete — no client, no dates, a half-written line — but a
+ * completely blank form isn't worth a row in the list. "Something" is a client,
+ * a description, notes, or one line with a description or a price. The server
+ * applies the same rule, so the two agree on what an empty draft is.
+ */
+export function documentHasDraftContent(
+  draft: DocumentDraft & { description?: string; notes?: string },
+): boolean {
+  const hasClient = !!draft.clientId && draft.clientId !== "0";
+  return (
+    hasClient ||
+    !!draft.clientName?.trim() ||
+    !!draft.description?.trim() ||
+    !!draft.notes?.trim() ||
+    draft.items.some(
+      (item) => item.description.trim().length > 0 || toNumber(item.price) > 0,
+    )
+  );
+}
+
+/** Said when "Save as draft" is pressed on a form with nothing in it. */
+export const EMPTY_DRAFT_MESSAGE =
+  "Add something to this draft before saving it — a client, a description or a line item.";
 
 /**
  * What an NDIS invoice needs on top of the shared required fields. Kept
@@ -1399,7 +1933,7 @@ type ApiInvoiceClient = {
   currency?: string | null;
 };
 
-type ApiInvoice = {
+export type ApiInvoice = {
   invoice_id: string | number;
   invoice_no?: string;
   client_id?: string | number | null;
@@ -1416,6 +1950,16 @@ type ApiInvoice = {
   bank_transaction_id?: string | number | null;
   /** A count of bank-feed candidates the server has already scored for this invoice. */
   possible_match?: number;
+  /** 1 when the invoice came from a bulk upload. */
+  bulk_upload?: boolean | number;
+  /** One per matched bank transaction. */
+  matched_journal_entries?: {
+    journal_entry_id?: string | number | null;
+    transaction_description?: string | null;
+    matched_amount?: number | string | null;
+    matched_at?: string | null;
+  }[] | null;
+  paid_with_payrix?: boolean | number;
   is_deposit?: boolean | number;
   payment_structure?: string;
   deposit_type?: string;
@@ -1497,7 +2041,7 @@ function mapInvoiceDeposit(raw: ApiInvoice): InvoiceDeposit | null {
   };
 }
 
-function mapApiInvoice(raw: ApiInvoice, todayIso: string): Invoice {
+export function mapApiInvoice(raw: ApiInvoice, todayIso: string): Invoice {
   const due = apiDate(raw.due_date);
   const total = apiNumber(raw.total);
   const remaining = apiNumber(raw.remainingAmount);
@@ -1506,10 +2050,12 @@ function mapApiInvoice(raw: ApiInvoice, todayIso: string): Invoice {
   return {
     id: String(raw.invoice_id),
     number: raw.invoice_no ?? "",
+    // 0 is the backend's "no client yet" — what a draft saved before picking
+    // one is stored as — so it reads back as no client, not as client "0".
     clientId:
-      raw.client_id != null
+      raw.client_id != null && Number(raw.client_id) > 0
         ? String(raw.client_id)
-        : raw.client?.client_id != null
+        : raw.client?.client_id != null && Number(raw.client.client_id) > 0
           ? String(raw.client.client_id)
           : null,
     clientName: raw.client?.name ?? "",
@@ -1559,6 +2105,20 @@ function mapApiInvoice(raw: ApiInvoice, todayIso: string): Invoice {
     matchedTransactionId:
       raw.bank_transaction_id != null ? String(raw.bank_transaction_id) : null,
     possibleMatch: apiNumber(raw.possible_match),
+    bulkUpload: Number(raw.bulk_upload) === 1,
+    matchedEntries: (raw.matched_journal_entries ?? []).flatMap((entry) =>
+      Number(entry.journal_entry_id) > 0
+        ? [
+            {
+              journalEntryId: String(entry.journal_entry_id),
+              description: entry.transaction_description?.trim() || null,
+              amount: apiNumber(entry.matched_amount ?? undefined),
+              matchedAt: entry.matched_at ? apiDate(entry.matched_at) : null,
+            },
+          ]
+        : [],
+    ),
+    paidWithPayrix: Number(raw.paid_with_payrix) === 1,
     templateId: raw.template_id != null ? String(raw.template_id) : undefined,
     isRecurring: Number(raw.is_recurring_invoice) === 1,
     paidWithCash: Number(raw.paid_with_cash) === 1,
@@ -1708,6 +2268,80 @@ export async function fetchInvoicesPage(
 
 export type InvoiceStatusCounts = Record<InvoiceTab, number>;
 
+/** One period of the summary card, as the server adds it up. */
+export type InvoicePeriodStats = {
+  /** Paid + pending + overdue, in the business's currency. */
+  issued: number;
+  /** Drafts in the period — counted, but not part of `issued`. */
+  draftCount: number;
+  paid: InvoiceMoneyBand;
+  pending: InvoiceMoneyBand;
+  overdue: InvoiceMoneyBand & { oldestDays: number };
+};
+
+export type InvoiceSummaryStats = {
+  /** The business's current financial year, by invoice date. */
+  year: InvoicePeriodStats;
+  /** The current calendar month, by invoice date. */
+  month: InvoicePeriodStats;
+};
+
+type ApiMoneyBand = {
+  count?: number;
+  part_paid?: number;
+  amount?: number | string;
+  oldest_days?: number;
+};
+
+type ApiPeriodStats = {
+  issued?: number | string;
+  draft_count?: number;
+  paid?: ApiMoneyBand;
+  pending?: ApiMoneyBand;
+  overdue?: ApiMoneyBand;
+};
+
+function mapMoneyBand(raw: ApiMoneyBand | undefined): InvoiceMoneyBand {
+  return {
+    count: apiNumber(raw?.count),
+    partPaid: apiNumber(raw?.part_paid),
+    amount: apiNumber(raw?.amount),
+  };
+}
+
+function mapPeriodStats(raw: ApiPeriodStats | undefined): InvoicePeriodStats {
+  return {
+    issued: apiNumber(raw?.issued),
+    draftCount: apiNumber(raw?.draft_count),
+    paid: mapMoneyBand(raw?.paid),
+    pending: mapMoneyBand(raw?.pending),
+    overdue: {
+      ...mapMoneyBand(raw?.overdue),
+      oldestDays: apiNumber(raw?.overdue?.oldest_days),
+    },
+  };
+}
+
+/**
+ * The invoice summary card's Paid / Pending / Overdue figures for this
+ * financial year and this month, added up on the server — so they cover every
+ * invoice, not just the newest 200 `fetchInvoices` returns. The server picks
+ * the financial year from the business's country, and rules the card used to
+ * apply itself (part-paid split, drafts left out) are applied there.
+ */
+export async function fetchInvoiceSummaryStats(): Promise<InvoiceSummaryStats> {
+  const response = await api.get<{
+    success: boolean;
+    data?: { stats?: { year?: ApiPeriodStats; month?: ApiPeriodStats } };
+  }>(apiRoutes.invoice.statusCounts, { params: { include_stats: 1 } });
+
+  const stats = response.data?.data?.stats;
+  return {
+    year: mapPeriodStats(stats?.year),
+    month: mapPeriodStats(stats?.month),
+  };
+}
+
 /**
  * Status-tab counts across the whole account — a real server-side aggregate,
  * not a count of whatever page (or 200-row cap) happens to be loaded
@@ -1779,12 +2413,19 @@ type ApiInvoiceItem = {
 };
 
 type ApiInvoiceDocument = {
-  id: string | number;
+  id?: string | number;
+  /** The same id under the name the older invoice endpoint uses. */
+  document_id?: string | number;
   file_name?: string;
   file_path?: string;
+  /** Where the stored file can be opened — `file_path` is only a bucket key on older rows. */
+  file_url?: string;
+  file_size?: number | null;
 };
 
 type ApiInvoiceDetail = ApiInvoice & {
+  /** 1 while the invoice's tracked lines are out of stock (it isn't a draft). */
+  stock_deducted?: number | boolean | null;
   invoice_item?: ApiInvoiceItem[] | null;
   documents?: ApiInvoiceDocument[] | null;
   notes?: string;
@@ -1883,10 +2524,11 @@ function mapApiInvoiceItem(
 
 function mapApiDocument(doc: ApiInvoiceDocument): InvoiceAttachment {
   return {
-    id: String(doc.id),
+    id: String(doc.id ?? doc.document_id),
     name: doc.file_name || doc.file_path?.split("/").pop() || "Attachment",
-    // The API doesn't return a stored file's size, only its name/path.
-    size: 0,
+    // Zero when the server couldn't read the size, which the card then leaves out.
+    size: Number(doc.file_size) || 0,
+    url: doc.file_url || undefined,
   };
 }
 
@@ -1916,6 +2558,7 @@ export async function fetchInvoiceDetail(id: string): Promise<Invoice> {
 
   return {
     ...base,
+    stockDeducted: Number(raw.stock_deducted) === 1,
     items: raw.invoice_item?.length
       ? raw.invoice_item.map((item) => mapApiInvoiceItem(item, ndis))
       : base.items,
@@ -1993,13 +2636,53 @@ export function daysBetween(from: string, to: string): number {
  * Row actions — delete, mark sent, mark paid by cash, send reminder
  * ------------------------------------------------------------------ */
 
-/** Deletes one or more invoices. A paid or partially-paid one is skipped server-side. */
-export async function deleteInvoicesApi(ids: string[]): Promise<void> {
-  const response = await api.post<{ success: boolean; message?: string }>(
-    apiRoutes.invoice.bulkDelete,
-    { invoice_ids: ids.map(Number) },
-  );
+/**
+ * Deletes one or more invoices, and says how many it actually did.
+ *
+ * A paid or partially-paid invoice is never deleted: asked alone, the server
+ * refuses with a 400 and its own message; in a selection with others it deletes
+ * the rest and reports the skipped ones in the (successful) response — so the
+ * counts are what tells the caller whether everything asked for went.
+ */
+export async function deleteInvoicesApi(
+  ids: string[],
+): Promise<{ deleted: number; skipped: number }> {
+  const response = await api.post<{
+    success: boolean;
+    message?: string;
+    data?: { deleted_count?: number; skipped_count?: number };
+  }>(apiRoutes.invoice.bulkDelete, { invoice_ids: ids.map(Number) });
   assertApiSuccess(response.data, "Couldn't delete that invoice.");
+
+  const counts = response.data?.data;
+  return {
+    // A response without counts is a plain success: everything went.
+    deleted: Number(counts?.deleted_count ?? ids.length),
+    skipped: Number(counts?.skipped_count ?? 0),
+  };
+}
+
+/**
+ * Emails an invoice to its client — CC'ing the contacts picked on the invoice —
+ * and marks it sent. Resolves to every address it went to, client first.
+ */
+export async function sendInvoiceToClientApi(
+  invoiceId: string,
+): Promise<string[]> {
+  const response = await api.post<{
+    success: boolean;
+    message?: string;
+    data?: { recipients?: { to?: string[]; cc?: string[] } };
+  }>(apiRoutes.invoice.sendToClient(invoiceId));
+  assertApiSuccess(response.data, "Couldn't send that invoice.");
+  const recipients = response.data?.data?.recipients;
+  return [...(recipients?.to ?? []), ...(recipients?.cc ?? [])];
+}
+
+/** "a", "a and b", "a, b and c" — for naming who an email went to. */
+export function formatRecipientList(emails: string[]): string {
+  if (emails.length <= 1) return emails[0] ?? "";
+  return `${emails.slice(0, -1).join(", ")} and ${emails[emails.length - 1]}`;
 }
 
 /** Flags an invoice as sent without emailing it — see the backend route's own comment. */
@@ -2083,6 +2766,15 @@ export async function stopRecurringInvoiceApi(invoiceId: string): Promise<void> 
  * Attachments — POST/DELETE /documents
  * ------------------------------------------------------------------ */
 
+/**
+ * Where the listing's Attachments dialog keeps what it fetched. Separate from
+ * the invoice's own `["invoice", id]` entry on purpose: that one is shared with
+ * the editor and cached for minutes, and a list of files that can be changed
+ * from two screens must never be read back from a copy that has gone stale.
+ */
+export const invoiceAttachmentsKey = (id: string) =>
+  ["invoice-attachments", id] as const;
+
 export async function uploadInvoiceAttachmentApi(
   invoiceId: string,
   file: File,
@@ -2092,13 +2784,18 @@ export async function uploadInvoiceAttachmentApi(
   form.append("source_type", "invoice");
   form.append("source_id", invoiceId);
 
-  const response = await api.post<{ document_id?: string | number }>(
-    apiRoutes.fileUpload.document,
-    form,
-  );
+  // The id comes back inside the usual `{ success, data }` envelope. Reading it
+  // off the top level always missed it, so every upload was given a local
+  // placeholder id that no delete could ever find on the server.
+  const response = await api.post<{
+    data?: { document_id?: string | number | null };
+    document_id?: string | number | null;
+  }>(apiRoutes.fileUpload.document, form);
+  const documentId =
+    response.data?.data?.document_id ?? response.data?.document_id;
 
   return {
-    id: String(response.data?.document_id ?? newAttachmentId()),
+    id: String(documentId ?? newAttachmentId()),
     name: file.name,
     size: file.size,
   };

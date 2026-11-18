@@ -19,6 +19,7 @@ export function CommunicationTab({
       <SalesSection
         icon={MessageSquare}
         title="Text Message Settings"
+        tourId="sales-sms"
         description="Send invoices and reminders by SMS as well as email. Charges apply per message once this is live."
       >
         <SwitchRow
@@ -32,6 +33,7 @@ export function CommunicationTab({
       <SalesSection
         icon={Mail}
         title="Notifications"
+        tourId="sales-notifications"
         description="Keep a copy of what Sole sends on your behalf."
       >
         <div className="divide-y rounded-md border border-border">
@@ -55,6 +57,7 @@ export function CommunicationTab({
       <SalesSection
         icon={BellRing}
         title="Customer Reminders"
+        tourId="sales-reminders"
         description="Automatic nudges to your client. Each one can be overridden on an individual document."
       >
         <div className="divide-y rounded-md border border-border">

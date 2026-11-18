@@ -239,13 +239,13 @@ function baseProperties(): AnalyticsProps {
 /**
  * Whether analytics is allowed to run at all, before a token is even checked.
  *
- * `true` for now: this integration is brand new, the project is freshly
+ * `false` for now: this integration is brand new, the project is freshly
  * created, and the explicit ask was "sirf live mein use krna hai" — only on a
  * deployed build, not on anyone's machine. A single flag rather than deleting
  * the localhost branch, because the opposite call — the old `sole-webapp`
  * blocking localhost permanently — is the exact decision this project argued
  * against in its own plan doc: a developer can then never confirm the
- * integration works before it reaches a customer. Flip this back to `true`
+ * integration works before it reaches a customer. Flip this to `true`
  * once local verification is wanted again; nothing else about `deploymentEnv`
  * or the `env` tagging needs to change when that happens.
  */
@@ -364,62 +364,207 @@ export function initAnalytics(): void {
 
 /* ───────────────────────────────── identity ────────────────────────────── */
 
+export const ADDON_FLAGS = {
+  accounting: "is_accounting_add_on",
+  time: "is_time_tracker_add_on",
+  project: "is_projects_add_on",
+  "assets-advanced": "is_advanced_assets_add_on",
+  booking: "is_booking_add_on",
+  km: "is_km_tracker_add_on",
+  inventory: "is_inventory_add_on",
+  crypto: "is_crypto_module_add_on",
+} as const;
+
+const ADDON_SLUG_ALIASES: Record<string, string> = {
+  "time-tracker": "time",
+  "km-tracker": "km",
+  projects: "project",
+  assets: "assets-advanced",
+  scheduling: "booking",
+};
+
+export function addonFlags(addons: readonly string[]): Record<string, boolean> {
+  const owned = new Set(addons.map((slug) => ADDON_SLUG_ALIASES[slug] ?? slug));
+  return Object.fromEntries(
+    Object.entries(ADDON_FLAGS).map(([slug, key]) => [key, owned.has(slug)]),
+  );
+}
+
+export function planDuration(interval: string | null | undefined): string {
+  return interval === "annual" ? "Annually" : "Monthly";
+}
+
+export function planProfile(
+  subscription: SubscriptionInfo | null,
+): AnalyticsProps {
+  // An account that hasn't paid for its first subscription has no plan yet.
+  // Nothing is set rather than "Free": the plan comes from sole-ocr's
+  // `subscription_payment_completed` once Stripe confirms, and a session
+  // still holding the pending state must not write over it.
+  if (!subscription || subscription.requiresFirstSubscription) return {};
+  return {
+    // The tracking plan's value for the free tier is "Free"; the API's display
+    // name is "Free plan", and the two would split one plan into two rows.
+    plan_name: subscription.isFree ? "Free" : subscription.planName || null,
+    plan_duration: planDuration(subscription.planInterval),
+    ...addonFlags(subscription.addons ?? []),
+  };
+}
+
+/* ─────────────── onboarding: what sign-up carries across checkout ────────── */
+
 /**
- * `'free' | 'trial' | 'paid'`, from the subscription record — never from
- * `AuthUser.plan`.
+ * Who the person said they are on onboarding's company step.
  *
- * This is the fix for the single biggest data gap in the old project: every
- * one of its 479 profiles reads `plan: 'free'`, trial users included, because
- * the field it read comes from `user_details`, which carries no subscription
- * information at all — it is `undefined` for everyone, on the same backend
- * this app also talks to. Filtering on plan there to find trial users returns
- * zero; they were only findable through a trial-end date on each event. The
- * old app's own fix for this — `components/Layout/Layout.js` in sole-webapp —
- * reads the subscription slice instead of the profile, for the same reason;
- * this is that fix, applied here.
- *
- * `null` while the subscription hasn't loaded yet, deliberately not `'free'`:
- * stamping a profile "free" before the real value arrives would misreport
- * every paying customer for however long the request takes. `identify()`
- * re-asserts this on every call, so it corrects itself the moment the fetch
- * lands — the caller just needs to re-call `identify()` when the subscription
- * store updates, which is what `AnalyticsBootstrap` does.
+ * `signup_completed` is sent once the first payment is confirmed, which is on
+ * the far side of a full-page trip to Stripe — and possibly in a later visit,
+ * if the tab was closed on Stripe or the confirmation outlasted the wait. So
+ * what the company step collected (ABN, mobile, country) is kept in
+ * localStorage, tagged with whose it is, until sign-up has been reported.
  */
-export function derivePlan(subscription: SubscriptionInfo | null): string | null {
-  if (!subscription) return null;
-  if (subscription.isTrialing) return "trial";
-  if (subscription.isFree) return "free";
-  return "paid";
+export type OnboardingProfile = {
+  primary_country: string | null;
+  primary_email: string | null;
+  primary_business_name: string | null;
+  user_name: string | null;
+  user_id: string | null;
+  mobile_number: string | null;
+  abn_number: string | null;
+};
+
+const ONBOARDING_PROFILE_KEY = "sole-analytics-onboarding-profile";
+const SIGNUP_REPORTED_KEY = "sole-analytics-signup-completed";
+
+export function rememberOnboardingProfile(profile: OnboardingProfile): void {
+  try {
+    window.localStorage.setItem(ONBOARDING_PROFILE_KEY, JSON.stringify(profile));
+  } catch {
+    // Storage blocked: signup_completed falls back to what the session knows.
+  }
+}
+
+/**
+ * The kept profile — only if it is this user's. A shared browser must never
+ * hand one person's ABN and mobile to the next person's sign-up.
+ */
+export function recallOnboardingProfile(
+  userId?: string | null,
+): Partial<OnboardingProfile> {
+  try {
+    const raw = window.localStorage.getItem(ONBOARDING_PROFILE_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (!parsed || typeof parsed !== "object") return {};
+    const profile = parsed as Partial<OnboardingProfile>;
+    if (userId != null && profile.user_id != null && profile.user_id !== userId) {
+      return {};
+    }
+    return profile;
+  } catch {
+    return {};
+  }
+}
+
+export function forgetOnboardingProfile(): void {
+  try {
+    window.localStorage.removeItem(ONBOARDING_PROFILE_KEY);
+  } catch {
+    // Nothing to clean up if storage was never reachable.
+  }
+}
+
+const ONBOARDING_PAYMENT_KEY = "sole-analytics-onboarding-payment";
+
+/**
+ * What the plan step sent to checkout, for `signup_completed`'s
+ * `lifetime_value` — at sign-up, everything they've paid is that first
+ * payment. The checkout total before any coupon (Stripe applies it); the
+ * profile's own `lifetime_value` is kept by sole-ocr from the real invoice.
+ */
+export function rememberOnboardingPayment(amount: number): void {
+  try {
+    window.localStorage.setItem(ONBOARDING_PAYMENT_KEY, String(amount));
+  } catch {
+    // Storage blocked: signup_completed goes without it.
+  }
+}
+
+/** The remembered amount, once — it's cleared as it's read. */
+export function takeOnboardingPayment(): number | null {
+  try {
+    const raw = window.localStorage.getItem(ONBOARDING_PAYMENT_KEY);
+    window.localStorage.removeItem(ONBOARDING_PAYMENT_KEY);
+    const amount = raw == null ? NaN : Number(raw);
+    return Number.isFinite(amount) ? amount : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether `signup_completed` has already gone out for this user from this
+ * browser. Mixpanel's `$insert_id` only folds duplicates that share a
+ * timestamp, so a second confirmation (a reload, "Check again", a later
+ * visit) has to be stopped here.
+ */
+export function signupAlreadyReported(userId: string): boolean {
+  try {
+    const raw = window.localStorage.getItem(SIGNUP_REPORTED_KEY);
+    const ids: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(ids) && ids.includes(userId);
+  } catch {
+    return false;
+  }
+}
+
+export function markSignupReported(userId: string): void {
+  try {
+    const raw = window.localStorage.getItem(SIGNUP_REPORTED_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    const ids = Array.isArray(parsed) ? parsed.filter((id) => typeof id === "string") : [];
+    if (!ids.includes(userId)) ids.push(userId);
+    window.localStorage.setItem(SIGNUP_REPORTED_KEY, JSON.stringify(ids.slice(-20)));
+  } catch {
+    // Unreachable storage: the profile is forgotten anyway, which stops repeats
+    // in the common case.
+  }
+}
+
+export type PlanSelection = {
+  planName: string | null;
+  interval: string | null;
+  addons: readonly string[];
+  paidAmount: number;
+  currency: string;
+  businessId: string | null;
+  /** Explicit, because the super property can still name the previous business. */
+  businessName?: string | null;
+  /** True on onboarding's plan step, false in Settings and Add business. */
+  isOnboarding: boolean;
+};
+
+export function planSelectionProps(selection: PlanSelection): AnalyticsProps {
+  return {
+    plan_name: selection.planName,
+    plan_duration: planDuration(selection.interval),
+    ...addonFlags(selection.addons),
+    business_id: selection.businessId,
+    ...(selection.businessName !== undefined
+      ? { business_name: selection.businessName }
+      : {}),
+    paid_amount: Math.round(selection.paidAmount * 100) / 100,
+    currency: selection.currency,
+    is_onboarding: selection.isOnboarding,
+  };
 }
 
 export type IdentifyInput = {
-  /** The backend `user_id`. Read it through `sessionUserId()`, never inline. */
   userId: string | null;
   email?: string | null;
   name?: string | null;
-  plan?: string | null;
-  trialActive?: boolean | null;
-  businessId?: string | null;
+  subscription?: SubscriptionInfo | null;
+  totalBusinesses?: number | null;
 };
 
-/**
- * Tie this browser to a person.
- *
- *   distinct_id   user_id      and nothing else, ever
- *   $user_id      user_id
- *   $email        email        a property, for lookup and support
- *
- * **No fallback to email.** The old integration used `String(user.id ||
- * email)`; `user.id` never existed on the auth payload, so every single
- * profile was keyed on an email address. Email is not a stable key — change
- * yours and you start a new history — and it is why the reporting pipeline
- * carries a merge step to this day.
- *
- * Being authenticated with no `user_id` is therefore a defect and not a case
- * to paper over. It reports itself as an event so it is visible in the same
- * place the rest of the data is, rather than only in a browser console nobody
- * is watching.
- */
 export function identify(input: IdentifyInput): void {
   if (!ready()) return;
 
@@ -427,69 +572,204 @@ export function identify(input: IdentifyInput): void {
     console.error(
       "[analytics] authenticated session with no user_id — not identifying.",
     );
-    // Deliberately not identified: this is sent as whoever Mixpanel currently
-    // thinks we are, which is the anonymous device id.
-    safely(() =>
-      mixpanel.track(EVENTS.IDENTIFY_FAILED, {
-        has_email: Boolean(input.email),
-      }),
-    );
     return;
   }
 
   const internal = isInternalEmail(input.email);
 
   if (identifiedAs !== input.userId) {
-    // Only latched on success — a transient SDK failure should retry on the
-    // next call rather than being marked identified when it was not.
     if (safely(() => mixpanel.identify(input.userId!))) {
       identifiedAs = input.userId;
     }
   }
 
-  /*
-   * Re-asserted on every session start, not set once at signup.
-   *
-   * Set-at-signup-only is why just 60 of 479 profiles in the old project carry
-   * trial dates: its `trackSignup` runs once, and everyone who signed up
-   * before tracking existed never got them and never will. Re-asserting
-   * backfills every person who comes back.
-   */
   safely(() =>
     mixpanel.people.set({
       $email: input.email ?? null,
       $name: input.name ?? null,
+      user_id: input.userId,
+      primary_email: input.email ?? null,
+      user_name: input.name ?? null,
       is_internal: internal,
-      /*
-       * `plan` must say what it is. In the old project every profile reads
-       * 'free' — including people mid-trial — so filtering on plan to find trial
-       * users returns zero, and they are only findable through a trial date.
-       */
-      plan: input.plan ?? null,
-      trial_active: input.trialActive ?? null,
-      last_seen_app: "new_ui",
+      ...planProfile(input.subscription ?? null),
+      ...(input.totalBusinesses
+        ? { total_businesses: input.totalBusinesses }
+        : {}),
     }),
   );
 
-  // Super properties: on every subsequent event, so no report has to join.
+  safely(() => mixpanel.register({ is_internal: internal }));
+}
+
+export type BusinessContext = {
+  id: string | null;
+  name?: string | null;
+  industry?: string | null;
+};
+
+const BUSINESS_KEYS = ["business_id", "business_name", "industry"] as const;
+
+export function setBusinessContext(business: BusinessContext): void {
+  if (!ready()) return;
+  if (business.id) {
+    /*
+     * The business list and the industries list load after the session, so on
+     * every hard load this first runs with the id alone. Registering nulls
+     * then would wipe the name and industry persisted for that same business
+     * and send every early event without them — so for the business already
+     * registered, a missing value keeps what's there. A different business
+     * gets nulls until its own values arrive, never the previous one's.
+     */
+    let registeredId: unknown;
+    try {
+      registeredId = mixpanel.get_property("business_id");
+    } catch {
+      registeredId = undefined;
+    }
+    const sameBusiness = registeredId === business.id;
+    const props: AnalyticsProps = { business_id: business.id };
+    if (business.name || !sameBusiness) props.business_name = business.name || null;
+    if (business.industry || !sameBusiness) props.industry = business.industry || null;
+    safely(() => mixpanel.register(props));
+  } else {
+    for (const key of BUSINESS_KEYS) {
+      safely(() => mixpanel.unregister(key));
+    }
+  }
+}
+
+export function setUserProfile(
+  props: AnalyticsProps,
+  options: { once?: boolean; userId?: string | null } = {},
+): void {
+  if (!ready()) return;
+  /*
+   * The SDK holds every profile update in a local queue until identify() has
+   * run on this page, and a reset() empties that queue. Onboarding's updates
+   * were landing in exactly that gap — the events arrived, the profile never
+   * got the properties. Given whose profile this is, identify first, so the
+   * update goes straight to that profile instead of waiting in the queue.
+   */
+  if (options.userId && identifiedAs !== options.userId) {
+    if (safely(() => mixpanel.identify(options.userId!))) {
+      identifiedAs = options.userId;
+    }
+  }
   safely(() =>
-    mixpanel.register({
-      is_internal: internal,
-      plan: input.plan ?? null,
-      trial_active: input.trialActive ?? null,
-      ...(input.businessId ? { business_id: input.businessId } : {}),
-    }),
+    options.once ? mixpanel.people.set_once(props) : mixpanel.people.set(props),
   );
 }
 
-/** The active business changed under the same signed-in person. */
-export function setBusinessContext(businessId: string | null): void {
-  if (!ready()) return;
-  if (businessId) {
-    safely(() => mixpanel.register({ business_id: businessId }));
-  } else {
-    safely(() => mixpanel.unregister("business_id"));
+const CAMPAIGN_KEYS = ["utm_source", "utm_medium", "utm_campaign"] as const;
+
+export function campaignProps(): AnalyticsProps {
+  const fromUrl =
+    typeof window === "undefined"
+      ? new URLSearchParams()
+      : new URLSearchParams(window.location.search);
+  const props: AnalyticsProps = {};
+  for (const key of CAMPAIGN_KEYS) {
+    let value: unknown = fromUrl.get(key);
+    if (!value && ready()) {
+      try {
+        value = mixpanel.get_property(key);
+      } catch {
+        value = null;
+      }
+    }
+    props[key] = typeof value === "string" && value ? value : null;
   }
+  return props;
+}
+
+/**
+ * Methods `signup_initiated` has already been sent for in this page session,
+ * so pressing the same start button twice is still one person starting.
+ */
+const signupInitiatedFor = new Set<string>();
+
+/**
+ * `signup_initiated` — someone starting to create an account, from one of the
+ * plan's five buttons: "Don't have an account? Create one", Google and Apple
+ * on the login page, and "Sign up with Google / Apple" on the register page.
+ * (Not on arriving at /register or typing an email there.)
+ */
+export function trackSignupInitiated(
+  method: string,
+  { primaryEmail = null }: { primaryEmail?: string | null } = {},
+): void {
+  if (signupInitiatedFor.has(method)) return;
+  signupInitiatedFor.add(method);
+  trackWithProfile(EVENTS.SIGNUP_INITIATED, {
+    signup_method: method,
+    primary_email: primaryEmail?.trim() || null,
+    ...campaignProps(),
+  });
+}
+
+/* ─────────────── Google / Apple: a sign-up, or a sign-in? ─────────────── */
+
+/**
+ * The plan counts a Google or Apple press as a sign-up only for an email that
+ * isn't registered yet — which isn't known until the provider has answered.
+ * So the press is noted here (sessionStorage, which survives the round trip
+ * through the provider in this tab), and reported from the callback once the
+ * account turns out to be new.
+ */
+const SOCIAL_START_KEY = "sole-analytics-social-start";
+
+export type SocialStartPage = "login" | "register";
+
+export function rememberSocialStart(provider: string, page: SocialStartPage): void {
+  try {
+    window.sessionStorage.setItem(
+      SOCIAL_START_KEY,
+      JSON.stringify({ provider, page, at: Date.now() }),
+    );
+  } catch {
+    // Storage blocked: the sign-up still works, it just isn't counted.
+  }
+}
+
+/**
+ * On the social callback: `signup_initiated` (and, for the register page's
+ * buttons, `signup_details_entered`) when the account is new. A new account
+ * is one with no business yet (`is_first_login`), the same test that sends it
+ * to onboarding. Signing in to an existing account sends nothing.
+ */
+export function reportSocialSignup(user: {
+  email?: string | null;
+  is_first_login?: boolean | null;
+} | null): void {
+  let start: { provider?: unknown; page?: unknown; at?: unknown } | null = null;
+  try {
+    const raw = window.sessionStorage.getItem(SOCIAL_START_KEY);
+    window.sessionStorage.removeItem(SOCIAL_START_KEY);
+    start = raw ? JSON.parse(raw) : null;
+  } catch {
+    start = null;
+  }
+  if (!start || typeof start.provider !== "string" || !user?.is_first_login) return;
+  // A press long ago (an abandoned attempt) is not this sign-in.
+  if (typeof start.at === "number" && Date.now() - start.at > 30 * 60_000) return;
+
+  const method = start.provider;
+  const primaryEmail = user.email?.trim() || null;
+  trackSignupInitiated(method, { primaryEmail });
+  if (start.page === "register") {
+    trackWithProfile(EVENTS.SIGNUP_DETAILS_ENTERED, {
+      primary_email: primaryEmail,
+      signup_method: method,
+    });
+  }
+}
+
+export function trackWithProfile(
+  event: EventName,
+  props: AnalyticsProps = {},
+): void {
+  track(event, props);
+  setUserProfile(props);
 }
 
 /**

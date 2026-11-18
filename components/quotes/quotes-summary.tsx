@@ -7,15 +7,14 @@ import {
   segmentHighlight,
   type ProportionSegment,
 } from "@/components/dashboard/proportion-bar";
+import {
+  SummaryPeriodToggle,
+  useSummaryPeriod,
+} from "@/components/documents/summary-period-toggle";
 import { Shimmer } from "@/components/ui/shimmer";
 import { HeroHairline } from "@/components/layout/page-header";
 import { invoiceMoney } from "@/lib/invoices";
-import {
-  quoteAmountAud,
-  quoteDisplayStatus,
-  type Quote,
-  type QuoteDisplayStatus,
-} from "@/lib/quotes";
+import type { QuotePeriodStats, QuoteSummaryStats } from "@/lib/quotes";
 import { cn } from "@/lib/utils";
 
 /**
@@ -26,69 +25,80 @@ import { cn } from "@/lib/utils";
  * Converted is only what has actually been billed. An accepted quote that
  * hasn't been converted yet is still open work, so it sits under Open and is
  * called out there, rather than claiming an invoice that doesn't exist.
+ *
+ * Scoped to this financial year or this calendar month by quote date, as
+ * sole-webapp's quote analytics were.
  */
 const BANDS: {
-  key: string;
+  key: "converted" | "open" | "lost";
   label: string;
-  statuses: QuoteDisplayStatus[];
   bar: string;
   figure?: string;
 }[] = [
   {
     key: "converted",
     label: "Converted",
-    statuses: ["Converted"],
     bar: "bg-success",
     figure: "text-success",
   },
   {
     key: "open",
     label: "Open",
-    statuses: ["Sent", "Saved", "Accepted"],
     bar: "bg-warning",
   },
   {
     key: "lost",
     label: "Declined or expired",
-    statuses: ["Declined", "Expired"],
     bar: "bg-destructive",
     figure: "text-destructive",
   },
 ];
 
+const EMPTY_PERIOD: QuotePeriodStats = {
+  quoted: 0,
+  draftCount: 0,
+  converted: { count: 0, amount: 0 },
+  open: { count: 0, accepted: 0, amount: 0 },
+  lost: { count: 0, amount: 0 },
+};
+
 export function QuotesSummary({
-  quotes,
+  stats,
   loading,
 }: {
-  quotes: Quote[];
+  /** The server's figures for this year and this month; absent until they land. */
+  stats?: QuoteSummaryStats;
   /** The summary's own fetch hasn't landed yet — shown in place of stale-looking zeroes. */
   loading?: boolean;
 }) {
   const [hovered, setHovered] = React.useState<string | null>(null);
+  const { period, setPeriod, window: periodWindow } = useSummaryPeriod();
 
   if (loading) {
+    // Carries the tour anchor too — see the Invoices summary.
     return (
       <Shimmer
         className="h-40 w-full rounded-lg border border-border"
+        data-usertour="quote-summary"
         aria-hidden
       />
     );
   }
 
-  const bands = BANDS.map((band) => {
-    const matching = quotes.filter((quote) =>
-      band.statuses.includes(quoteDisplayStatus(quote)),
-    );
-    return {
-      ...band,
-      count: matching.length,
-      accepted: matching.filter((quote) => quote.status === "Accepted").length,
-      amount: matching.reduce((sum, quote) => sum + quoteAmountAud(quote), 0),
-    };
-  });
+  // The server has already worked out each quote's status (billed beats every
+  // other, a lapsed sent quote is expired) and its money in the business's
+  // currency. The period it adds up (the business's financial year, or this
+  // month) is chosen by the toggle.
+  const totals = stats?.[period === "month" ? "month" : "year"] ?? EMPTY_PERIOD;
+  const bands = BANDS.map((band) => ({
+    ...band,
+    count: totals[band.key].count,
+    amount: totals[band.key].amount,
+    accepted: band.key === "open" ? totals.open.accepted : 0,
+  }));
 
-  const quoted = bands.reduce((sum, band) => sum + band.amount, 0);
-  const draftCount = quotes.filter((quote) => quote.status === "Draft").length;
+  const quoted = totals.quoted;
+  const draftCount = totals.draftCount;
 
   // Percentages come off the quoted total, so the bar and figures agree.
   const segments: ProportionSegment[] = bands
@@ -108,12 +118,23 @@ export function QuotesSummary({
     >
       <HeroHairline />
       <div className="space-y-4 p-5">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-sm font-medium">Quoted</h2>
-          <p className="text-xs text-muted-foreground tabular">
-            {invoiceMoney(quoted)} quoted
-            {draftCount > 0 && ` · ${draftCount} in draft`}
-          </p>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-medium" title={periodWindow.label}>
+            Quoted {periodWindow.phrase}
+          </h2>
+          {/* The toggle sits last so it stays put while the heading's
+              wording changes under the pointer. */}
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="text-xs text-muted-foreground tabular">
+              {invoiceMoney(quoted)} quoted
+              {draftCount > 0 && ` · ${draftCount} in draft`}
+            </p>
+            <SummaryPeriodToggle
+              value={period}
+              onChange={setPeriod}
+              label="Quote summary period"
+            />
+          </div>
         </div>
 
         {quoted > 0 ? (
@@ -125,7 +146,7 @@ export function QuotesSummary({
           />
         ) : (
           <ProportionBar
-            label="Nothing quoted yet"
+            label={`Nothing quoted ${periodWindow.phrase}`}
             segments={[]}
             hovered={null}
             onHoverChange={() => {}}
@@ -156,7 +177,7 @@ export function QuotesSummary({
               >
                 {invoiceMoney(band.amount)}
               </dd>
-              <p className="text-xs text-muted-foreground tabular">
+            <p className="text-xs text-muted-foreground tabular">
                 {band.count} {band.count === 1 ? "quote" : "quotes"}
                 {band.key === "open" &&
                   band.accepted > 0 &&

@@ -1,14 +1,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
-import { MIGRATION_STEPS, type MigrationStepId } from "@/lib/migrations";
-
-/** How many steps have brought anything in. A zero count is not a step done. */
-function countSteps(imported: Partial<Record<MigrationStepId, number>>): number {
-  return Object.values(imported).filter((n) => (n ?? 0) > 0).length;
-}
+import type { MigrationStepId } from "@/lib/migrations";
 
 /**
  * How much each migration step has brought in.
@@ -69,14 +62,12 @@ function applyStoredCounts(): void {
 
 export const useMigrationsStore = create<MigrationsState>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       imported: {},
 
       recordImport: (step, count) => {
         if (!Number.isFinite(count) || count <= 0) return;
         applyStoredCounts();
-
-        const before = countSteps(get().imported);
 
         set((state) => ({
           imported: {
@@ -84,44 +75,6 @@ export const useMigrationsStore = create<MigrationsState>()(
             [step]: (state.imported[step] ?? 0) + count,
           },
         }));
-
-        const after = get().imported;
-
-        /*
-         * One event with a `step` property rather than five event names, so
-         * adding a sixth step later needs no new name and the funnel reading
-         * this keeps working.
-         *
-         * `count` rides along because it is the whole reason this store holds
-         * numbers instead of booleans: a step that imported three rows of a
-         * three-hundred-row file looks identical to a finished one under a
-         * tick, and it is the case somebody needs to find.
-         */
-        track(EVENTS.MIGRATION_STEP_COMPLETED, {
-          step,
-          count,
-          running_total: after[step] ?? count,
-        });
-
-        /*
-         * The moment the last step fills in — measured as a transition, not a
-         * state.
-         *
-         * Testing "are all five done?" on its own would fire again on every
-         * later import into an already-complete set, and a completion event
-         * that can happen twice for one person is not a completion event. So
-         * it has to have been incomplete immediately before this write.
-         */
-        const total = MIGRATION_STEPS.length;
-        if (before < total && countSteps(after) === total) {
-          track(EVENTS.MIGRATION_COMPLETED, {
-            record_count: Object.values(after).reduce<number>(
-              (sum, n) => sum + (n ?? 0),
-              0,
-            ),
-            steps_completed: total,
-          });
-        }
       },
 
       clearImport: (step) => {

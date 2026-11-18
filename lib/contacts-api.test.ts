@@ -1,5 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
+const trackMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/analytics", () => ({ track: trackMock }));
+
 import { decryptPayload } from "@/utils/encrypt";
 import apiRoutes from "@/config/api-routes";
 
@@ -692,5 +695,21 @@ describe("bulkCreateContactsApi", () => {
     await expect(bulkCreateContactsApi([row()])).rejects.toThrow(
       "clients array is required",
     );
+  });
+});
+
+describe("createContactApi fires its Mixpanel event", () => {
+  it("fires after the server confirms", async () => {
+    trackMock.mockClear();
+    apiMock.post.mockResolvedValue({ data: { success: true, data: { id: 7 } } });
+    await createContactApi(formValues());
+    expect(trackMock).toHaveBeenCalledWith("contact_created", expect.objectContaining({ contact_type: expect.any(String), business_type: expect.any(String) }));
+  });
+
+  it("stays silent when the server refuses", async () => {
+    trackMock.mockClear();
+    apiMock.post.mockResolvedValue({ data: { success: false, message: "no" } });
+    await expect(createContactApi(formValues())).rejects.toThrow();
+    expect(trackMock).not.toHaveBeenCalled();
   });
 });

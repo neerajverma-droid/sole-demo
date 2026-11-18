@@ -1,6 +1,11 @@
+import type { Metadata } from "next";
 import { Suspense } from "react";
 
 import { CalendarScreen } from "@/components/calendar/calendar-screen";
+
+export const metadata: Metadata = {
+  title: "Calendar · Sole",
+};
 
 /**
  * Suspense because the screen reads its filters from the URL, and

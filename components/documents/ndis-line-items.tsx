@@ -3,7 +3,6 @@
 import { Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -24,12 +23,15 @@ import { DatePicker } from "@/components/documents/date-picker";
 import { Required } from "@/components/documents/field";
 import { ItemLookupInput } from "@/components/documents/item-lookup-input";
 import { NumericCell } from "@/components/documents/line-items";
+import { NdisPriceTierMenu } from "@/components/documents/ndis-price-tier";
 import { QtyTypeSelect } from "@/components/documents/qty-type-select";
 import {
   DEFAULT_DISCOUNT_TYPE,
   DEFAULT_NDIS_CLAIM_TYPE,
   GST_PERCENT,
+  MONEY_DECIMALS,
   NDIS_CLAIM_TYPES,
+  NDIS_QTY_TYPES,
   currencySymbol,
   formatDocumentMoney,
   lineItemErrors,
@@ -46,6 +48,7 @@ import {
 import {
   lineItemPatchFromSuggestion,
   searchInvoiceItems,
+  searchNdisSupportItemsByNumber,
 } from "@/lib/invoice-item-search";
 import { cn } from "@/lib/utils";
 import { useCountryContext } from "@/hooks/use-country-context";
@@ -101,33 +104,41 @@ export function NdisLineItems({
   return (
     <div className="space-y-3">
       <div className="overflow-x-auto rounded-lg border border-border bg-card shadow-sm">
-        <Table className={showCurrency ? "min-w-[1620px]" : "min-w-[1510px]"}>
+        {/* Fixed layout: every column is exactly as wide as its content needs and
+            the support's name takes whatever is left, so the table is neither
+            padded out nor squeezed. Below the minimum it scrolls sideways. */}
+        <Table
+          className={cn(
+            "w-full table-fixed",
+            showCurrency ? "min-w-[1671px]" : "min-w-[1561px]",
+          )}
+        >
           <TableHeader>
-            <TableRow>
-              <TableHead className="w-[190px]">
-                Support item number
-                <Required />
-              </TableHead>
-              <TableHead className="text-center">
+            <TableRow className="[&>th]:whitespace-nowrap">
+              <TableHead className="min-w-[260px] text-center">
                 Support item name
                 <Required />
               </TableHead>
-              <TableHead className="w-[190px] text-center">Claim type</TableHead>
-              <TableHead className="w-[150px] text-center">Date</TableHead>
-              <TableHead className="w-[110px] text-center">
-                Hours / qty
+              <TableHead className="w-[216px] text-center">
+                Support item number
                 <Required />
               </TableHead>
-              <TableHead className="w-[110px] text-center">Unit</TableHead>
-              <TableHead className="w-[130px] text-center">
-                Unit price
+              <TableHead className="w-[225px] text-center">Claim type</TableHead>
+              <TableHead className="w-[150px] text-center">Date</TableHead>
+              <TableHead className="w-[90px] text-center">
+                Quantity
+                <Required />
+              </TableHead>
+              <TableHead className="w-[100px] text-center">Type</TableHead>
+              <TableHead className="w-[160px] text-center">
+                Price
                 <Required />
               </TableHead>
               {showCurrency && <CurrencyHead />}
-              <TableHead className="w-[170px] text-center">Discount</TableHead>
-              <TableHead className="w-[70px] text-center">{tax}</TableHead>
-              <TableHead className="w-[130px] text-right">Amount</TableHead>
-              <TableHead className="w-[52px]" />
+              <TableHead className="w-[140px] text-center">Discount</TableHead>
+              <TableHead className="w-[56px] text-center">{tax}</TableHead>
+              <TableHead className="w-[110px] text-right">Amount</TableHead>
+              <TableHead className="w-[48px]" />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -136,34 +147,12 @@ export function NdisLineItems({
               const line = lineTotals(item, gstPercent);
               const rowLabel = `support ${index + 1}`;
               const numberIssue = issueFor(`item-${item.id}-supportItemNumber`);
+              const descriptionIssue = issueFor(`item-${item.id}-description`);
+              const quantityIssue = errors.quantity ?? issueFor(`item-${item.id}-quantity`);
+              const priceIssue = errors.price ?? issueFor(`item-${item.id}-price`);
 
               return (
                 <TableRow key={item.id} className="align-top">
-                  <TableCell>
-                    <Input
-                      ref={register(`item-${item.id}-supportItemNumber`)}
-                      className={cn(
-                        "h-9 tabular",
-                        numberIssue &&
-                          "border-destructive focus-visible:ring-destructive",
-                      )}
-                      value={item.supportItemNumber ?? ""}
-                      onChange={(event) =>
-                        onPatch(item.id, {
-                          supportItemNumber: event.target.value,
-                        })
-                      }
-                      placeholder="01_011_0107_1_1"
-                      aria-label={`Support item number, ${rowLabel}`}
-                      aria-invalid={!!numberIssue}
-                    />
-                    {numberIssue && (
-                      <p className="mt-1 text-xs text-destructive">
-                        {numberIssue}
-                      </p>
-                    )}
-                  </TableCell>
-
                   <TableCell>
                     {/* Picking from the catalogue is what fills the support
                         item number beside it — the one field on this row
@@ -171,6 +160,10 @@ export function NdisLineItems({
                     <ItemLookupInput
                       search={(query) => searchInvoiceItems(query, true)}
                       queryKey="ndis"
+                      // Nothing is asked until something is typed: an empty
+                      // query only ever returned the business's own products.
+                      skipEmptyQuery
+                      emptyQueryLabel="Type a support item name to search the NDIS catalogue."
                       emptyLabel="No matching support items — type the description yourself."
                       inputRef={register(`item-${item.id}-description`)}
                       value={item.description}
@@ -189,7 +182,57 @@ export function NdisLineItems({
                       className="text-center"
                       placeholder="Search the NDIS support catalogue"
                       label={`Support item name, ${rowLabel}`}
+                      invalid={!!descriptionIssue}
+                      // A long name is cut off by the field; hovering shows it whole.
+                      tooltipOnOverflow
                     />
+                    {descriptionIssue && (
+                      <p className="mt-1 text-xs text-destructive">
+                        {descriptionIssue}
+                      </p>
+                    )}
+                  </TableCell>
+
+                  <TableCell>
+                    {/* Searched by number against the same catalogue. Picking
+                        a row fills everything the name search fills — the name,
+                        price, unit, claim type — so either field is a way in. */}
+                    <ItemLookupInput
+                      search={searchNdisSupportItemsByNumber}
+                      queryKey="ndis-number"
+                      skipEmptyQuery
+                      emptyQueryLabel="Type a support item number to search the NDIS catalogue."
+                      emptyLabel="No matching support item numbers — type it yourself."
+                      numberFirst
+                      selectedText={(suggestion) =>
+                        suggestion.supportItemNumber ?? suggestion.name
+                      }
+                      inputRef={register(`item-${item.id}-supportItemNumber`)}
+                      value={item.supportItemNumber ?? ""}
+                      onChange={(value) =>
+                        onPatch(item.id, { supportItemNumber: value })
+                      }
+                      onSelect={(suggestion) =>
+                        onPatch(
+                          item.id,
+                          lineItemPatchFromSuggestion(suggestion, item, {
+                            ndis: true,
+                            gstDefault: false,
+                          }),
+                        )
+                      }
+                      // Tighter padding and type than the other fields: a support
+                      // number runs to 21 characters and has to show whole.
+                      className="px-2 text-[13px] tabular"
+                      placeholder="01_011_0107_1_1"
+                      label={`Support item number, ${rowLabel}`}
+                      invalid={!!numberIssue}
+                    />
+                    {numberIssue && (
+                      <p className="mt-1 text-xs text-destructive">
+                        {numberIssue}
+                      </p>
+                    )}
                   </TableCell>
 
                   <TableCell>
@@ -226,31 +269,52 @@ export function NdisLineItems({
                   </TableCell>
 
                   <NumericCell
-                    label={`Hours or quantity, ${rowLabel}`}
+                    label={`Quantity, ${rowLabel}`}
                     value={item.quantity}
-                    error={errors.quantity}
+                    error={quantityIssue}
                     inputRef={register(`item-${item.id}-quantity`)}
                     onChange={(value) => onPatch(item.id, { quantity: value })}
                   />
 
                   <TableCell>
+                    {/* The usual units (items, hours, days, km) plus the
+                        schedule's weeks, months and years. Picking a support
+                        from the catalogue sets it. */}
                     <QtyTypeSelect
                       value={item.qtyType}
                       onChange={(qtyType) => onPatch(item.id, { qtyType })}
-                      label={`Unit, ${rowLabel}`}
+                      label={`Type, ${rowLabel}`}
+                      options={NDIS_QTY_TYPES}
                     />
                   </TableCell>
 
                   <NumericCell
-                    label={`Unit price, ${rowLabel}`}
+                    label={`Price, ${rowLabel}`}
                     value={item.price}
-                    error={errors.price}
-                    // The catalogue publishes a regional price limit rather
-                    // than a price, so it's shown as guidance under the field.
+                    error={priceIssue}
+                    // The catalogue's own note about the support, shown as
+                    // guidance under the field.
                     hint={item.priceHint}
                     prefix={symbol}
+                    maxDecimals={MONEY_DECIMALS}
                     inputRef={register(`item-${item.id}-price`)}
                     onChange={(value) => onPatch(item.id, { price: value })}
+                    // National / Remote / Very remote, for a support picked
+                    // from the catalogue. National is filled in; the arrow at the
+                    // end of the field lists the three, and the user can still
+                    // type over the price with their own.
+                    trailing={
+                      item.priceOptions ? (
+                        <NdisPriceTierMenu
+                          price={item.price}
+                          options={item.priceOptions}
+                          schedule={item.priceSchedule}
+                          symbol={symbol}
+                          onPick={(price) => onPatch(item.id, { price })}
+                          rowLabel={rowLabel}
+                        />
+                      ) : undefined
+                    }
                   />
 
                   {showCurrency && clientCurrency && (
@@ -270,6 +334,7 @@ export function NdisLineItems({
                         label={`Discount ${discountType === "amount" ? "amount" : "percent"}, ${rowLabel}`}
                         value={item.discountPercent}
                         error={errors.discountPercent}
+                        maxDecimals={MONEY_DECIMALS}
                         inputRef={register(`item-${item.id}-discountPercent`)}
                         onChange={(value) =>
                           onPatch(item.id, { discountPercent: value })

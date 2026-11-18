@@ -2,6 +2,7 @@ import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
 import { parseISO } from "date-fns";
 
+import { AU_FISCAL_YEAR_START, type FiscalYearStart } from "@/lib/fiscal-year";
 import { toIsoDate } from "@/lib/invoices";
 import {
   periodShape,
@@ -640,11 +641,20 @@ export async function sendPack(
 
 export const CUSTOM_PERIOD: ReportPeriod = "Custom range";
 
-export function presetRange(preset: ReportPeriod): {
+/**
+ * The dates a preset covers. "This/Last financial year" and the quarter
+ * presets follow `fiscalYearStart` — the business's own year (1 April in New
+ * Zealand) — so a pack's period means the same as the same preset on every
+ * other report. Defaults to 1 July for existing callers.
+ */
+export function presetRange(
+  preset: ReportPeriod,
+  fiscalYearStart: FiscalYearStart = AU_FISCAL_YEAR_START,
+): {
   from: string;
   to: string;
 } {
-  const shape = periodShape(preset, null);
+  const shape = periodShape(preset, null, undefined, fiscalYearStart);
   return {
     from: toIsoDate(shape.current.from),
     to: toIsoDate(shape.current.to),

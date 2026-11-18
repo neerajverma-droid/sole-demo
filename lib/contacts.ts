@@ -6,6 +6,8 @@ import {
   type ModuleForm,
 } from "@/lib/country-forms";
 
+type FieldPath = (string | number)[];
+
 export type ContactType = "Client" | "Supplier";
 export type BusinessType = "Business" | "Individual";
 
@@ -117,7 +119,72 @@ export function digitsOnly(value: string): string {
   return value.replace(/\D/g, "");
 }
 
-export const EMAIL_PATTERN = /.+@.+\..+/;
+export const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+/**
+ * A bare domain or a full URL — `turnerconsulting.com.au`, `https://…`.
+ *
+ * The lookahead stops `www.` counting as the domain itself: `www.google` would
+ * otherwise read as the name `www` on a `.google` ending, and pass.
+ */
+const WEBSITE_PATTERN =
+  /^(https?:\/\/)?(?!www\.[a-z0-9-]+(?:[:/]|$))([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(:\d+)?(\/\S*)?$/i;
+
+/** Place names: letters in any script, spaces, and the punctuation they carry. */
+const PLACE_NAME_PATTERN = /^[\p{L}\p{M}][\p{L}\p{M} .'’-]*$/u;
+
+/**
+ * The rule every optional free-text field shares: empty is fine, but once
+ * something is typed it has to be a sensible length (and shape, where one
+ * applies). Returns the message to raise, or nothing.
+ */
+function optionalTextIssue(
+  value: string,
+  label: string,
+  { min = 2, max, pattern, patternMessage }: {
+    min?: number;
+    max: number;
+    pattern?: RegExp;
+    patternMessage?: string;
+  },
+): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.length < min) return `${label} must be at least ${min} characters.`;
+  if (trimmed.length > max) return `${label} must be ${max} characters or fewer.`;
+  if (pattern && !pattern.test(trimmed)) {
+    return patternMessage ?? `Enter a valid ${label.toLowerCase()}.`;
+  }
+  return undefined;
+}
+
+/**
+ * The quick "New client / New supplier" dialog's rules — the Contacts
+ * drawer's, cut down to its three fields: a name of at least two characters,
+ * and an email that looks like one. A client has to have an email (it's where
+ * its invoices and quotes go); a supplier can be saved without one.
+ */
+export function quickContactIssues(
+  type: ContactType,
+  values: { name: string; email: string },
+): { name?: string; email?: string; emailRequired: boolean } {
+  const emailRequired = type === "Client";
+  const email = values.email.trim();
+  return {
+    emailRequired,
+    name:
+      values.name.trim().length < 2
+        ? "Enter the contact name (at least 2 characters)."
+        : undefined,
+    email: !email
+      ? emailRequired
+        ? `Enter the ${type.toLowerCase()}'s email address.`
+        : undefined
+      : !EMAIL_PATTERN.test(email)
+        ? "Enter a valid email address."
+        : undefined,
+  };
+}
 
 /**
  * An additional person, as the form holds them.
@@ -189,12 +256,64 @@ export const contactSchemaFor = (form: ModuleForm | undefined) => z
       });
     }
 
-    if (!EMAIL_PATTERN.test(values.email)) {
+    /*
+     * Only the primary has to have an email. The flags are read off the raw
+     * values, so a person promoted from the list is held to it in their own
+     * card, and the card they replaced is let off — the same answer as
+     * validating after `withPrimaryFirst` swaps them, raised where it's typed.
+     */
+    const anchorEmail = values.email.trim();
+    if (values.isPrimary && !anchorEmail) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["email"],
+        message: "Enter the primary contact's email address.",
+      });
+    } else if (anchorEmail && !EMAIL_PATTERN.test(anchorEmail)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["email"],
         message: "Enter a valid email address.",
       });
+    }
+
+    // Optional fields: nothing typed is fine, anything typed has to be valid.
+    const optional: [FieldPath, string | undefined][] = [
+      [
+        ["website"],
+        optionalTextIssue(values.website, "Website", {
+          min: 4,
+          max: 255,
+          pattern: WEBSITE_PATTERN,
+          patternMessage: "Enter a valid website, e.g. turnerconsulting.com.au",
+        }),
+      ],
+      [["division"], optionalTextIssue(values.division, "Division", { max: 100 })],
+      [["position"], optionalTextIssue(values.position, "Position", { max: 100 })],
+      [
+        ["addressLine1"],
+        optionalTextIssue(values.addressLine1, "Address line 1", { min: 3, max: 255 }),
+      ],
+      [
+        ["city"],
+        optionalTextIssue(values.city, "City", {
+          max: 100,
+          pattern: PLACE_NAME_PATTERN,
+          patternMessage: "City can only contain letters, spaces, hyphens and apostrophes.",
+        }),
+      ],
+      [
+        ["country"],
+        optionalTextIssue(values.country, "Country", {
+          max: 100,
+          pattern: PLACE_NAME_PATTERN,
+          patternMessage: "Country can only contain letters, spaces, hyphens and apostrophes.",
+        }),
+      ],
+      [["notes"], optionalTextIssue(values.notes, "Notes", { min: 1, max: 1000 })],
+    ];
+    for (const [path, message] of optional) {
+      if (message) ctx.addIssue({ code: z.ZodIssueCode.custom, path, message });
     }
 
     // The business number (ABN, NZBN, …) is checked by the rules the server
@@ -223,24 +342,6 @@ export const contactSchemaFor = (form: ModuleForm | undefined) => z
     }
 
     /*
-     * An Individual is one person by definition, so there is nobody else to
-     * list. Raised on the array rather than silently dropped, because a form
-     * that quietly discards typing is worse than one that says it can't keep
-     * it — the drawer clears the list on the switch so this is a backstop
-     * rather than something anyone should hit.
-     */
-    if (values.businessType === "Individual") {
-      if (values.additionalContacts.length > 0) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["additionalContacts"],
-          message: "An individual can only have one contact person.",
-        });
-      }
-      return;
-    }
-
-    /*
      * The same three rules as the primary, per row: a name is required, and the
      * email and phone only error once something has been typed into them.
      * `countryCode` is read off the row rather than the parent, so a person
@@ -256,12 +357,34 @@ export const contactSchemaFor = (form: ModuleForm | undefined) => z
         });
       }
 
-      if (person.email && !EMAIL_PATTERN.test(person.email)) {
+      const email = person.email.trim();
+      if (person.isPrimary && !email) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["additionalContacts", index, "email"],
+          message: "Enter the primary contact's email address.",
+        });
+      } else if (email && !EMAIL_PATTERN.test(email)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["additionalContacts", index, "email"],
           message: "Enter a valid email address.",
         });
+      }
+
+      for (const field of ["division", "position"] as const) {
+        const message = optionalTextIssue(
+          person[field],
+          field === "division" ? "Division" : "Position",
+          { max: 100 },
+        );
+        if (message) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["additionalContacts", index, field],
+            message,
+          });
+        }
       }
 
       if (person.phone) {
@@ -383,8 +506,10 @@ export function composeContactPeople(
     isPrimary: true,
   };
 
-  if (values.businessType === "Individual") return [primary];
-
+  // Everyone, whatever the business type: the old app defaulted every contact
+  // to "individual" and still let it hold several people, so an Individual
+  // loaded from the server can legitimately carry a list. Dropping it here
+  // would delete those people on the next save.
   return [
     primary,
     ...values.additionalContacts.map((person) => ({

@@ -183,15 +183,6 @@ export function PayrunsScreen() {
   const searching = !!query.trim();
   const filtered = tab !== "all" || activePayrunFilterCount(filters) > 0;
 
-  /*
-   * No pay runs at all — loaded, unnarrowed and empty, not a search or filter
-   * that matched nothing, and never a failed fetch. Tabs counting zeros and a
-   * search over nothing are just noise then, so only the header (seats notice
-   * included) and "No pay runs yet" remain.
-   */
-  const noPayruns =
-    listQuery.isSuccess && !rowsLoading && !searching && !filtered && total === 0;
-
   const header = (
     <>
       <PageHeader
@@ -255,50 +246,48 @@ export function PayrunsScreen() {
       {header}
 
       <div className="space-y-4">
-        {!noPayruns && (
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <Tabs
-              className="max-w-full overflow-x-auto"
-              value={tab}
-              onValueChange={(value) => setTab(value as PayrunTab)}
-            >
-              <TabsList aria-label="Pay run status" data-usertour="payroll-payruns-status-tabs">
-                {PAYRUN_TABS.map((option) => (
-                  <TabsTrigger key={option.value} value={option.value} className="gap-1.5 font-normal">
-                    {option.label}
-                    {counts ? (
-                      <span className="text-xs text-muted-foreground tabular">
-                        {counts[option.countKey]}
-                      </span>
-                    ) : (
-                      <Shimmer className="h-3.5 w-4" aria-hidden />
-                    )}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-            </Tabs>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <Tabs
+            className="max-w-full overflow-x-auto"
+            value={tab}
+            onValueChange={(value) => setTab(value as PayrunTab)}
+          >
+            <TabsList aria-label="Pay run status" data-usertour="payroll-payruns-status-tabs">
+              {PAYRUN_TABS.map((option) => (
+                <TabsTrigger key={option.value} value={option.value} className="gap-1.5 font-normal">
+                  {option.label}
+                  {counts ? (
+                    <span className="text-xs text-muted-foreground tabular">
+                      {counts[option.countKey]}
+                    </span>
+                  ) : (
+                    <Shimmer className="h-3.5 w-4" aria-hidden />
+                  )}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
 
-            <div
-              className="flex flex-wrap items-center gap-2"
-              data-usertour="payroll-payruns-search-filters"
-            >
-              <div className="relative w-full sm:w-72">
-                <Search
-                  className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-                  aria-hidden
-                />
-                <Input
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Search run ID, period or status"
-                  aria-label="Search pay runs"
-                  className="pl-9"
-                />
-              </div>
-              <PayrunsFiltersPopover value={filters} onChange={setFilters} />
+          <div
+            className="flex flex-wrap items-center gap-2"
+            data-usertour="payroll-payruns-search-filters"
+          >
+            <div className="relative w-full sm:w-72">
+              <Search
+                className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+                aria-hidden
+              />
+              <Input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search run ID, period or status"
+                aria-label="Search pay runs"
+                className="pl-9"
+              />
             </div>
+            <PayrunsFiltersPopover value={filters} onChange={setFilters} />
           </div>
-        )}
+        </div>
 
         {selectedRows.length > 0 && (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2">
@@ -381,7 +370,9 @@ export function PayrunsScreen() {
         ) : rowsLoading ? (
           <PayrunsTableSkeleton />
         ) : rows.length === 0 ? (
-          <Empty>
+          <Empty
+            data-usertour={!searching && !filtered ? "payroll-payruns-empty" : undefined}
+          >
             <EmptyMedia>
               {searching ? <SearchX aria-hidden /> : <Calculator aria-hidden />}
             </EmptyMedia>

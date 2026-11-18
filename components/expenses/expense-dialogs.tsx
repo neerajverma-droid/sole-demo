@@ -19,8 +19,12 @@ import {
 } from "@/components/ui/dialog";
 import { attachExpenseAtom, viewExpenseIdAtom } from "@/lib/atoms";
 import { apiErrorMessage } from "@/lib/api-error";
-import { AttachmentUpload } from "@/components/shared/attachment-upload";
 import {
+  AttachmentUpload,
+  type AttachmentUploadStatus,
+} from "@/components/shared/attachment-upload";
+import {
+  type Expense,
   deleteExpenseAttachment,
   expenseStatusVariant,
   fetchExpenseDetail,
@@ -31,7 +35,6 @@ import {
   expenseGst,
   isImageAttachment,
   uploadExpenseAttachment,
-  type ExpenseReceipt,
 } from "@/lib/expenses";
 import { invoiceMoney } from "@/lib/invoices";
 import { cn } from "@/lib/utils";
@@ -53,6 +56,16 @@ export function ExpenseDetailsDialog() {
     enabled: !!viewId,
   });
   const expense = query.data;
+  /*
+   * A copy from earlier in the session that's been marked changed — an edit
+   * saved, an attachment added or removed — would open showing the old
+   * details and then swap; instead wait for the refetch opening it starts.
+   * An untouched copy opens straight away and re-checks quietly, as before.
+   */
+  const queryClient = useQueryClient();
+  const markedChanged = !!queryClient.getQueryState(["expense", viewId])?.isInvalidated;
+  const loadingFresh =
+    query.isLoading || (markedChanged && query.isFetching && !query.isFetchedAfterMount);
   // In the business's own word for its tax, at the rate the expense was recorded at.
   const { country } = useCountryContext();
   const expenseTax = documentTax(country, expense?.date);
@@ -67,7 +80,7 @@ export function ExpenseDetailsDialog() {
           <DialogTitle>Expense details</DialogTitle>
         </DialogHeader>
 
-        {query.isLoading ? (
+        {loadingFresh ? (
           <div className="flex items-center justify-center py-10 text-muted-foreground">
             <Loader2 className="size-5 animate-spin" />
           </div>
@@ -88,11 +101,15 @@ export function ExpenseDetailsDialog() {
                   {formatExpenseAmount(expense)}
                 </p>
                 <p className="text-xs text-muted-foreground tabular">
-                  {expense.gst
-                    ? `includes ${invoiceMoney(expenseGst(expense, expenseTax.rate))} ${expenseTax.word} · ${invoiceMoney(expenseExGst(expense, expenseTax.rate))} ex-${expenseTax.word}`
-                    : `no ${expenseTax.word} on this expense`}
+                  {expense.isSplit
+                    ? `business portion of ${invoiceMoney(expense.totalAmount)}`
+                    : expense.gst
+                      ? `includes ${invoiceMoney(expenseGst(expense, expenseTax.rate))} ${expenseTax.word} · ${invoiceMoney(expenseExGst(expense, expenseTax.rate))} ex-${expenseTax.word}`
+                      : `no ${expenseTax.word} on this expense`}
                 </p>
               </div>
+
+              <PriceBreakdown expense={expense} tax={expenseTax} />
 
               <dl className="grid gap-3 rounded-lg border border-border p-3 sm:grid-cols-2">
                 <Row label="Category" value={expense.category || "—"} />
@@ -196,12 +213,9 @@ export function ExpenseDetailsDialog() {
 export function AttachReceiptDialog() {
   const [attach, setAttach] = useAtom(attachExpenseAtom);
   const queryClient = useQueryClient();
-  const [busy, setBusy] = React.useState(false);
-  // Overrides the server value once a change is made in this sitting, so the
-  // dialog doesn't sit on stale state until the refetch lands.
-  const [localReceipt, setLocalReceipt] = React.useState<
-    ExpenseReceipt | null | undefined
-  >(undefined);
+  const [status, setStatus] = React.useState<AttachmentUploadStatus>("idle");
+  const [pendingName, setPendingName] = React.useState<string>();
+  const busy = status !== "idle";
 
   const detailQuery = useQuery({
     queryKey: ["expense", attach?.id],
@@ -209,55 +223,70 @@ export function AttachReceiptDialog() {
     enabled: !!attach,
   });
 
-  React.useEffect(() => {
-    setLocalReceipt(undefined);
-  }, [attach?.id]);
+  const receipt = detailQuery.data?.receipt ?? null;
 
-  const receipt =
-    localReceipt !== undefined ? localReceipt : (detailQuery.data?.receipt ?? null);
-
-  const invalidate = () => {
+  // The dialog shows the spinner until the refetch lands, so it never shows
+  // a file the server doesn't have (or still shows one it no longer has).
+  const refresh = async () => {
     queryClient.invalidateQueries({ queryKey: ["expenses"] });
     queryClient.invalidateQueries({ queryKey: ["expenses-page"] });
-    if (attach) {
-      queryClient.invalidateQueries({ queryKey: ["expense", attach.id] });
-    }
+    await detailQuery.refetch();
   };
 
   const handleUpload = async (file: File) => {
     if (!attach || busy) return;
-    setBusy(true);
+    // Replacing: the old receipt is removed first so the expense never ends
+    // up carrying both — the same order the liability and equity dialogs use.
+    const previousId = receipt?.documentId;
+    setStatus("uploading");
+    setPendingName(file.name);
     try {
-      const { documentId } = await uploadExpenseAttachment(attach.id, file);
-      setLocalReceipt((current) =>
-        current ? { ...current, documentId } : current,
-      );
-      invalidate();
-      toast.success("Receipt attached");
-    } catch (error) {
-      toast.error(
-        apiErrorMessage(error, "Couldn't attach that file. Try again."),
-      );
-      setLocalReceipt(null);
+      if (previousId) {
+        try {
+          await deleteExpenseAttachment(previousId);
+        } catch (error) {
+          toast.error(
+            apiErrorMessage(
+              error,
+              "Couldn't remove the existing receipt, so it wasn't replaced. Try again.",
+            ),
+          );
+          return;
+        }
+      }
+      try {
+        await uploadExpenseAttachment(attach.id, file);
+        toast.success(previousId ? "Receipt replaced" : "Receipt attached");
+      } catch (error) {
+        toast.error(
+          apiErrorMessage(
+            error,
+            previousId
+              ? "The old receipt was removed but the new one couldn't be uploaded. Try again."
+              : "Couldn't attach that file. Try again.",
+          ),
+        );
+      }
     } finally {
-      setBusy(false);
+      await refresh();
+      setStatus("idle");
+      setPendingName(undefined);
     }
   };
 
   const handleRemove = async () => {
     if (!receipt?.documentId || busy) return;
-    setBusy(true);
+    setStatus("deleting");
     try {
       await deleteExpenseAttachment(receipt.documentId);
-      setLocalReceipt(null);
-      invalidate();
       toast.success("Receipt removed");
     } catch (error) {
       toast.error(
         apiErrorMessage(error, "Couldn't remove that attachment. Try again."),
       );
     } finally {
-      setBusy(false);
+      await refresh();
+      setStatus("idle");
     }
   };
 
@@ -282,10 +311,14 @@ export function AttachReceiptDialog() {
           attach && (
             <AttachmentUpload
               receipt={receipt}
-              onChange={setLocalReceipt}
+              // Every change goes through the server (below), so there's no
+              // local-only preview to keep.
+              onChange={() => {}}
               onFileSelected={handleUpload}
               onRemove={handleRemove}
               busy={busy}
+              status={status}
+              pendingName={pendingName}
             />
           )
         )}
@@ -301,6 +334,63 @@ export function AttachReceiptDialog() {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * The figures sole-webapp's View (`ExpensesInfo.js`) lists: sub total, GST and
+ * total price, then — for an expense split between business and personal use —
+ * how much of that total is each. The server's own breakdown where the detail
+ * response carries it; worked out from the total and the GST flag where it
+ * doesn't.
+ */
+export function PriceBreakdown({
+  expense,
+  tax,
+}: {
+  expense: Expense;
+  tax: { rate: number; word: string };
+}) {
+  const total = expense.totalAmount;
+  const gst =
+    expense.totalGst ??
+    expenseGst({ amount: total, gst: expense.gst, gstPercent: expense.gstPercent }, tax.rate);
+  const subTotal = expense.subTotal ?? total - gst;
+  const personal = expense.personalAmount ?? Math.max(0, total - expense.amount);
+
+  return (
+    <dl className="divide-y divide-border rounded-lg border border-border text-sm">
+      <div className="space-y-2 p-3">
+        <MoneyRow label="Sub total" value={subTotal} />
+        <MoneyRow label={tax.word} value={gst} />
+        <MoneyRow label="Total price" value={total} strong />
+      </div>
+      {expense.isSplit && (
+        <div className="space-y-2 p-3">
+          <MoneyRow label="Price (business)" value={expense.amount} />
+          <MoneyRow label="Price (personal)" value={personal} />
+        </div>
+      )}
+    </dl>
+  );
+}
+
+function MoneyRow({
+  label,
+  value,
+  strong,
+}: {
+  label: string;
+  value: number;
+  strong?: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className={cn("tabular", strong && "font-medium")}>
+        {invoiceMoney(value)}
+      </dd>
+    </div>
   );
 }
 

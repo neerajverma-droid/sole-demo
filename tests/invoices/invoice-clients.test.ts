@@ -1,5 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
+const trackMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/analytics", () => ({ track: trackMock }));
+
 import apiRoutes from "@/config/api-routes";
 import { decryptPayload } from "@/utils/encrypt";
 
@@ -22,6 +25,7 @@ const {
   createInvoiceClientApi,
   fetchClientNdisDetails,
   fetchInvoiceContacts,
+  ndisClaimIssue,
   ndisClientIssue,
   primaryContactFor,
   saveParticipantNdisApi,
@@ -257,6 +261,48 @@ describe("ndisClientIssue", () => {
   });
 });
 
+describe("ndisClaimIssue", () => {
+  const details = {
+    clientId: "42",
+    participantContactId: "2",
+    participantName: "Sam Lee",
+    participantNumber: "430 123 456",
+    planManagerName: "",
+    planManagerNumber: "",
+  };
+
+  it("has no issue for a nine-digit number, spaced or not", () => {
+    expect(ndisClaimIssue(details, "42")).toBeUndefined();
+    expect(
+      ndisClaimIssue({ ...details, participantNumber: "430123456" }, "42"),
+    ).toBeUndefined();
+    expect(
+      ndisClaimIssue({ ...details, participantNumber: "430-123-456" }, "42"),
+    ).toBeUndefined();
+  });
+
+  it("still reports a missing number first", () => {
+    expect(ndisClaimIssue({ ...details, participantNumber: "" }, "42")).toBe(
+      ndisClientIssue({ ...details, participantNumber: "" }, "42"),
+    );
+  });
+
+  it("flags a saved number that isn't nine digits", () => {
+    const issue = ndisClaimIssue({ ...details, participantNumber: "4301234" }, "42");
+    expect(issue).toContain("Sam Lee");
+    expect(issue).toContain("4301234");
+    expect(issue).toContain("9 digits");
+  });
+
+  it("gives no verdict for another client's lookup or before one is loaded", () => {
+    expect(
+      ndisClaimIssue({ ...details, participantNumber: "12" }, "99"),
+    ).toBeUndefined();
+    expect(ndisClaimIssue(undefined, "42")).toBeUndefined();
+    expect(ndisClaimIssue(details, null)).toBeUndefined();
+  });
+});
+
 /* ------------------------------------------------------------------ *
  * Creating a client
  * ------------------------------------------------------------------ */
@@ -434,5 +480,21 @@ describe("saveParticipantNdisApi", () => {
         "Acme",
       ),
     ).rejects.toThrow("Couldn't save the NDIS number.");
+  });
+});
+
+describe("createInvoiceClientApi fires its Mixpanel event", () => {
+  it("fires after the server confirms", async () => {
+    trackMock.mockClear();
+    apiMock.post.mockResolvedValue({ data: { success: true, data: { client_id: 5, contacts: [{ contact_id: 6 }] } } });
+    await createInvoiceClientApi({ name: "Acme", email: "a@acme.test" });
+    expect(trackMock).toHaveBeenCalledWith("contact_created", expect.objectContaining({ contact_type: "Client", contact_name: "Acme" }));
+  });
+
+  it("stays silent when the server refuses", async () => {
+    trackMock.mockClear();
+    apiMock.post.mockResolvedValue({ data: { success: false, message: "no" } });
+    await expect(createInvoiceClientApi({ name: "Acme", email: "a@acme.test" })).rejects.toThrow();
+    expect(trackMock).not.toHaveBeenCalled();
   });
 });

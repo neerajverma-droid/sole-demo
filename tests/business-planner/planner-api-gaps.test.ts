@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const trackMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/analytics", () => ({ track: trackMock }));
+
 import apiRoutes from "@/config/api-routes";
 import { decryptPayload } from "@/utils/encrypt";
 
@@ -529,5 +532,21 @@ describe("no function reads success", () => {
   it("fetchGoals on a success:false envelope resolves [] rather than throwing", async () => {
     apiMock.get.mockResolvedValue({ data: { success: false, message: "Unauthorised" } });
     await expect(fetchGoals()).resolves.toEqual([]);
+  });
+});
+
+describe("createGoal fires its Mixpanel event", () => {
+  it("fires goal_created after the goal is saved", async () => {
+    trackMock.mockClear();
+    apiMock.post.mockResolvedValue({ data: { success: true, data: API_GOAL } });
+    await createGoal(GOAL_DRAFT);
+    expect(trackMock).toHaveBeenCalledWith("goal_created");
+  });
+
+  it("stays silent when the request fails", async () => {
+    trackMock.mockClear();
+    apiMock.post.mockRejectedValue(new Error("network"));
+    await expect(createGoal(GOAL_DRAFT)).rejects.toThrow();
+    expect(trackMock).not.toHaveBeenCalled();
   });
 });

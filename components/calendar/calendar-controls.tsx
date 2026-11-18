@@ -112,7 +112,7 @@ function FilterPopover({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="outline">
+        <Button variant="outline" data-usertour="scheduling-calendar-filter">
           <ListFilter />
           Filter
           {activeCount > 0 && (
@@ -332,7 +332,11 @@ export function CalendarControls({
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant="outline" onClick={() => onSelectedDateChange(new Date())}>
+        <Button
+          variant="outline"
+          onClick={() => onSelectedDateChange(new Date())}
+          data-usertour="scheduling-calendar-today"
+        >
           Today
         </Button>
         <div

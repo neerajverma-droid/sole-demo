@@ -6,13 +6,17 @@ import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowLeft,
+  Briefcase,
   Calculator,
   ClipboardList,
   Loader2,
   MapPinned,
+  Percent,
   RotateCcw,
   Settings2,
   TriangleAlert,
+  UserRound,
+  type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -52,12 +56,14 @@ import {
   useKmTripQuery,
   useUpdateKmTripMutation,
 } from "@/hooks/use-km-tracker-query";
+import { useTrackOnce } from "@/hooks/use-track-once";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
 import { fetchBusinessContacts } from "@/lib/clients";
 import {
   DEFAULT_KM_FILTERS,
   KM_CAP_WARNING_KM,
   addSecondsToDateTimeLocal,
-  clamp,
   emptyKmTripDraft,
   fetchKmProjectJobs,
   fetchKmProjects,
@@ -84,6 +90,7 @@ import {
   type KmSettings,
   type KmTrip,
   type KmTripDraft,
+  type KmTripType,
 } from "@/lib/km-tracker";
 import { cn } from "@/lib/utils";
 
@@ -109,6 +116,11 @@ export function KmTripEditor({
   duplicateId?: string;
 }) {
   const mode: Mode = tripId ? "edit" : duplicateId ? "duplicate" : "create";
+  // Every way into a new trip ("New trip" on the tracker, the empty table,
+  // Duplicate) lands on this page, so it is counted here once.
+  useTrackOnce(EVENTS.TRIP_ADDITION_INITIATED, mode !== "edit", {
+    source: mode,
+  });
   const settingsQuery = useKmSettingsQuery();
   const sourceQuery = useKmTripQuery(tripId ?? duplicateId);
   // The form's method and odometer fields follow the country's rules, so it
@@ -381,6 +393,21 @@ function KmTripForm({
     });
   }, [needsOdometer, mode, vehicle, touched.odometerStart]);
 
+  // What "Reset" goes back to: the saved reading when editing, otherwise the
+  // vehicle's last one — which the start follows until it's typed over.
+  const vehicleReading = kmVehicleOdometer(vehicle);
+  const odometerStartDefault =
+    mode === "edit"
+      ? initial.odometerStart
+      : vehicleReading === null
+        ? ""
+        : trimNumber(vehicleReading, 1);
+  const resetOdometerStart = () => {
+    // Untouched again, so it goes back to following the vehicle.
+    setTouched((current) => ({ ...current, odometerStart: false }));
+    setDraft((current) => ({ ...current, odometerStart: odometerStartDefault }));
+  };
+
   // …and the end reading is always start + distance.
   React.useEffect(() => {
     if (!needsOdometer) return;
@@ -443,6 +470,8 @@ function KmTripForm({
   const overCap = capApplies && remainingAfter < 0;
   const nearCap = capApplies && !overCap && remainingAfter <= KM_CAP_WARNING_KM;
 
+  const isSplit = draft.tripType === "split";
+  const isPersonal = draft.tripType === "personal";
   const issues = kmTripIssues(
     draft,
     {
@@ -452,6 +481,19 @@ function KmTripForm({
       currencySymbol: format.symbol,
     },
     rules,
+  ).map((issue) =>
+    // Typed in kilometres, the share's problems are about kilometres.
+    issue.key === "businessPercentage" && splitUnit === "km"
+      ? {
+          ...issue,
+          message:
+            figures.distanceKm <= 0
+              ? "Enter the trip distance first"
+              : !splitKmText.trim()
+                ? "Enter the business kilometres"
+                : `Business km must be above 0 and below the trip's ${format.km(figures.distanceKm)} KM — pick Personal or Business instead`,
+        }
+      : issue,
   );
   const issueFor = (key: string) =>
     attempted || touched[key] ? issues.find((issue) => issue.key === key)?.message : undefined;
@@ -478,6 +520,14 @@ function KmTripForm({
     const payload = kmTripPayload(draft, { method, ratePerKm }, rules);
     const done = () => {
       setSaved(true);
+      if (mode !== "edit") {
+        track(EVENTS.TRIP_ADDED, {
+          source: mode,
+          distance_km: figures.distanceKm,
+          trip_type: draft.tripType,
+          calculation_method: method,
+        });
+      }
       toast.success(mode === "edit" ? "Trip updated" : "Trip saved", {
         description: `${format.km(figures.distanceKm)} KM · ${kmReasonLabel(draft.reason)}`,
       });
@@ -497,25 +547,55 @@ function KmTripForm({
    * Split
    * ---------------------------------------------------------------- */
 
-  const setSplit = (on: boolean) => {
-    const current = clamp(Number(draft.businessPercentage) || 0, 0, 100);
-    patch("businessPercentage", {
-      isSplit: on,
-      businessPercentage: on ? (current > 0 && current < 100 ? draft.businessPercentage : "50") : "100",
-      tripType: on ? "business" : draft.tripType,
+  /**
+   * The trip's use decides what can be claimed, so changing it re-seeds
+   * everything that hangs off it: the share (100 / 0 / a fresh 50 to edit),
+   * billing (a personal trip can't be billed) and a reason from the other list.
+   */
+  const chooseTripType = (type: KmTripType) => {
+    if (type === draft.tripType) return;
+    const share = Number(draft.businessPercentage);
+    const keepsShare = Number.isFinite(share) && share > 0 && share < 100;
+    const nextReasons = reasonOptionsFor(type);
+    patch("tripType", {
+      tripType: type,
+      businessPercentage:
+        type === "business" ? "100" : type === "personal" ? "0" : keepsShare ? draft.businessPercentage : "50",
+      ...(type === "personal" ? { isBillable: false } : {}),
+      ...(!customReason && draft.reason && !nextReasons.some((option) => option.value === draft.reason)
+        ? { reason: "" }
+        : {}),
     });
+    setSplitUnit("percent");
     setSplitKmText("");
+  };
+
+  const chooseSplitUnit = (unit: "percent" | "km") => {
+    setSplitUnit(unit);
+    setSplitKmText(unit === "km" ? trimNumber(figures.deductibleKm) : "");
   };
 
   const onSplitKm = (value: string) => {
     setSplitKmText(value);
-    const km = Number(value);
-    const pct =
-      value.trim() && Number.isFinite(km) && figures.distanceKm > 0
-        ? clamp((km / figures.distanceKm) * 100, 0, 100)
-        : 0;
-    patch("businessPercentage", { businessPercentage: trimNumber(pct, 4) });
+    setTouched((current) => ({ ...current, businessPercentage: true }));
   };
+
+  // Typed in kilometres, the business km is what the user means: when the
+  // distance changes (another route, a corrected distance) the share follows,
+  // instead of the km quietly changing under a fixed percentage.
+  React.useEffect(() => {
+    if (!isSplit || splitUnit !== "km") return;
+    const km = Number(splitKmText);
+    const distance = Number(draft.distanceKm);
+    const typed = splitKmText.trim() !== "" && Number.isFinite(km);
+    const currentKm = (Math.max(0, distance) * (Number(draft.businessPercentage) || 0)) / 100;
+    // Already says what was typed (e.g. just switched unit): leave the share exact.
+    if (typed && Math.abs(currentKm - km) < 0.005) return;
+    const next = typed && distance > 0 ? trimNumber((km / distance) * 100, 4) : "";
+    setDraft((current) =>
+      current.businessPercentage === next ? current : { ...current, businessPercentage: next },
+    );
+  }, [isSplit, splitUnit, splitKmText, draft.distanceKm, draft.businessPercentage]);
 
   const reasonOptions = reasonOptionsFor(draft.tripType);
   const title =
@@ -546,12 +626,6 @@ function KmTripForm({
               Record a trip for mileage tracking and tax deductions. Fields marked{" "}
               <span className="text-destructive">*</span> are required.
             </p>
-          </div>
-          <div className="hidden shrink-0 items-center gap-2 sm:flex">
-            <Button variant="ghost" onClick={guardNavigate(KM_ROOT)} disabled={saving}>
-              Cancel
-            </Button>
-            {saveButton}
           </div>
         </div>
       </div>
@@ -715,6 +789,21 @@ function KmTripForm({
                 )}
               </div>
 
+              <TripUse
+                value={draft.tripType}
+                onChange={chooseTripType}
+                share={draft.businessPercentage}
+                unit={splitUnit}
+                kmText={splitKmText}
+                onShare={(businessPercentage) => patch("businessPercentage", { businessPercentage })}
+                onKm={onSplitKm}
+                onUnit={chooseSplitUnit}
+                error={issueFor("businessPercentage")}
+                businessKm={figures.deductibleKm}
+                personalKm={figures.personalKm}
+                formatKm={format.km}
+              />
+
               {tiered && (
                 <div
                   role={vehicleTypeMissing ? "alert" : undefined}
@@ -773,22 +862,38 @@ function KmTripForm({
                       error={issueFor("odometerStart")}
                       hint={!vehicle ? "No reading on file for this vehicle — enter it from the dashboard." : undefined}
                     >
-                      <Input
-                        id="km-odo-start"
-                        inputMode="decimal"
-                        value={draft.odometerStart}
-                        onChange={(event) =>
-                          patch("odometerStart", { odometerStart: event.target.value })
-                        }
-                        className={cn("tabular", invalidClass("odometerStart"))}
-                      />
+                      <div className="flex gap-2">
+                        <Input
+                          id="km-odo-start"
+                          inputMode="decimal"
+                          value={draft.odometerStart}
+                          onChange={(event) =>
+                            patch("odometerStart", { odometerStart: event.target.value })
+                          }
+                          className={cn("tabular", invalidClass("odometerStart"))}
+                        />
+                        {draft.odometerStart !== odometerStartDefault && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={resetOdometerStart}
+                            title={
+                              mode === "edit"
+                                ? "Back to the saved reading"
+                                : "Back to the vehicle's last reading"
+                            }
+                          >
+                            <RotateCcw />
+                            Reset
+                          </Button>
+                        )}
+                      </div>
                     </Field>
                     <Field label="End odometer" htmlFor="km-odo-end" error={issueFor("odometerEnd")}>
                       <Input
                         id="km-odo-end"
                         value={draft.odometerEnd}
-                        readOnly
-                        tabIndex={-1}
+                        disabled
                         placeholder="Start + distance"
                         className="bg-muted/40 tabular text-muted-foreground"
                       />
@@ -798,15 +903,30 @@ function KmTripForm({
               )}
 
               <div className="space-y-3">
-                <p className="text-sm font-medium">
-                  {statutory ? "Additional expenses" : "Expenses"}
-                </p>
+                <div className="space-y-0.5">
+                  <p className="text-sm font-medium">
+                    {statutory ? "Additional expenses" : "Expenses"}
+                  </p>
+                  {isPersonal ? (
+                    <p className="text-xs text-muted-foreground">
+                      Fill in what it cost if you like — a personal trip is never claimed, so
+                      these stay out of your deductions and reports.
+                    </p>
+                  ) : isSplit ? (
+                    <p className="text-xs text-muted-foreground">
+                      Each cost is claimed at the business share unless you turn off{" "}
+                      <span className="font-medium">Business share only</span> for one that was
+                      wholly for work.
+                    </p>
+                  ) : null}
+                </div>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <ExpenseField
                     label="Toll"
                     value={draft.tollAmount}
                     error={issueFor("tollAmount")}
-                    split={draft.isSplit ? draft.splitToll : null}
+                    split={isSplit ? draft.splitToll : null}
+                    share={figures.businessPercentage}
                     symbol={format.symbol}
                     onChange={(tollAmount) => patch("tollAmount", { tollAmount })}
                     onSplit={(splitToll) => patch("splitToll", { splitToll })}
@@ -820,7 +940,8 @@ function KmTripForm({
                     label="Parking"
                     value={draft.parkingAmount}
                     error={issueFor("parkingAmount")}
-                    split={draft.isSplit ? draft.splitParking : null}
+                    split={isSplit ? draft.splitParking : null}
+                    share={figures.businessPercentage}
                     symbol={format.symbol}
                     onChange={(parkingAmount) => patch("parkingAmount", { parkingAmount })}
                     onSplit={(splitParking) => patch("splitParking", { splitParking })}
@@ -831,7 +952,8 @@ function KmTripForm({
                         label="Fuel cost"
                         value={draft.fuelCost}
                         error={issueFor("fuelCost")}
-                        split={draft.isSplit ? draft.splitFuel : null}
+                        split={isSplit ? draft.splitFuel : null}
+                        share={figures.businessPercentage}
                         symbol={format.symbol}
                         onChange={(fuelCost) => patch("fuelCost", { fuelCost })}
                         onSplit={(splitFuel) => patch("splitFuel", { splitFuel })}
@@ -840,7 +962,8 @@ function KmTripForm({
                         label="Other expenses"
                         value={draft.otherExpenses}
                         error={issueFor("otherExpenses")}
-                        split={draft.isSplit ? draft.splitOther : null}
+                        split={isSplit ? draft.splitOther : null}
+                        share={figures.businessPercentage}
                         symbol={format.symbol}
                         onChange={(otherExpenses) => patch("otherExpenses", { otherExpenses })}
                         onSplit={(splitOther) => patch("splitOther", { splitOther })}
@@ -859,75 +982,6 @@ function KmTripForm({
                     Fuel and other running costs aren&apos;t claimable separately under
                     the {format.method(method).toLowerCase()} — the rate already covers them.
                   </p>
-                )}
-              </div>
-
-              <div className="space-y-3 rounded-md border border-border p-3">
-                <div className="flex items-center justify-between gap-4">
-                  <div className="min-w-0 space-y-0.5">
-                    <Label htmlFor="km-split" className="text-sm font-medium">
-                      Split this trip
-                    </Label>
-                    <p className="text-xs text-muted-foreground">
-                      Part business, part personal — only the business share is claimed.
-                    </p>
-                  </div>
-                  <Switch id="km-split" checked={draft.isSplit} onCheckedChange={setSplit} />
-                </div>
-                {draft.isSplit && (
-                  <div className="grid gap-3 border-t border-border pt-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-                    <Field
-                      label="Business share"
-                      htmlFor="km-split-value"
-                      error={issueFor("businessPercentage")}
-                    >
-                      <div className="flex gap-2">
-                        <Input
-                          id="km-split-value"
-                          inputMode="decimal"
-                          value={
-                            splitUnit === "percent"
-                              ? draft.businessPercentage
-                              : splitKmText || trimNumber(figures.deductibleKm)
-                          }
-                          onChange={(event) =>
-                            splitUnit === "percent"
-                              ? patch("businessPercentage", { businessPercentage: event.target.value })
-                              : onSplitKm(event.target.value)
-                          }
-                          className={cn("tabular", invalidClass("businessPercentage"))}
-                        />
-                        <ToggleGroup
-                          type="single"
-                          variant="outline"
-                          value={splitUnit}
-                          onValueChange={(value) => {
-                            if (!value) return;
-                            setSplitUnit(value as "percent" | "km");
-                            setSplitKmText("");
-                          }}
-                          aria-label="Enter the business share as"
-                        >
-                          <ToggleGroupItem value="percent" className="px-3">%</ToggleGroupItem>
-                          <ToggleGroupItem value="km" className="px-3">KM</ToggleGroupItem>
-                        </ToggleGroup>
-                      </div>
-                    </Field>
-                    <dl className="flex gap-4 rounded-md bg-muted/40 px-3 py-2 text-sm">
-                      <div>
-                        <dt className="text-xs text-muted-foreground">Business</dt>
-                        <dd className="font-medium tabular">{format.km(figures.deductibleKm)} KM</dd>
-                      </div>
-                      <div>
-                        <dt className="text-xs text-muted-foreground">Personal</dt>
-                        <dd className="font-medium tabular">{format.km(figures.personalKm)} KM</dd>
-                      </div>
-                    </dl>
-                    <p className="text-xs text-muted-foreground sm:col-span-2">
-                      Each expense has its own Split switch — turn it off for a cost that was
-                      wholly for business.
-                    </p>
-                  </div>
                 )}
               </div>
             </div>
@@ -1093,14 +1147,17 @@ function KmTripForm({
                     Billable trip
                   </Label>
                   <p className="text-xs text-muted-foreground">
-                    {draft.isBillable
-                      ? "Can be converted to an invoice from the trip list."
-                      : "Tracked for tax only. Turn on to bill a client for it."}
+                    {isPersonal
+                      ? "A personal trip can't be billed to a client."
+                      : draft.isBillable
+                        ? "Can be converted to an invoice from the trip list."
+                        : "Tracked for tax only. Turn on to bill a client for it."}
                   </p>
                 </div>
                 <Switch
                   id="km-billable"
-                  checked={draft.isBillable}
+                  checked={draft.isBillable && !isPersonal}
+                  disabled={isPersonal}
                   onCheckedChange={(isBillable) => patch("isBillable", { isBillable })}
                 />
               </div>
@@ -1143,10 +1200,13 @@ function KmTripForm({
             <h2 className="text-sm font-semibold">Summary</h2>
             <dl className="mt-3 space-y-1.5 text-sm">
               <SummaryRow label="Distance" value={`${format.km(figures.distanceKm)} KM`} />
-              {draft.isSplit && (
-                <SummaryRow label="Business distance" value={`${format.km(figures.deductibleKm)} KM`} />
+              {(isSplit || isPersonal) && (
+                <>
+                  <SummaryRow label="Business distance" value={`${format.km(figures.deductibleKm)} KM`} />
+                  <SummaryRow label="Personal distance" value={`${format.km(figures.personalKm)} KM`} />
+                </>
               )}
-              {draft.isSplit && (
+              {isSplit && (
                 <>
                   <SummaryRow
                     label="Personal share"
@@ -1155,15 +1215,26 @@ function KmTripForm({
                   <SummaryRow label="Business share" value={format.money(figures.estimatedDeduction)} />
                 </>
               )}
-              <div className="flex items-baseline justify-between gap-4 border-t border-border pt-2">
-                <dt className="font-medium">Total cost</dt>
-                <dd className="text-lg font-semibold tabular">{format.money(figures.totalAmount)}</dd>
-              </div>
+              {isPersonal ? (
+                figures.expensesTotal > 0 && (
+                  <SummaryRow label="Costs entered (not claimed)" value={format.money(figures.expensesTotal)} />
+                )
+              ) : (
+                <div className="flex items-baseline justify-between gap-4 border-t border-border pt-2">
+                  <dt className="font-medium">Total cost</dt>
+                  <dd className="text-lg font-semibold tabular">{format.money(figures.totalAmount)}</dd>
+                </div>
+              )}
               <SummaryRow
                 label="Estimated deduction"
                 value={format.money(figures.estimatedDeduction)}
               />
             </dl>
+            {isPersonal && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                A personal trip isn&apos;t claimed: nothing here counts toward your deductions or reports.
+              </p>
+            )}
             {tiered && (
               <p className="mt-2 text-xs text-muted-foreground">
                 Estimated at the tier 1 rate — the final figure is worked out when you save.
@@ -1172,26 +1243,25 @@ function KmTripForm({
             {issueFor("totalAmount") && (
               <p className="mt-2 text-xs text-destructive">{issueFor("totalAmount")}</p>
             )}
-            <div className="mt-4 hidden lg:block">
-              <Button className="w-full" onClick={onSave} disabled={saving}>
-                {saving && <Loader2 className="animate-spin" />}
-                {mode === "edit" ? "Save changes" : "Save trip"}
-              </Button>
-            </div>
           </section>
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center justify-end gap-2 border-t pt-4">
+      {/* The page's one Cancel / Save, pinned to the bottom edge so it's never a
+          scroll away from the field just changed. */}
+      <div className="sticky bottom-0 z-10 -mb-2 flex flex-wrap items-center justify-end gap-2 border-t bg-background py-3">
         {attempted && issues.length > 0 && (
           <p className="mr-auto text-xs text-destructive">
             {issues.length === 1 ? issues[0].message : `${issues.length} fields need attention`}
           </p>
         )}
-        <Button variant="ghost" onClick={guardNavigate(KM_ROOT)} disabled={saving}>
-          Cancel
-        </Button>
-        {saveButton}
+        {/* The tour points at just the two buttons, not the whole bar. */}
+        <div className="flex items-center gap-2" data-usertour="km-trip-save-actions">
+          <Button variant="ghost" onClick={guardNavigate(KM_ROOT)} disabled={saving}>
+            Cancel
+          </Button>
+          {saveButton}
+        </div>
       </div>
 
       {unsavedDialog}
@@ -1226,6 +1296,7 @@ function ExpenseField({
   error,
   hint,
   split,
+  share,
   symbol,
   onChange,
   onSplit,
@@ -1234,24 +1305,30 @@ function ExpenseField({
   value: string;
   error?: string;
   hint?: string;
+  /** Whether only the business share of this cost is claimed, or null unless the trip is split. */
+  split: boolean | null;
+  /** The trip's business share, in percent, for the "claiming" line. */
+  share: number;
   /** The country's currency symbol — "$" in Australia. */
   symbol: string;
-  /** The per-expense split switch, or null when the trip isn't split. */
-  split: boolean | null;
   onChange: (value: string) => void;
   onSplit: (value: boolean) => void;
 }) {
+  const amount = Number(value);
+  const hasAmount = Number.isFinite(amount) && amount > 0;
+  const claimed = split ? (amount * share) / 100 : amount;
+  const money = (figure: number) => `${symbol}${figure.toFixed(2)}`;
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
         <Label className="text-sm">{label}</Label>
         {split !== null && (
           <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            Split
+            Business share only
             <Switch
               checked={split}
               onCheckedChange={onSplit}
-              aria-label={`Split ${label.toLowerCase()} by the business share`}
+              aria-label={`Claim only the business share of ${label.toLowerCase()}`}
               className="scale-75"
             />
           </label>
@@ -1267,8 +1344,138 @@ function ExpenseField({
       />
       {error ? (
         <p className="text-xs text-destructive">{error}</p>
+      ) : split !== null && hasAmount ? (
+        <p className="text-xs text-muted-foreground">
+          {split
+            ? `Claiming ${money(claimed)} of ${money(amount)} (${trimNumber(share, 2)}%)`
+            : `Claiming all ${money(amount)} — wholly for work`}
+        </p>
       ) : (
         hint && <p className="text-xs text-muted-foreground">{hint}</p>
+      )}
+    </div>
+  );
+}
+
+const TRIP_USES: { value: KmTripType; label: string; detail: string; icon: LucideIcon }[] = [
+  { value: "business", label: "Business", detail: "All for work. The whole trip is claimed.", icon: Briefcase },
+  { value: "personal", label: "Personal", detail: "Not for work. Nothing is claimed.", icon: UserRound },
+  { value: "split", label: "Split", detail: "Part work, part personal. Only the work share is claimed.", icon: Percent },
+];
+
+/**
+ * What the trip was for — the choice everything claimable follows from. Three
+ * plain options instead of a switch plus a percentage, so "0%" never has to be
+ * typed to mean personal; the share only appears for a split.
+ */
+function TripUse({
+  value,
+  onChange,
+  share,
+  unit,
+  kmText,
+  onShare,
+  onKm,
+  onUnit,
+  error,
+  businessKm,
+  personalKm,
+  formatKm,
+}: {
+  value: KmTripType;
+  onChange: (value: KmTripType) => void;
+  share: string;
+  unit: "percent" | "km";
+  kmText: string;
+  onShare: (value: string) => void;
+  onKm: (value: string) => void;
+  onUnit: (value: "percent" | "km") => void;
+  error?: string;
+  businessKm: number;
+  personalKm: number;
+  formatKm: (value: number) => string;
+}) {
+  const total = businessKm + personalKm;
+  const businessWidth = total > 0 ? (businessKm / total) * 100 : 0;
+  return (
+    <div className="space-y-3" data-usertour="km-trip-use">
+      <div className="space-y-0.5">
+        <p className="text-sm font-medium">How was this trip used?</p>
+        <p className="text-xs text-muted-foreground">
+          This decides what you can claim for the trip.
+        </p>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="How was this trip used">
+        {TRIP_USES.map((option) => {
+          const selected = value === option.value;
+          const Icon = option.icon;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              onClick={() => onChange(option.value)}
+              className={cn(
+                "flex flex-col gap-1 rounded-md border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                selected
+                  ? "border-primary bg-primary/[0.06]"
+                  : "border-border bg-card hover:border-foreground/20",
+              )}
+            >
+              <span className="flex items-center gap-2 text-sm font-medium">
+                <Icon className={cn("size-4", selected ? "text-primary" : "text-muted-foreground")} aria-hidden />
+                {option.label}
+              </span>
+              <span className="text-xs text-muted-foreground">{option.detail}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {value === "split" && (
+        <div className="space-y-3 rounded-md border border-border p-3">
+          <Field label="Business share" htmlFor="km-split-value" error={error}>
+            <div className="flex gap-2">
+              <Input
+                id="km-split-value"
+                inputMode="decimal"
+                value={unit === "percent" ? share : kmText}
+                onChange={(event) =>
+                  unit === "percent" ? onShare(event.target.value) : onKm(event.target.value)
+                }
+                placeholder={unit === "percent" ? "e.g. 60" : "e.g. 12.5"}
+                aria-invalid={!!error}
+                className={cn("tabular", error && "border-destructive focus-visible:ring-destructive")}
+              />
+              <ToggleGroup
+                type="single"
+                variant="outline"
+                value={unit}
+                onValueChange={(next) => next && onUnit(next as "percent" | "km")}
+                aria-label="Enter the business share as"
+              >
+                <ToggleGroupItem value="percent" className="px-3">%</ToggleGroupItem>
+                <ToggleGroupItem value="km" className="px-3">KM</ToggleGroupItem>
+              </ToggleGroup>
+            </div>
+          </Field>
+          <div className="space-y-1.5" aria-live="polite">
+            <div className="flex h-2 overflow-hidden rounded-full bg-muted" aria-hidden>
+              <div className="bg-primary transition-[width]" style={{ width: `${businessWidth}%` }} />
+            </div>
+            <div className="flex justify-between gap-3 text-xs">
+              <span>
+                <span className="font-medium text-foreground">Business</span>{" "}
+                <span className="tabular text-muted-foreground">{formatKm(businessKm)} KM claimed</span>
+              </span>
+              <span>
+                <span className="font-medium text-foreground">Personal</span>{" "}
+                <span className="tabular text-muted-foreground">{formatKm(personalKm)} KM not claimed</span>
+              </span>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

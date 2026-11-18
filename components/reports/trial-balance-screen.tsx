@@ -108,7 +108,13 @@ export function TrialBalanceScreen() {
         description="Every account's closing balance, as at one date."
       >
         <Select value={asAt.end} onValueChange={setSelected}>
-          <SelectTrigger className="w-40" aria-label="As at">
+          {/* Same anchor as the shared period picker, so the one reports
+              tour covers the as-at reports too. */}
+          <SelectTrigger
+            className="w-40"
+            aria-label="As at"
+            data-usertour="report-period"
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -120,7 +126,7 @@ export function TrialBalanceScreen() {
           </SelectContent>
         </Select>
 
-        <Button onClick={() => setSendOpen(true)}>
+        <Button onClick={() => setSendOpen(true)} data-usertour="report-send">
           <Send />
           Send report
         </Button>

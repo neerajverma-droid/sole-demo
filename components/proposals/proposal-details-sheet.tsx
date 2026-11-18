@@ -1,8 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { useAtom } from "jotai";
-import { Copy, ExternalLink, FileText, Loader2, Send, TriangleAlert } from "lucide-react";
+import { useAtom, useSetAtom } from "jotai";
+import { BellRing, Copy, ExternalLink, FileText, Loader2, Send, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -22,9 +22,11 @@ import {
   useProposalDetailQuery,
   useSendProposalMutation,
 } from "@/hooks/use-proposals-query";
-import { viewProposalIdAtom } from "@/lib/atoms";
+import { reminderProposalIdAtom, viewProposalIdAtom } from "@/lib/atoms";
 import { apiErrorMessage } from "@/lib/api-error";
 import {
+  canSendReminder,
+  reminderBlockedReason,
   contractLengthLabel,
   contractStartLabel,
   formatProposalDate,
@@ -51,6 +53,7 @@ type Tab = (typeof TABS)[number];
 /** A proposal at a glance — and each section exactly as the client sees it */
 export function ProposalDetailsSheet() {
   const [viewId, setViewId] = useAtom(viewProposalIdAtom);
+  const setReminderId = useSetAtom(reminderProposalIdAtom);
   const [tab, setTab] = React.useState<Tab>("Details");
   const query = useProposalDetailQuery(viewId);
   const resend = useSendProposalMutation();
@@ -135,12 +138,26 @@ export function ProposalDetailsSheet() {
                     </span>
                     <span className="truncate font-medium">{clientName}</span>
                   </div>
-                  {status !== "accepted" && (
-                    <Button size="sm" disabled={resend.isPending} onClick={handleResend}>
-                      {resend.isPending ? <Loader2 className="animate-spin" /> : <Send />}
-                      {resend.isPending ? "Sending..." : "Resend"}
-                    </Button>
-                  )}
+                  <div className="flex shrink-0 flex-wrap justify-end gap-2">
+                    {/* Always shown; disabled, with the reason, until the client has it to answer. */}
+                    <span title={reminderBlockedReason(status) ?? undefined}>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={!canSendReminder(status)}
+                        onClick={() => setReminderId(String(proposal.id))}
+                      >
+                        <BellRing />
+                        Send reminder
+                      </Button>
+                    </span>
+                    {status !== "accepted" && (
+                      <Button size="sm" disabled={resend.isPending} onClick={handleResend}>
+                        {resend.isPending ? <Loader2 className="animate-spin" /> : <Send />}
+                        {resend.isPending ? "Sending..." : status === "draft" ? "Send" : "Resend"}
+                      </Button>
+                    )}
+                  </div>
                 </div>
                 <div className="flex flex-wrap items-end gap-[15px]">
                   <div className="min-w-0 flex-1 space-y-1.5">
@@ -252,8 +269,8 @@ export function ProposalDetailsSheet() {
 
 function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-start gap-4 border-b border-border/60 py-2.5 text-sm last:border-b-0">
-      <dt className="w-36 shrink-0 text-muted-foreground">{label}</dt>
+    <div className="flex flex-col gap-1 border-b border-border/60 py-2.5 text-sm last:border-b-0 sm:flex-row sm:items-start sm:gap-4">
+      <dt className="shrink-0 text-muted-foreground sm:w-36">{label}</dt>
       <dd className="min-w-0 flex-1">{children}</dd>
     </div>
   );

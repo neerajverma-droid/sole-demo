@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { usePathname } from "next/navigation";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -17,15 +18,18 @@ import { Input } from "@/components/ui/input";
 import { Field } from "@/components/documents/field";
 import { apiErrorMessage } from "@/lib/api-error";
 import {
-  EMAIL_PATTERN,
   contactFormDefaults,
+  quickContactIssues,
   type Contact,
   type ContactType,
 } from "@/lib/contacts";
 import { createContactApi } from "@/lib/contacts-api";
+import { EVENTS } from "@/lib/analytics-events";
+import { moduleNameForPath } from "@/lib/nav";
+import { useTrackOnOpen } from "@/hooks/use-track-once";
 import { invalidateContactLists } from "@/hooks/use-contacts-query";
 import { useCountryContext } from "@/hooks/use-country-context";
-import { contactDefaultCurrency } from "@/lib/country-context";
+import { contactDefaultCurrency, contactDefaultDialCode } from "@/lib/country-context";
 import { cn } from "@/lib/utils";
 import { useContactsStore } from "@/stores/contacts";
 
@@ -39,6 +43,7 @@ export function NewClientDialog({
   initialName,
   onCreated,
   createType = "Client",
+  showPhone = true,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -47,8 +52,19 @@ export function NewClientDialog({
   onCreated: (contact: Contact) => void;
   /** Expenses create Suppliers; documents create Clients. */
   createType?: ContactType;
+  /**
+   * The optional Phone field. Time Tracker leaves it off — a client made there
+   * is someone to log hours against; the phone is filled in on Contacts.
+   */
+  showPhone?: boolean;
 }) {
   const queryClient = useQueryClient();
+  // "Add client" from inside a module is a contact being started too;
+  // module_name says which one it was started from.
+  const pathname = usePathname();
+  useTrackOnOpen(EVENTS.CONTACT_CREATION_INITIATED, open, {
+    module_name: moduleNameForPath(pathname),
+  });
   const { country } = useCountryContext();
   const setContacts = useContactsStore((state) => state.setContacts);
   const noun = createType.toLowerCase();
@@ -69,18 +85,17 @@ export function NewClientDialog({
     setTouched(false);
   }, [open, initialName]);
 
-  // Same rules as the Contacts drawer: a name of at least two characters, and
-  // an email that looks like one. Email is optional here.
-  const nameError =
-    name.trim().length < 2
-      ? "Enter the contact name (at least 2 characters)."
-      : undefined;
-  const emailError =
-    email.trim() && !EMAIL_PATTERN.test(email.trim())
-      ? "Enter a valid email address."
-      : undefined;
+  // `quickContactIssues`: email required for a client, optional for a
+  // supplier; a badly typed one is flagged either way.
+  const {
+    emailRequired,
+    name: nameError,
+    email: emailError,
+  } = quickContactIssues(createType, { name, email });
 
   const nameIssue = touched ? nameError : undefined;
+  // "Required" waits for a submit; "not an email" shows while typing.
+  const emailIssue = email.trim() || touched ? emailError : undefined;
 
   const onCreate = async () => {
     if (nameError || emailError) {
@@ -94,6 +109,7 @@ export function NewClientDialog({
       const contact = await createContactApi({
         ...contactFormDefaults,
         currency: contactDefaultCurrency(country),
+        countryCode: contactDefaultDialCode(country),
         type: createType,
         // The quick form asks for one name, so it stands as both the
         // business and contact name until it's refined on the Contacts
@@ -148,29 +164,36 @@ export function NewClientDialog({
             />
           </Field>
 
-          <Field label="Email" error={emailError}>
+          <Field
+            label="Email"
+            required={emailRequired}
+            hint={emailRequired ? undefined : "Optional."}
+            error={emailIssue}
+          >
             <Input
               type="email"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               placeholder="accounts@acme.com.au"
-              aria-invalid={!!emailError}
+              aria-invalid={!!emailIssue}
               className={cn(
-                emailError &&
+                emailIssue &&
                   "border-destructive focus-visible:ring-destructive",
               )}
             />
           </Field>
 
-          <Field label="Phone" hint="Optional.">
-            <Input
-              inputMode="tel"
-              value={phone}
-              onChange={(event) => setPhone(event.target.value)}
-              placeholder="411 111 111"
-              className="tabular"
-            />
-          </Field>
+          {showPhone && (
+            <Field label="Phone" hint="Optional.">
+              <Input
+                inputMode="tel"
+                value={phone}
+                onChange={(event) => setPhone(event.target.value)}
+                placeholder="411 111 111"
+                className="tabular"
+              />
+            </Field>
+          )}
         </div>
 
         <DialogFooter>

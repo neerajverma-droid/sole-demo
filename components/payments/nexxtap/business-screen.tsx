@@ -109,6 +109,7 @@ export function NexxtapBusinessScreen() {
         <FormSection
           icon={Building2}
           title="Business details"
+          tourId="nexttap-business-details"
           description="The business NextTap will be boarding."
           headerClassName={NEXXTAP_SECTION_HEADER}
           className="space-y-4 p-4 sm:p-6"
@@ -204,7 +205,10 @@ export function NexxtapBusinessScreen() {
             will board it. Any one of the three does, which is why they sit
             together under a rule rather than among the fields above.
           */}
-          <div className="space-y-4 border-t border-border pt-4">
+          <div
+            className="space-y-4 border-t border-border pt-4"
+            data-usertour="nexttap-business-online"
+          >
             <div className="space-y-0.5">
               <p className="text-sm font-medium">Online presence</p>
               <p className="text-xs text-muted-foreground">
@@ -258,6 +262,7 @@ export function NexxtapBusinessScreen() {
         <FormSection
           icon={MapPin}
           title="Business address"
+          tourId="nexttap-business-address"
           description="Where the business trades from."
           headerClassName={NEXXTAP_SECTION_HEADER}
           className="space-y-4 p-4 sm:p-6"

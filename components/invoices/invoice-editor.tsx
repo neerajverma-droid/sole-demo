@@ -1,20 +1,25 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   BookmarkPlus,
   Eye,
   FileText,
+  Loader2,
   Pencil,
   UserRound,
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { FormSection } from "@/components/ui/form-section";
+import {
+  FormSection,
+  FormSectionDensityProvider,
+} from "@/components/ui/form-section";
 import { Input } from "@/components/ui/input";
 import {
   Tooltip,
@@ -28,15 +33,20 @@ import { Field } from "@/components/documents/field";
 import { InvoiceClientSelect } from "@/components/documents/invoice-client-select";
 import { DocumentLineItems } from "@/components/documents/line-items";
 import { NdisLineItems } from "@/components/documents/ndis-line-items";
+import { NdisPricingNote } from "@/components/documents/ndis-price-tier";
 import { InvoiceRuntimePreviewDialog } from "@/components/invoices/invoice-runtime-preview-dialog";
 import { AddAddressDialog } from "@/components/invoices/add-address-dialog";
 import { AddBankDetailsDialog } from "@/components/invoices/add-bank-details-dialog";
 import { InvoiceReadyDialog } from "@/components/invoices/invoice-ready-dialog";
 import { SaveAsTemplateDialog } from "@/components/invoices/save-as-template-dialog";
+import { SolePayPromoBanner } from "@/components/invoices/solepay-promo-banner";
+import { SolePayPromptDialog } from "@/components/invoices/solepay-prompt-dialog";
+import { invoiceEditHref, solePayOnboardingHref } from "@/lib/solepay-return";
 import { NdisNumberDialog } from "@/components/documents/ndis-number-dialog";
 import { SenderBlock } from "@/components/documents/sender-block";
 import { TotalsPanel } from "@/components/documents/totals-panel";
 import {
+  AdvancedOptions,
   AttachmentsCard,
   DepositCard,
   FollowUpReminderRow,
@@ -61,13 +71,14 @@ import {
   fetchInvoicePaymentRails,
   updateSolePaySettingsApi,
   fetchNextInvoiceNumber,
+  checkInvoiceNumberTaken,
   templateIdFor,
   DEFAULT_PAYMENT_RAILS,
 } from "@/lib/invoice-context";
 import {
   fetchClientNdisDetails,
   fetchInvoiceContacts,
-  ndisClientIssue,
+  ndisClaimIssue,
   primaryContactFor,
 } from "@/lib/invoice-clients";
 import {
@@ -78,14 +89,21 @@ import {
 import {
   DEFAULT_PAYMENT_TERMS,
   addDays,
+  canSaveInvoiceAsDraft,
+  documentHasDraftContent,
+  EMPTY_DRAFT_MESSAGE,
   daysBetween,
   deleteInvoiceAttachmentApi,
+  depositIssue,
   documentIssues,
   draftFromInvoice,
   emptyInvoiceDraft,
   emptyNdisDraft,
   fetchInvoiceDetail,
   fetchInvoicePdfBlob,
+  followUpIssue,
+  invoiceEditBlock,
+  invoiceTotalIssue,
   invoiceTotals,
   ndisIssues,
   newLineItem,
@@ -93,14 +111,18 @@ import {
   newNdisLineItem,
   parseIsoDate,
   savePdfBlob,
+  stockIssues,
   newAttachmentId,
   toIsoDate,
   type DocumentCurrency,
+  type Invoice,
   type InvoiceDraft,
   type InvoiceLineItem,
   type InvoiceSeed,
 } from "@/lib/invoices";
 import { apiErrorMessage } from "@/lib/api-error";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
 import { activeBusiness, useBusinessesStore } from "@/stores/businesses";
 import { cn } from "@/lib/utils";
 import { useSalesSettings } from "@/lib/use-sales-settings";
@@ -116,12 +138,22 @@ import {
 } from "@/lib/businesses";
 import { useActiveBusiness } from "@/hooks/use-active-business";
 import { useCountryContext } from "@/hooks/use-country-context";
+import { useInventoryQuery } from "@/hooks/use-inventory-query";
+import { resetInvoiceListCache } from "@/hooks/use-invoices-query";
 import { bankFieldsPhrase, documentTax, hasRequiredBankFields } from "@/lib/country-context";
 import { useExpensesStore } from "@/stores/expenses";
 import { useQuotesStore } from "@/stores/quotes";
 import { useInventoryStore } from "@/stores/inventory";
 import { useCaptureStore } from "@/stores/capture";
 import { sessionUserId, useSessionStore } from "@/stores/session";
+
+// Section density for the invoice form, general and NDIS alike: headers 0.35rem
+// top and bottom, bodies 0.75rem all round. Module-level so the context value
+// is referentially stable.
+const INVOICE_DENSITY = { header: "items-center py-[0.35rem]", body: "p-3" };
+
+/** The Save & send prompt for SolePay comes on every Nth new invoice. */
+const SOLEPAY_PROMPT_EVERY = 5;
 
 export function InvoiceEditor({
   invoiceId,
@@ -134,6 +166,7 @@ export function InvoiceEditor({
   seed,
   variant = "general",
   embedded = false,
+  returnTo,
   onClose,
   onSaved,
 }: {
@@ -180,6 +213,12 @@ export function InvoiceEditor({
   /** Cancel, or the guarded back action, when embedded. */
   onClose?: () => void;
   /**
+   * Where Back and Cancel go on the full page, when the invoice was raised
+   * from somewhere other than the invoices list — Time Tracker sends its
+   * people back to their time rather than to a list they didn't come from.
+   */
+  returnTo?: string;
+  /**
    * Called instead of navigating to the list once an invoice is saved, so the
    * host can record what it was raised for — the expenses list uses it to
    * mark the expense invoiced.
@@ -187,6 +226,7 @@ export function InvoiceEditor({
   onSaved?: (saved: { id: string; number: string }) => void | Promise<void>;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
   const queryClient = useQueryClient();
   /*
    * `user_id` first, not `id`. The profile endpoint returns `user_id`
@@ -289,6 +329,8 @@ export function InvoiceEditor({
     automate?: boolean;
   }>({});
   const [savingSolePay, setSavingSolePay] = React.useState(false);
+  /** The "show bank details" switch is mid-save. */
+  const [savingBankDetails, setSavingBankDetails] = React.useState(false);
   const rails = React.useMemo(() => {
     const base = railsQuery.data ?? DEFAULT_PAYMENT_RAILS;
     return {
@@ -386,6 +428,10 @@ export function InvoiceEditor({
   const [files, setFiles] = React.useState<{ id: string; file: File }[]>(seedFiles);
   const [numberEditable, setNumberEditable] = React.useState(false);
   const numberInputRef = React.useRef<HTMLInputElement | null>(null);
+  /** The number the field held when editing was opened — not worth checking. */
+  const numberBaselineRef = React.useRef("");
+  /** The number last sent to the server, set when the person leaves the field. */
+  const [checkedNumber, setCheckedNumber] = React.useState("");
 
   /**
    * Errors surface field by field, once that field has been touched — picking
@@ -432,24 +478,35 @@ export function InvoiceEditor({
    * writes through `setDraft` directly, not through these helpers.
    */
   const [touched, setTouched] = React.useState(false);
+  // Set once `save` exists, further down: leaving a new invoice offers to keep
+  // it as a draft first. Not for an invoice being edited, nor one raised inside
+  // another screen's dialog, whose host has its own idea of what saving means.
+  const saveDraftOnLeaveRef = React.useRef<
+    ((proceed: () => void) => Promise<void>) | null
+  >(null);
   const {
     guard,
     guardNavigate,
     dialog: unsavedChangesDialog,
-  } = useUnsavedChanges(touched);
+  } = useUnsavedChanges(touched, {
+    onSaveDraft:
+      !invoiceId && !embedded
+        ? (proceed) => saveDraftOnLeaveRef.current?.(proceed)
+        : undefined,
+  });
 
   /**
    * Leaving the form. On its own page that's the invoice list; in a dialog
    * it's whatever opened it, since there is nowhere to navigate to.
    */
   const leave =
-    embedded && onClose ? guard(onClose) : guardNavigate("/invoices");
+    embedded && onClose ? guard(onClose) : guardNavigate(returnTo ?? "/invoices");
   // The arrow steps back to the chooser a new invoice came from; an existing
   // one has no chooser behind it, so it returns to the list.
   const goBack =
     embedded && onClose
       ? leave
-      : guardNavigate(invoiceId ? "/invoices" : "/invoices/new");
+      : guardNavigate(returnTo ?? (invoiceId ? "/invoices" : "/invoices/new"));
 
   const patch = (values: Partial<InvoiceDraft>) => {
     // The client is one issue spread over three draft fields.
@@ -524,6 +581,9 @@ export function InvoiceEditor({
     queryFn: () => fetchInvoiceDetail(sourceId as string),
     enabled: !!sourceId,
   });
+  // Stock on hand for the tracked products on the lines, so an over-sold line is
+  // caught here ("Only 4 in stock") rather than by the server after the click.
+  const inventoryQuery = useInventoryQuery();
   const detailHydrated = React.useRef(false);
   React.useEffect(() => {
     if (!detailQuery.data || detailHydrated.current) return;
@@ -799,6 +859,7 @@ export function InvoiceEditor({
   const toggleBankDetails = async (show: boolean) => {
     patchSetting({ showBankDetails: show });
     if (!business) return;
+    setSavingBankDetails(true);
     try {
       await updateBusinessShowBankDetailsApi(business.id, show);
       patchBusiness(business.id, { showBankDetailsOnInvoice: show });
@@ -807,6 +868,8 @@ export function InvoiceEditor({
       toast.error(
         apiErrorMessage(error, "Couldn't update the bank details setting."),
       );
+    } finally {
+      setSavingBankDetails(false);
     }
   };
 
@@ -963,8 +1026,15 @@ export function InvoiceEditor({
    * Validation
    * ---------------------------------------------------------------- */
 
-  /** GST applies only where the business charges it. */
-  const showGst = tax.gstEnabled && sales.invoiceFields.gst;
+  /**
+   * GST applies only where the business charges it. Sales settings' GST switch
+   * isn't part of this: it only decides whether the printed document shows a GST
+   * column on each line, and the server applies it when it draws the PDF. The old
+   * editor never read it either. Tying the two together meant switching the
+   * column off removed the GST checkbox here and cleared GST from every line, so
+   * a print preference silently changed what the client was charged.
+   */
+  const showGst = tax.gstEnabled;
 
   /*
    * With GST off for this document the column isn't rendered at all, so a line
@@ -1015,23 +1085,110 @@ export function InvoiceEditor({
    */
   const claimIssue =
     ndis && !ndisDetailsQuery.isFetching
-      ? ndisClientIssue(ndisDetails, draft.clientId)
+      ? ndisClaimIssue(ndisDetails, draft.clientId)
+      : undefined;
+
+  /*
+   * Stock per tracked product. For a sent invoice being edited, what it already
+   * holds is added back: the server only moves the difference, so an invoice
+   * that sold 5 of 5 can still be saved as 5. A draft holds nothing.
+   */
+  const stockAvailable = React.useMemo(
+    () =>
+      new Map(
+        (inventoryQuery.data ?? [])
+          .filter((item) => item.tracked)
+          .map((item) => [item.id, Number(item.openingStock) || 0] as const),
+      ),
+    [inventoryQuery.data],
+  );
+  const stockOnInvoice = React.useMemo(() => {
+    const held = new Map<string, number>();
+    // A draft holds no stock (it's taken when the invoice is sent), so there's
+    // nothing of its own to add back.
+    if (!invoiceId || !detailQuery.data?.stockDeducted) return held;
+    for (const item of detailQuery.data?.items ?? []) {
+      if (!item.productId) continue;
+      held.set(
+        item.productId,
+        (held.get(item.productId) ?? 0) + (Number(item.quantity) || 0),
+      );
+    }
+    return held;
+  }, [invoiceId, detailQuery.data]);
+
+  /*
+   * A number the person typed in is checked against the server once they leave
+   * the field, so a duplicate shows up then instead of after Save. Opening the
+   * field for editing, or leaving it with the number it started with, asks
+   * nothing (the suggested number is already free). The answer is only
+   * trusted while it's for what's in the box, and a failed lookup never
+   * blocks — saving still enforces uniqueness on the server.
+   */
+  const typedNumber = draft.number.trim();
+  const numberCheck = useQuery({
+    queryKey: ["invoice-number-taken", checkedNumber, invoiceId ?? null],
+    queryFn: () => checkInvoiceNumberTaken(checkedNumber, invoiceId),
+    enabled: numberEditable && checkedNumber !== "",
+    staleTime: 0,
+    retry: false,
+  });
+  /** True while the server is being asked about the number in the box. */
+  const checkingNumber =
+    numberEditable &&
+    checkedNumber !== "" &&
+    checkedNumber === typedNumber &&
+    numberCheck.isFetching;
+  const numberTakenMessage =
+    numberEditable &&
+    checkedNumber !== "" &&
+    checkedNumber === typedNumber &&
+    numberCheck.data === true
+      ? `${typedNumber} is already used by another invoice. Choose a different number.`
       : undefined;
 
   const issues = [
     ...documentIssues(draft),
+    ...(numberTakenMessage
+      ? [{ key: "number", message: numberTakenMessage }]
+      : []),
     ...(ndis ? ndisIssues(draft.items) : []),
+    ...stockIssues(draft.items, stockAvailable, stockOnInvoice),
   ];
-  const issueFor = (key: string) =>
-    attempted || touchedFields.has(key)
-      ? issues.find((issue) => issue.key === key)?.message
+  const issueFor = (key: string) => {
+    const issue = issues.find((entry) => entry.key === key);
+    // A value that is merely not there yet waits for a save attempt.
+    return issue && (attempted || (!issue.submitOnly && touchedFields.has(key)))
+      ? issue.message
       : undefined;
+  };
 
   const totals = invoiceTotals(
     draft.items,
     draft.extraDiscount,
     tax.gstPercent,
   );
+
+  /*
+   * Whole-document checks the old app made before it would save. The total
+   * waits for the lines to be sorted out first — an empty invoice already says
+   * what's missing, and "total must be above 0" on top of it is noise.
+   */
+  const totalIssue =
+    issues.length === 0 ? invoiceTotalIssue(totals.total) : undefined;
+  const depositProblem = depositIssue(draft.deposit, {
+    total: totals.total,
+    items: draft.items,
+    gstPercent: tax.gstPercent,
+    issued: draft.issued,
+    due: draft.due,
+  });
+  const followUpProblem = followUpIssue(draft);
+  /** Set when this invoice can't be edited — the page then opens as view only. */
+  const editBlock =
+    invoiceId && detailQuery.data
+      ? invoiceEditBlock(detailQuery.data)
+      : undefined;
 
   /*
    * A foreign-currency invoice with no rate to convert it back to AUD can't
@@ -1050,7 +1207,10 @@ export function InvoiceEditor({
     missingBankDetails ||
     missingAddress ||
     !!claimIssue ||
-    !!currencyIssue;
+    !!currencyIssue ||
+    !!totalIssue ||
+    !!depositProblem ||
+    !!followUpProblem;
 
   /** Why the invoice can't be saved yet, in one sentence. */
   const blockedReason = claimIssue
@@ -1061,7 +1221,11 @@ export function InvoiceEditor({
         ? `Add your ${bankFieldsPhrase(country)} in Business details before raising an invoice.`
         : currencyIssue
           ? currencyIssue
-          : (issues[0]?.message ?? null);
+          : (issues[0]?.message ??
+            totalIssue ??
+            depositProblem ??
+            followUpProblem ??
+            null);
 
   /* ---------------------------------------------------------------- *
    * Saving
@@ -1106,25 +1270,91 @@ export function InvoiceEditor({
     renderTemplateId: submitContext.templateId,
   };
 
-  const save = async (mode: InvoiceSubmitMode) => {
-    setAttempted(true);
+  /**
+   * Whether "Save as draft" is on offer. The old app hid the button for an
+   * invoice being edited unless it was still a draft; this does the same.
+   */
+  const canSaveDraft = canSaveInvoiceAsDraft(
+    !!invoiceId,
+    detailQuery.data?.status,
+  );
 
-    if (blocked) {
+  /*
+   * Every fifth invoice, on Save & send or Save & print, a business without SolePay is offered
+   * it. The server's count is how many invoices exist already, so the one being
+   * written is number count + 1 — the 5th, 10th, 15th… An invoice being edited,
+   * or one raised from inside another screen's dialog, is never asked. It is
+   * shown once per editor session: dismissing it, or a failed send retried,
+   * doesn't bring it back.
+   */
+  const [solePayPromptOpen, setSolePayPromptOpen] = React.useState(false);
+  // Which button asked — Save & send or Save & print — so "carry on" does that.
+  const solePayPendingModeRef = React.useRef<InvoiceSubmitMode>("send");
+  const solePayPromptedRef = React.useRef(false);
+  const invoiceCount = numberQuery.data?.count;
+  const dueForSolePayPrompt =
+    !invoiceId &&
+    !embedded &&
+    !railsQuery.isLoading &&
+    !railsQuery.isError &&
+    !rails.payrixConnected &&
+    typeof invoiceCount === "number" &&
+    (invoiceCount + 1) % SOLEPAY_PROMPT_EVERY === 0;
+
+  /**
+   * Saves the invoice. Resolves to whether it was saved, so a caller that has
+   * more to do afterwards (SolePay setup) knows whether to carry on.
+   */
+  const save = async (
+    mode: InvoiceSubmitMode,
+    options: {
+      skipSolePayPrompt?: boolean;
+      /** Where to go once saved; given the saved invoice's id. */
+      redirectTo?: string | ((invoiceId: string) => string);
+      /** Where to go once saved, in place of the list — leaving the form. */
+      afterSave?: () => void;
+    } = {},
+  ): Promise<boolean> => {
+    if (mode === "draft" && !canSaveDraft) return false;
+    if (editBlock) {
+      toast.error(editBlock);
+      return false;
+    }
+
+    /*
+     * A draft is work in progress, so it's allowed to be incomplete — no
+     * client, no bank details, a half-written line. It only needs *something*
+     * in it, a number nobody else has, and a currency that can be converted.
+     * Sending or printing keeps every rule below.
+     */
+    if (mode === "draft") {
+      const draftProblem = !documentHasDraftContent(draft)
+        ? EMPTY_DRAFT_MESSAGE
+        : (numberTakenMessage ?? currencyIssue);
+      if (draftProblem) {
+        toast.error(draftProblem);
+        return false;
+      }
+    } else {
+      setAttempted(true);
+    }
+
+    if (mode !== "draft" && blocked) {
       // The address and bank details are the two blockers with somewhere
       // better to go than a toast — straight into the form that fixes them.
       if (missingAddress) {
         setAddressDetailsOpen(true);
-        return;
+        return false;
       }
       if (missingBankDetails) {
         setBankDetailsOpen(true);
-        return;
+        return false;
       }
       // Likewise the participant's NDIS number: add it here, then carry on.
       if (claimIssue) {
         setNdisPendingMode(mode);
         setNdisDialogOpen(true);
-        return;
+        return false;
       }
       // Never fail silently: say what's wrong, then go to it.
       if (blockedReason) toast.error(blockedReason);
@@ -1133,22 +1363,57 @@ export function InvoiceEditor({
         target.scrollIntoView({ behavior: "smooth", block: "center" });
         target.focus({ preventScroll: true });
       }
-      return;
+      return false;
+    }
+
+    // Only once the invoice is valid, so a draft saved ahead of onboarding
+    // can't fail on the very thing the person hasn't fixed yet.
+    if (
+      (mode === "send" || mode === "print") &&
+      !options.skipSolePayPrompt &&
+      dueForSolePayPrompt &&
+      !solePayPromptedRef.current
+    ) {
+      solePayPromptedRef.current = true;
+      solePayPendingModeRef.current = mode;
+      setSolePayPromptOpen(true);
+      return false;
     }
 
     // `saving` is render state, so two clicks inside one frame would both
     // see it unset — the ref closes that gap and guarantees one invoice.
-    if (saving || savingRef.current) return;
+    if (saving || savingRef.current) return false;
     savingRef.current = true;
 
     setSaving(mode);
     try {
       const saved = await saveInvoiceApi(draft, mode, submitContext);
+      const documentProps = {
+        invoice_id: saved.id,
+        amount: totals.total,
+        currency: documentCurrency,
+        client_id: draft.clientId || null,
+        is_template: !!templateId,
+        template_name: templateId
+          ? templateDetailQuery.data?.category?.trim() || null
+          : null,
+      };
+      if (!invoiceId) {
+        track(EVENTS.INVOICE_CREATED, {
+          ...documentProps,
+          is_converted_from_quote: !!quoteId,
+        });
+      }
+      if (mode === "send") {
+        track(EVENTS.INVOICE_SENT, { ...documentProps, is_recurring: false });
+      }
 
       // The list, the dashboard's totals and the next available number are all
       // downstream of this having happened.
       await queryClient.invalidateQueries({ queryKey: ["invoices"] });
       queryClient.invalidateQueries({ queryKey: ["next-invoice-number"] });
+      // Saving an invoice moves stock for any tracked item on it.
+      queryClient.invalidateQueries({ queryKey: ["inventory-items"] });
       if (invoiceId) {
         queryClient.invalidateQueries({ queryKey: ["invoice", invoiceId] });
       }
@@ -1191,11 +1456,29 @@ export function InvoiceEditor({
       setTouched(false);
       // A dialog has already been handed the result and closed itself; only
       // the full-page editor has a list to return to.
-      if (!onSaved) router.push("/invoices");
+      if (options.afterSave) {
+        // Saved as a draft on the way out: carry on to wherever they were going.
+        options.afterSave();
+      } else if (options.redirectTo) {
+        // Set up SolePay: the draft is safe, so go straight to onboarding.
+        setSolePayPromptOpen(false);
+        resetInvoiceListCache(queryClient);
+        router.push(
+          typeof options.redirectTo === "function"
+            ? options.redirectTo(saved.id)
+            : options.redirectTo,
+        );
+      } else if (!onSaved) {
+        // Land on the list loading, not on the stale page it cached.
+        resetInvoiceListCache(queryClient);
+        router.push("/invoices");
+      }
+      return true;
     } catch (error) {
       // The server's own reason ("…already exists", a validation message),
       // not axios's "Request failed with status code 400".
       toast.error(apiErrorMessage(error, "Couldn't save that invoice."));
+      return false;
     } finally {
       savingRef.current = false;
       setSaving(null);
@@ -1206,6 +1489,9 @@ export function InvoiceEditor({
   const saveRef = React.useRef(save);
   React.useEffect(() => {
     saveRef.current = save;
+    saveDraftOnLeaveRef.current = async (proceed) => {
+      await saveRef.current("draft", { afterSave: proceed });
+    };
   });
   React.useEffect(() => {
     if (!ndisRetryMode || claimIssue) return;
@@ -1213,10 +1499,47 @@ export function InvoiceEditor({
     saveRef.current(ndisRetryMode);
   }, [ndisRetryMode, claimIssue]);
 
+  /*
+   * "Enable SolePay" (the banner, and the prompt dialog's main button). Setup
+   * happens on another page, so the invoice is saved as a draft first — however
+   * incomplete it is — and onboarding is told its id, so Back there returns to
+   * this draft in edit mode. A full-screen loader covers the save so nothing
+   * can be edited mid-flight. If the save fails the person stays here with the
+   * reason; they are never sent off with the work unsaved.
+   */
+  const [solePaySetupSaving, setSolePaySetupSaving] = React.useState(false);
+  const startSolePaySetup = async () => {
+    if (solePaySetupSaving || savingRef.current) return;
+
+    // An invoice already sent has nothing to save; just keep the way back.
+    if (invoiceId && !canSaveDraft) {
+      router.push(solePayOnboardingHref({ invoiceId }));
+      return;
+    }
+    // A blank form has nothing worth a draft: go, and come back to the blank form.
+    if (!documentHasDraftContent(draft)) {
+      router.push(
+        solePayOnboardingHref({
+          returnTo: invoiceId ? invoiceEditHref(invoiceId) : pathname,
+        }),
+      );
+      return;
+    }
+
+    setSolePaySetupSaving(true);
+    const saved = await save("draft", {
+      redirectTo: (savedId) => solePayOnboardingHref({ invoiceId: savedId }),
+    });
+    // On success the router is already heading to onboarding, so the loader
+    // stays up until the page changes. Only a failure puts the form back.
+    if (!saved) setSolePaySetupSaving(false);
+  };
+
   const editing = !!invoiceId;
   const loadingDocument = !!sourceId && detailQuery.isLoading;
 
   return (
+    <FormSectionDensityProvider value={INVOICE_DENSITY}>
     <div className="space-y-[15px]">
       {/* The unskippable gate: nothing to mount conditionally on here — it
           reads the same business profile this screen does and renders
@@ -1226,28 +1549,37 @@ export function InvoiceEditor({
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           {!embedded ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="-ml-2 gap-3"
-              onClick={goBack}
-            >
-              <ArrowLeft />
-              {editing
-                ? `Edit ${draft.number || "invoice"}`
-                : ndis
-                  ? "New NDIS invoice"
-                  : "New invoice"}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="-ml-2"
+                aria-label="Back"
+                onClick={goBack}
+              >
+                <ArrowLeft />
+              </Button>
+              <h1 className="text-sm font-medium">
+                {editing
+                  ? `Edit ${draft.number || "invoice"}`
+                  : ndis
+                    ? "New NDIS invoice"
+                    : "New invoice"}
+              </h1>
+            </div>
           ) : (
             <span />
           )}
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div
+            className="flex flex-wrap items-center gap-2"
+            data-usertour="invoice-top-actions"
+          >
             <Button
               type="button"
               variant="outline"
               onClick={() => setSaveTemplateOpen(true)}
+              data-usertour="invoice-save-template"
             >
               <BookmarkPlus />
               Save as template
@@ -1270,7 +1602,52 @@ export function InvoiceEditor({
             Prefilled from the {templateDetailQuery.data.category} template.
           </p>
         )}
+        {/* An invoice that can't be edited still opens — people follow links to
+            it from the dashboard and from expenses to look at it — but it is
+            for reading: nothing on this page can be saved. */}
+        {editBlock && (
+          <Alert data-testid="invoice-edit-blocked">
+            <AlertDescription>{editBlock}</AlertDescription>
+          </Alert>
+        )}
       </div>
+
+      {/* Only once the lookup has answered, so a connected business never sees
+          it flash, and not on an invoice that's read-only. */}
+      {!railsQuery.isLoading &&
+        !railsQuery.isError &&
+        !rails.payrixConnected &&
+        !editBlock && (
+          <SolePayPromoBanner onEnable={() => void startSolePaySetup()} />
+        )}
+
+      <SolePayPromptDialog
+        open={solePayPromptOpen}
+        onOpenChange={setSolePayPromptOpen}
+        settingUp={saving === "draft"}
+        onSendAnyway={() => {
+          setSolePayPromptOpen(false);
+          void save(solePayPendingModeRef.current, { skipSolePayPrompt: true });
+        }}
+        // Saved as a draft first, so leaving for onboarding loses nothing.
+        onSetUp={() => void startSolePaySetup()}
+      />
+
+      {solePaySetupSaving && (
+        <div
+          role="alertdialog"
+          aria-modal="true"
+          aria-live="assertive"
+          aria-label="Saving your draft"
+          className="fixed inset-0 z-[100] flex flex-col items-center justify-center gap-3 bg-background/80 backdrop-blur-sm"
+        >
+          <Loader2 className="size-8 animate-spin text-primary" />
+          <p className="text-sm font-medium">Saving your draft…</p>
+          <p className="text-xs text-muted-foreground">
+            Taking you to SolePay setup.
+          </p>
+        </div>
+      )}
 
       <InvoiceRuntimePreviewDialog
         open={previewOpen}
@@ -1382,6 +1759,7 @@ export function InvoiceEditor({
           fields={sales.invoiceFields}
           email={draft.invoiceEmail ?? ""}
           onEmailChange={(value) => patch({ invoiceEmail: value })}
+          compact
         />
         {/* The tour's first step points here rather than at From and To
             together: stacked on a phone the pair is taller than the screen. */}
@@ -1434,11 +1812,12 @@ export function InvoiceEditor({
         icon={FileText}
         title="Invoice details"
         className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4"
+        tourId="invoice-details"
       >
         <Field
           label="Invoice number"
           required
-          error={issueFor("number")}
+          error={issueFor("number") ?? numberTakenMessage}
         >
           <div className="relative">
             <Input
@@ -1448,16 +1827,33 @@ export function InvoiceEditor({
               }}
               value={draft.number}
               onChange={(event) => patch({ number: event.target.value })}
+              onBlur={() => {
+                if (numberEditable && typedNumber !== numberBaselineRef.current) {
+                  setCheckedNumber(typedNumber);
+                }
+              }}
               readOnly={!numberEditable}
-              aria-invalid={!!issueFor("number")}
+              aria-invalid={!!(issueFor("number") ?? numberTakenMessage)}
               placeholder={numberQuery.isLoading ? "Loading…" : undefined}
               className={cn(
                 "tabular pr-10",
+                checkingNumber && "pr-16",
                 !numberEditable && "bg-muted/40",
-                issueFor("number") &&
+                (issueFor("number") ?? numberTakenMessage) &&
                   "border-destructive focus-visible:ring-destructive",
               )}
             />
+            {checkingNumber && (
+              // Positioning lives on the wrapper: animate-spin rewrites the
+              // icon's own transform, which would drop a translate on it.
+              <span
+                role="status"
+                aria-label="Checking invoice number"
+                className="pointer-events-none absolute right-9 top-1/2 flex size-4 -translate-y-1/2 items-center justify-center text-muted-foreground"
+              >
+                <Loader2 className="size-4 animate-spin" aria-hidden />
+              </span>
+            )}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -1467,6 +1863,9 @@ export function InvoiceEditor({
                   className="absolute right-1 top-1/2 size-7 -translate-y-1/2"
                   aria-label="Edit invoice number"
                   onClick={() => {
+                    if (!numberEditable) {
+                      numberBaselineRef.current = draft.number.trim();
+                    }
                     setNumberEditable(true);
                     // readOnly only lifts on the next render.
                     requestAnimationFrame(() => numberInputRef.current?.focus());
@@ -1535,14 +1934,13 @@ export function InvoiceEditor({
 
       {/* Line items — supports on an NDIS claim, ordinary lines otherwise */}
       <section className="space-y-2" data-usertour="invoice-line-items">
-        <h2 className="text-sm font-medium">
-          {ndis ? "Support items" : "Line items"}
-        </h2>
-        {issueFor(`item-${draft.items[0]?.id}-description`) && (
-          <p className="text-xs text-destructive">
-            {issueFor(`item-${draft.items[0]?.id}-description`)}
-          </p>
-        )}
+        {/* On an NDIS claim the heading carries a note on where the prices come from. */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <h2 className="text-sm font-medium">
+            {ndis ? "Support items" : "Line items"}
+          </h2>
+          {ndis && <NdisPricingNote />}
+        </div>
         {ndis ? (
           <NdisLineItems
             items={draft.items}
@@ -1566,6 +1964,7 @@ export function InvoiceEditor({
             onRemove={removeItem}
             onAdd={() => addItem({ ...newLineItem(), gst: showGst })}
             register={register}
+            issueFor={issueFor}
             currency={documentCurrency}
             clientCurrency={clientCurrency}
             convertCurrency={!!draft.convertCurrency}
@@ -1581,69 +1980,85 @@ export function InvoiceEditor({
        */}
       <div className="grid items-start gap-[15px] lg:grid-cols-2">
         <div className="space-y-[15px]">
-          <FollowUpReminderRow
-            enabled={draft.followUpReminder}
-            onEnabledChange={(value) =>
-              patchSetting({ followUpReminder: value })
-            }
-            days={draft.followUpDays ?? ""}
-            onDaysChange={(value) => patchSetting({ followUpDays: value })}
-            note={draft.followUpNote ?? ""}
-            onNoteChange={(value) => patchSetting({ followUpNote: value })}
-            notifyClient={draft.followUpNotifyClient ?? false}
-            onNotifyClientChange={(value) =>
-              patchSetting({ followUpNotifyClient: value })
-            }
-            dueDate={draft.due}
-          />
-          <ToggleRow
-            label="Send reminder on overdue"
-            description="Chases the invoice for you the day it passes its due date."
-            tip="Automatically send a reminder to your client when the invoice is overdue."
-            checked={draft.overdueReminder}
-            onChange={(value) => patchSetting({ overdueReminder: value })}
-          />
-          <RepeatingInvoiceRow
-            enabled={draft.repeating}
-            onEnabledChange={(value) => patchSetting({ repeating: value })}
-            frequency={draft.repeatFrequency}
-            onFrequencyChange={(value) =>
-              patchSetting({ repeatFrequency: value })
-            }
-            reviewBeforeSending={draft.reviewBeforeSending}
-            onReviewChange={(value) =>
-              patchSetting({ reviewBeforeSending: value })
-            }
-            startDate={draft.repeatStart ?? addDays(draft.issued, 1)}
-            onStartDateChange={(value) => patchSetting({ repeatStart: value })}
-            occurrences={draft.repeatOccurrences ?? ""}
-            onOccurrencesChange={(value) =>
-              patchSetting({ repeatOccurrences: value })
-            }
-            tagLine={draft.repeatTagLine ?? ""}
-            onTagLineChange={(value) => patchSetting({ repeatTagLine: value })}
-          />
+          <div data-usertour="invoice-payment-details">
+            <PaymentDetailsCard
+              bank={bank}
+              showOnInvoice={draft.showBankDetails !== false}
+              onShowOnInvoiceChange={(value) => void toggleBankDetails(value)}
+              onEdit={() => setBankDetailsOpen(true)}
+              saving={savingBankDetails}
+            />
+          </div>
+          <div data-usertour="invoice-payment-method">
+            <PaymentMethodCard
+              rails={rails}
+              stripeEnabled={!!draft.stripeEnabled}
+              onStripeChange={(value) => patchSetting({ stripeEnabled: value })}
+              solePayEnabled={draft.solePayEnabled ?? rails.payrixAutomate}
+              onSolePayChange={(value) => {
+                patchSetting({ solePayEnabled: value });
+                void saveSolePaySetting({ automate: value });
+              }}
+              paymentType={rails.paymentType}
+              onPaymentTypeChange={(value) =>
+                void saveSolePaySetting({ paymentType: value })
+              }
+              savingPaymentType={savingSolePay}
+              loading={railsQuery.isLoading}
+              onConnect={(href) => guardNavigate(href)()}
+            />
+          </div>
 
-          <PaymentDetailsCard
-            bank={bank}
-            showOnInvoice={draft.showBankDetails !== false}
-            onShowOnInvoiceChange={(value) => void toggleBankDetails(value)}
-          />
-          <PaymentMethodCard
-            rails={rails}
-            stripeEnabled={!!draft.stripeEnabled}
-            onStripeChange={(value) => patchSetting({ stripeEnabled: value })}
-            solePayEnabled={draft.solePayEnabled ?? rails.payrixAutomate}
-            onSolePayChange={(value) => {
-              patchSetting({ solePayEnabled: value });
-              void saveSolePaySetting({ automate: value });
-            }}
-            paymentType={rails.paymentType}
-            onPaymentTypeChange={(value) =>
-              void saveSolePaySetting({ paymentType: value })
-            }
-            savingPaymentType={savingSolePay}
-          />
+          <AdvancedOptions>
+            <div data-usertour="invoice-followup">
+              <FollowUpReminderRow
+                enabled={draft.followUpReminder}
+                onEnabledChange={(value) =>
+                  patchSetting({ followUpReminder: value })
+                }
+                days={draft.followUpDays ?? ""}
+                onDaysChange={(value) => patchSetting({ followUpDays: value })}
+                note={draft.followUpNote ?? ""}
+                onNoteChange={(value) => patchSetting({ followUpNote: value })}
+                notifyClient={draft.followUpNotifyClient ?? false}
+                onNotifyClientChange={(value) =>
+                  patchSetting({ followUpNotifyClient: value })
+                }
+                dueDate={draft.due}
+              />
+            </div>
+            <div data-usertour="invoice-overdue">
+              <ToggleRow
+                label="Send reminder on overdue"
+                description="Chases the invoice for you the day it passes its due date."
+                tip="Automatically send a reminder to your client when the invoice is overdue."
+                checked={draft.overdueReminder}
+                onChange={(value) => patchSetting({ overdueReminder: value })}
+              />
+            </div>
+            <div data-usertour="invoice-repeating">
+              <RepeatingInvoiceRow
+                enabled={draft.repeating}
+                onEnabledChange={(value) => patchSetting({ repeating: value })}
+                frequency={draft.repeatFrequency}
+                onFrequencyChange={(value) =>
+                  patchSetting({ repeatFrequency: value })
+                }
+                reviewBeforeSending={draft.reviewBeforeSending}
+                onReviewChange={(value) =>
+                  patchSetting({ reviewBeforeSending: value })
+                }
+                startDate={draft.repeatStart ?? addDays(draft.issued, 1)}
+                onStartDateChange={(value) => patchSetting({ repeatStart: value })}
+                occurrences={draft.repeatOccurrences ?? ""}
+                onOccurrencesChange={(value) =>
+                  patchSetting({ repeatOccurrences: value })
+                }
+                tagLine={draft.repeatTagLine ?? ""}
+                onTagLineChange={(value) => patchSetting({ repeatTagLine: value })}
+              />
+            </div>
+          </AdvancedOptions>
         </div>
 
         <div className="space-y-[15px]">
@@ -1687,18 +2102,22 @@ export function InvoiceEditor({
             />
           )}
 
-          <DepositCard
-            deposit={draft.deposit}
-            onChange={(value) => patchSetting({ deposit: value })}
-            total={totals.total}
-            items={draft.items}
-            gstPercent={tax.gstPercent}
-            issued={draft.issued}
-            currency={documentCurrency}
-          />
+          <div data-usertour="invoice-deposit">
+            <DepositCard
+              deposit={draft.deposit}
+              onChange={(value) => patchSetting({ deposit: value })}
+              total={totals.total}
+              items={draft.items}
+              gstPercent={tax.gstPercent}
+              issued={draft.issued}
+              currency={documentCurrency}
+            />
+          </div>
 
           <AttachmentsCard
+            tip="Add files your client should see with this invoice, like a quote, photos or a timesheet. Up to 5 files, 20 MB each."
             files={draft.attachments}
+            pickedFiles={files}
             onChange={(value) => patchSetting({ attachments: value })}
             onFilesSelected={(picked) => {
               setTouched(true);
@@ -1713,9 +2132,23 @@ export function InvoiceEditor({
                   current.filter((entry) => entry.id !== file.id),
                 );
               } else if (invoiceId) {
-                deleteInvoiceAttachmentApi(file.id).catch(() =>
-                  toast.error(`Couldn't remove ${file.name}.`),
-                );
+                deleteInvoiceAttachmentApi(file.id)
+                  .then(() => {
+                    // The cached record still lists the file. The form fills
+                    // itself from that cache the next time this invoice is
+                    // opened, which put the deleted file straight back.
+                    queryClient.setQueryData<Invoice>(
+                      ["invoice", invoiceId],
+                      (cached) =>
+                        cached && {
+                          ...cached,
+                          attachments: cached.attachments.filter(
+                            (entry) => entry.id !== file.id,
+                          ),
+                        },
+                    );
+                  })
+                  .catch(() => toast.error(`Couldn't remove ${file.name}.`));
               }
               patchSetting({
                 attachments: draft.attachments.filter(
@@ -1726,6 +2159,7 @@ export function InvoiceEditor({
           />
 
           <InvoiceNotesCard
+            tip="A message printed on the invoice bottom, such as thanks, payment terms or job details."
             notes={draft.notes}
             onNotesChange={(value) => patch({ notes: value })}
           />
@@ -1759,21 +2193,26 @@ export function InvoiceEditor({
           className="flex flex-wrap items-center gap-2"
           data-usertour="invoice-save-actions"
         >
-          <Button
-            variant="outline"
-            onClick={() => save("draft")}
-            disabled={!!saving}
-          >
-            {saving === "draft" ? "Saving…" : "Save as draft"}
-          </Button>
+          {canSaveDraft && (
+            <Button
+              variant="outline"
+              onClick={() => save("draft")}
+              disabled={!!saving || !!editBlock}
+            >
+              {saving === "draft" ? "Saving…" : "Save as draft"}
+            </Button>
+          )}
           <Button
             variant="outline"
             onClick={() => save("print")}
-            disabled={!!saving}
+            disabled={!!saving || !!editBlock}
           >
             {saving === "print" ? "Saving…" : "Save & print"}
           </Button>
-          <Button onClick={() => save("send")} disabled={!!saving}>
+          <Button
+            onClick={() => save("send")}
+            disabled={!!saving || !!editBlock}
+          >
             {saving === "send"
               ? "Sending…"
               : editing
@@ -1785,5 +2224,6 @@ export function InvoiceEditor({
 
       {unsavedChangesDialog}
     </div>
+    </FormSectionDensityProvider>
   );
 }

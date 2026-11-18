@@ -90,6 +90,8 @@ import {
 import { cn } from "@/lib/utils";
 import { useCountryContext } from "@/hooks/use-country-context";
 import { activeCurrencySymbol } from "@/lib/country-context";
+import { useTrackOnce } from "@/hooks/use-track-once";
+import { EVENTS } from "@/lib/analytics-events";
 
 /** sole-webapp's attachment limits: five files, images or PDF, 20MB each. */
 const MAX_FILES = 5;
@@ -118,6 +120,8 @@ const ALL_FIELDS: ManualField[] = [
  */
 export function ManualEntryForm() {
   const router = useRouter();
+  // The form is its own page, opened by "Add Transaction": arriving is the start.
+  useTrackOnce(EVENTS.ADD_TRANSACTION_INITIATED);
   const queryClient = useQueryClient();
   const today = React.useMemo(() => toIsoDate(new Date()), []);
   const minDate = React.useMemo(
@@ -456,30 +460,26 @@ export function ManualEntryForm() {
           required
           error={issueFor("amount")}
         >
-          <div className="relative">
-            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-              {activeCurrencySymbol()}
-            </span>
-            <Input
-              id="manual-amount"
-              value={draft.amount}
-              inputMode="decimal"
-              placeholder="Enter amount"
-              onChange={(event) => {
-                const value = event.target.value;
-                // Same keystroke filter as sole-webapp: digits, two decimals.
-                if (!AMOUNT_INPUT_PATTERN.test(value)) return;
-                patch({ amount: value });
-              }}
-              onBlur={() => touch("amount")}
-              aria-invalid={!!issueFor("amount")}
-              className={cn(
-                "pl-7 tabular",
-                issueFor("amount") &&
-                  "border-destructive focus-visible:ring-destructive",
-              )}
-            />
-          </div>
+          {/* The currency is in the label, so the field holds only the number. */}
+          <Input
+            id="manual-amount"
+            value={draft.amount}
+            inputMode="decimal"
+            placeholder="Enter amount"
+            onChange={(event) => {
+              const value = event.target.value;
+              // Same keystroke filter as sole-webapp: digits, two decimals.
+              if (!AMOUNT_INPUT_PATTERN.test(value)) return;
+              patch({ amount: value });
+            }}
+            onBlur={() => touch("amount")}
+            aria-invalid={!!issueFor("amount")}
+            className={cn(
+              "tabular",
+              issueFor("amount") &&
+                "border-destructive focus-visible:ring-destructive",
+            )}
+          />
         </Field>
 
         <Field label="Transaction Date" required error={issueFor("date")}>

@@ -7,27 +7,15 @@ import {
   SectionCard,
   type PreviewTab,
 } from "@/components/proposals/proposal-document";
+import { STEP_TAB, TAB_STEP } from "@/lib/proposal-builder-logic";
 import type { PreviewData, ProposalStep } from "@/lib/proposals";
 import { cn } from "@/lib/utils";
 
 /** The builder's own panel also previews the email — internal only. */
 const PANEL_TABS: PreviewTab[] = [...PREVIEW_TABS, "Email"];
 
-/** The panel follows the user through the steps; Add. Docs. has no tab of its own. */
-const STEP_TAB: Partial<Record<ProposalStep, PreviewTab>> = {
-  General: "Cover",
-  Services: "Services",
-  Payments: "Pricing",
-  Introduction: "Introduction",
-  "Terms & Sign": "Terms",
-  Notification: "Email",
-  "Thank You": "Thank You",
-};
-
-/** And back: a tab the user picks opens the step that fills it. */
-const TAB_STEP = Object.fromEntries(
-  Object.entries(STEP_TAB).map(([step, tab]) => [tab, step]),
-) as Partial<Record<PreviewTab, ProposalStep>>;
+// The panel follows the user through the steps, and a tab picked here opens
+// its step (STEP_TAB / TAB_STEP).
 
 export function ProposalPreviewPanel({
   step,

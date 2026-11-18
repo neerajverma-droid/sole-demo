@@ -20,17 +20,21 @@ import {
 export function ProjectOverviewTab({ project }: { project: Project }) {
   return (
     <div className="space-y-[15px]">
-      <FinancialSections projectId={project.id} />
-      <TimeSummarySection projectId={project.id} />
-      {/* Two thirds and one third, as sole-webapp laid these rows out — the
-          side cards hold a gauge or a short list and don't need half the row. */}
-      <div className="grid grid-cols-1 gap-[15px] lg:grid-cols-3">
-        <TimeTrackedSection projectId={project.id} className="lg:col-span-2" />
-        <BillableSplitSection projectId={project.id} />
+      <div data-usertour="project-financials">
+        <FinancialSections projectId={project.id} />
       </div>
-      <div className="grid grid-cols-1 gap-[15px] lg:grid-cols-3">
-        <TaskStatusSection projectId={project.id} className="lg:col-span-2" />
-        <OverdueSection projectId={project.id} />
+      <div className="space-y-[15px]" data-usertour="project-time-tasks">
+        <TimeSummarySection projectId={project.id} />
+        {/* Two thirds and one third, as sole-webapp laid these rows out — the
+            side cards hold a gauge or a short list and don't need half the row. */}
+        <div className="grid grid-cols-1 gap-[15px] lg:grid-cols-3">
+          <TimeTrackedSection projectId={project.id} className="lg:col-span-2" />
+          <BillableSplitSection projectId={project.id} />
+        </div>
+        <div className="grid grid-cols-1 gap-[15px] lg:grid-cols-3">
+          <TaskStatusSection projectId={project.id} className="lg:col-span-2" />
+          <OverdueSection projectId={project.id} />
+        </div>
       </div>
     </div>
   );

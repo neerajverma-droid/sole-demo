@@ -16,13 +16,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { apiErrorMessage } from "@/lib/api-error";
 import { deleteInvoiceIdsAtom } from "@/lib/atoms";
 import {
   deleteInvoicesApi,
   formatDocumentMoney,
   invoiceDocumentAmount,
 } from "@/lib/invoices";
-import { useInvoicesStore } from "@/stores/invoices";
+import { useKnownInvoices } from "@/hooks/use-invoices-query";
 
 /** How many of a selection to list before summarising the rest. */
 const LISTED = 4;
@@ -36,7 +37,7 @@ const LISTED = 4;
  */
 export function DeleteInvoiceDialog() {
   const [deleteIds, setDeleteIds] = useAtom(deleteInvoiceIdsAtom);
-  const invoices = useInvoicesStore((state) => state.invoices);
+  const invoices = useKnownInvoices();
   const queryClient = useQueryClient();
   const [deleting, setDeleting] = React.useState(false);
 
@@ -48,19 +49,36 @@ export function DeleteInvoiceDialog() {
   const confirmDelete = async () => {
     setDeleting(true);
     try {
-      await deleteInvoicesApi(deleteIds);
+      const { deleted, skipped } = await deleteInvoicesApi(deleteIds);
       await queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      // Deleting an invoice puts its quantities back on the shelf.
+      void queryClient.invalidateQueries({ queryKey: ["inventory-items"] });
       setDeleteIds([]);
-      toast.success(
-        many ? `${doomed.length} invoices deleted` : "Invoice deleted",
-      );
+      if (skipped > 0) {
+        // Paid and partially paid invoices are kept; the rest still went.
+        toast.success(
+          `${deleted} ${deleted === 1 ? "invoice" : "invoices"} deleted`,
+          {
+            description: `${skipped} paid or partially paid ${
+              skipped === 1 ? "invoice was" : "invoices were"
+            } kept — paid invoices can't be deleted.`,
+          },
+        );
+      } else {
+        toast.success(
+          many ? `${deleted} invoices deleted` : "Invoice deleted",
+        );
+      }
     } catch (error) {
+      // The server's own reason, e.g. "Paid or partially paid invoices cannot
+      // be deleted." — axios's own message for a 400 is only its status code.
       toast.error(
-        error instanceof Error
-          ? error.message
-          : many
+        apiErrorMessage(
+          error,
+          many
             ? "Couldn't delete those invoices."
             : "Couldn't delete that invoice.",
+        ),
       );
     } finally {
       setDeleting(false);

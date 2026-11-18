@@ -104,7 +104,13 @@ export function BalanceSheetScreen() {
     <div className="space-y-[15px]">
       <PageHeader icon={Scale} title="Balance Sheet" titleTip={BS_TIP} description="As at one date — what the business owns, owes and is worth.">
         <Select value={asAt.end} onValueChange={setSelected}>
-          <SelectTrigger className="w-40" aria-label="As at">
+          {/* Same anchor as the shared period picker, so the one reports
+              tour covers the as-at reports too. */}
+          <SelectTrigger
+            className="w-40"
+            aria-label="As at"
+            data-usertour="report-period"
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -116,7 +122,7 @@ export function BalanceSheetScreen() {
           </SelectContent>
         </Select>
 
-        <Button onClick={() => setSendOpen(true)}>
+        <Button onClick={() => setSendOpen(true)} data-usertour="report-send">
           <Send />
           Send report
         </Button>

@@ -34,6 +34,8 @@ const FEATURE_DESCRIPTIONS: Record<string, string> = {
   tenants: "Workspaces, branding and subscriptions",
   users: "Accounts, export and impersonation",
   country_config: "Tax rates, thresholds and filing rules",
+  partners: "Integration partners and their API keys",
+  resources: "Public folders and downloadable files",
   customerHealth: "Health scores and the action queue",
   trialActivation: "How trials activate and convert",
   productActivation: "Onboarding funnels and return visits",
@@ -65,6 +67,8 @@ export const ADMIN_FEATURE_GROUPS: AdminFeatureGroup[] = [
       { key: "tenants", label: "Tenants" },
       { key: "users", label: "Users" },
       { key: "country_config", label: "Countries" },
+      { key: "partners", label: "Partners" },
+      { key: "resources", label: "Resources" },
     ].map(withDescription),
   },
   {

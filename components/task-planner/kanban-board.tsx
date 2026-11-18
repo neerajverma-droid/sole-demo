@@ -469,7 +469,6 @@ export function KanbanBoard({
   return (
     <div
       className="scrollbar-thin grid auto-cols-[minmax(260px,1fr)] grid-flow-col items-start gap-4 overflow-x-auto pb-2"
-      data-usertour="scheduling-planner-board"
     >
       {columns.map((column) => {
         const columnTasks = tasksByColumn[column.id] ?? [];

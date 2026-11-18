@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { PrefixInput } from "@/components/ui/prefix-input";
 import {
   Select,
   SelectContent,
@@ -44,12 +45,16 @@ import {
 import { emptyCustomItemDraft, productIssues } from "@/lib/products";
 import { documentTax } from "@/lib/country-context";
 import { productTaxLabels } from "@/lib/product-tax";
-import { INDUSTRIES, type Industry } from "@/lib/settings";
+import { INDUSTRIES } from "@/lib/settings";
 import { cn } from "@/lib/utils";
+import { useActiveBusiness } from "@/hooks/use-active-business";
 import { useActiveBusinessIndustry } from "@/hooks/use-active-business-industry";
 import { useCountryContext } from "@/hooks/use-country-context";
 import { useInventoryStore } from "@/stores/inventory";
 import { activeCurrencySymbol } from "@/lib/country-context";
+import { EVENTS } from "@/lib/analytics-events";
+import { useTrackOnOpen } from "@/hooks/use-track-once";
+import { track } from "@/lib/analytics";
 
 /** Create and edit in one dialog — the fields are identical either way. */
 export function ProductDialog() {
@@ -57,6 +62,7 @@ export function ProductDialog() {
   const queryClient = useQueryClient();
   const items = useInventoryStore((state) => state.items);
   const industry = useActiveBusinessIndustry();
+  const { business } = useActiveBusiness();
   const { country } = useCountryContext();
   const docTax = documentTax(country);
   const taxLabels = productTaxLabels(country);
@@ -64,6 +70,10 @@ export function ProductDialog() {
   const editing = dialog.editId
     ? items.find((item) => item.id === dialog.editId)
     : undefined;
+  useTrackOnOpen(
+    EVENTS.CUSTOM_PRODUCT_CREATION_INITIATED,
+    dialog.open && !dialog.editId,
+  );
 
   /**
    * Seeded from the whole record, not just the fields shown. This is a
@@ -108,7 +118,15 @@ export function ProductDialog() {
         await updateInventoryItemApi(editing.id, draft);
         toast.success(`${draft.name.trim()} updated`);
       } else {
-        await createInventoryItemApi(draft);
+        // Filed under the business's own industry, which the form shows but
+        // doesn't let anyone change.
+        await createInventoryItemApi(draft, business?.industryId);
+        track(EVENTS.CUSTOM_PRODUCT_ADDED, {
+          product_name: draft.name.trim(),
+          product_type: draft.type,
+          quantity_type: draft.quantityType || null,
+          transaction_type: draft.transactionType || null,
+        });
         toast.success(`${draft.name.trim()} added`);
       }
       await queryClient.invalidateQueries({ queryKey: ["inventory-items"] });
@@ -227,20 +245,20 @@ export function ProductDialog() {
           </div>
 
           <div className="sm:col-span-2">
+            {/* Fixed to the business's industry, on create and on edit alike. */}
             <Field label="Industry">
-              <Select
-                value={draft.industry}
-                onValueChange={(value) => patch({ industry: value as Industry })}
-              >
+              <Select value={draft.industry} disabled>
                 <SelectTrigger aria-label="Industry">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {INDUSTRIES.map((option) => (
-                    <SelectItem key={option} value={option}>
-                      {option}
-                    </SelectItem>
-                  ))}
+                  {[draft.industry, ...INDUSTRIES.filter((name) => name !== draft.industry)]
+                    .filter(Boolean)
+                    .map((option) => (
+                      <SelectItem key={option} value={option}>
+                        {option}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </Field>
@@ -313,23 +331,16 @@ function PriceField({
 }) {
   return (
     <Field label={label} error={error}>
-      <div className="relative">
-        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-          {activeCurrencySymbol()}
-        </span>
-        <Input
-          value={value}
-          inputMode="decimal"
-          onChange={(event) => onChange(event.target.value)}
-          placeholder="0.00"
-          aria-label={label}
-          aria-invalid={!!error}
-          className={cn(
-            "pl-7 tabular",
-            error && "border-destructive focus-visible:ring-destructive",
-          )}
-        />
-      </div>
+      <PrefixInput
+        prefix={activeCurrencySymbol()}
+        value={value}
+        inputMode="decimal"
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="0.00"
+        aria-label={label}
+        aria-invalid={!!error}
+        className="tabular"
+      />
     </Field>
   );
 }

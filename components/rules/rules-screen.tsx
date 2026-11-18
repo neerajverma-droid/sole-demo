@@ -28,7 +28,7 @@ export function RulesScreen() {
   return (
     <div className="space-y-[15px]">
       <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="space-y-1">
+        <div className="space-y-1" data-usertour="rules-header">
           <h1 className="text-2xl font-semibold tracking-tight">
             Matching rules
           </h1>
@@ -36,7 +36,7 @@ export function RulesScreen() {
             Auto-categorise imported transactions with your own conditions.
           </p>
         </div>
-        <Button asChild>
+        <Button asChild data-usertour="rules-add">
           <Link href="/transactions/rules/new">
             <Plus />
             Add rule
@@ -44,26 +44,46 @@ export function RulesScreen() {
         </Button>
       </div>
 
-      {/*
-       * Shown from the very first render, not just once the rules list turns
-       * out non-empty — waiting for `hasRules` to become true before even
-       * mounting this section is what made the table's skeleton resolve
-       * first and this one's appear a beat later, as two separate loading
-       * states instead of one. Once rules have genuinely loaded and there
-       * are none, it disappears — same as sole-webapp's own page.
-       */}
+      {/* The counts are always there, zeros included, so an account with no
+          rules still reads like every other module: the figures, then the
+          empty state below. The tours anchor on this wrapper and on the two
+          below; `data-usertour-loading` holds them until the rules and the
+          stats are both in. */}
+      <div
+        className="space-y-[15px]"
+        data-usertour="rules-stats"
+        data-usertour-loading={
+          rulesQuery.isLoading || statsQuery.isLoading || undefined
+        }
+      >
+        <RulesSummary stats={stats} loading={statsQuery.isLoading} />
+        {/*
+         * The rest is shown from the very first render, not just once the
+         * rules list turns out non-empty — waiting for `hasRules` to become
+         * true before even mounting it is what made the table's skeleton
+         * resolve first and this one's appear a beat later, as two separate
+         * loading states instead of one. Once rules have genuinely loaded and
+         * there are none, it goes: there's nothing to sync or to have matched.
+         */}
+        {(rulesQuery.isLoading || hasRules) && (
+          /* Between the counts and the button that changes them. */
+          <SyncProgress stats={stats} loading={statsQuery.isLoading} />
+        )}
+      </div>
+
       {(rulesQuery.isLoading || hasRules) && (
         <>
-          <RulesSummary stats={stats} loading={statsQuery.isLoading} />
-          {/* Between the counts and the button that changes them. */}
-          <SyncProgress stats={stats} loading={statsQuery.isLoading} />
-          <RunRulesBanner rules={rules} loading={rulesQuery.isLoading} />
+          <div data-usertour="rules-run">
+            <RunRulesBanner rules={rules} loading={rulesQuery.isLoading} />
+          </div>
           {/* Between the banner that runs the rules and the rules themselves:
               what they caught is the evidence they're working. */}
-          <RecentlyMatched
-            matches={stats?.recentlyMatched ?? []}
-            loading={statsQuery.isLoading}
-          />
+          <div data-usertour="rules-recent">
+            <RecentlyMatched
+              matches={stats?.recentlyMatched ?? []}
+              loading={statsQuery.isLoading}
+            />
+          </div>
         </>
       )}
 

@@ -178,3 +178,17 @@ describe("fetchProposalStripeCheckout", () => {
     await expect(fetchProposalStripeCheckout(TOKEN)).rejects.toThrow("Stripe account is not ready");
   });
 });
+
+describe("fetchProposalSolePayLink", () => {
+  it("asks the public SolePay route for the link, and says why when refused", async () => {
+    const client = await import("@/lib/api/client");
+    const { default: apiRoutes } = await import("@/config/api-routes");
+    const { fetchProposalSolePayLink } = await import("@/lib/proposal-portal");
+    const get = vi.spyOn(client, "apiGet").mockResolvedValue({ success: true, data: { url: "https://pay.example/card?p=x" } } as never);
+    await expect(fetchProposalSolePayLink("tok/1")).resolves.toBe("https://pay.example/card?p=x");
+    expect(get).toHaveBeenCalledWith(apiRoutes.proposal.publicSolePayPay("tok%2F1"), { auth: "public" });
+    get.mockResolvedValue({ success: false, message: "Accept the proposal first, then pay." } as never);
+    await expect(fetchProposalSolePayLink("tok")).rejects.toThrow("Accept the proposal first, then pay.");
+    get.mockRestore();
+  });
+});

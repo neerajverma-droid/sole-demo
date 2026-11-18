@@ -1,12 +1,10 @@
 import { atom } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import type { PreviewState } from "@/components/layout/preview-toggle";
 import type { SectionDraft } from "@/components/settings/use-section-draft";
 import type { ContactTab } from "@/lib/contacts";
-import type { ProposalRow, ProposalStatus } from "@/lib/proposals";
+import type { EmailCategory, ProposalRow, ProposalStatus, TemplateKind } from "@/lib/proposals";
 import { DEFAULT_AREA_LEVEL, type AreaLevel } from "@/lib/customer-areas";
 import type { AccountStage } from "@/lib/dashboard-data";
 import {
@@ -14,7 +12,7 @@ import {
   type AssetAdvancedFilters,
   type AssetSort,
 } from "@/lib/assets";
-import type { InvoiceTab } from "@/lib/invoices";
+import type { Invoice, InvoiceTab } from "@/lib/invoices";
 import { DEFAULT_KM_FILTERS, type KmTripFilters } from "@/lib/km-tracker";
 import type { SalesSettings, SalesTab } from "@/lib/sales-settings";
 import {
@@ -137,6 +135,14 @@ export type MoreTab = "addons" | "additional" | "customise";
 export const moreAddonsTabAtom = atom<MoreTab>("addons");
 
 /**
+ * An add-on for More to open straight onto the detail of, set by whoever opens
+ * it. The locked-page popup's Unlock is the caller: it knows which add-on the
+ * page belongs to, and the detail view is where its price and Select are.
+ * More reads it on open and clears it.
+ */
+export const moreAddonsDetailAtom = atom<string | null>(null);
+
+/**
  * Sections the person has collapsed, by heading.
  *
  * Only the collapsed ones are stored, so a section added later arrives expanded
@@ -203,9 +209,14 @@ export const sidebarHiddenAtom = atomWithStorage<string[]>(
  * "added Contacts and then switched it off" — and the second one has to survive
  * being switched back on.
  */
+export const DEFAULT_EXTRA_NAV_IDS = [
+  "liabilities",
+  "migrations",
+];
+
 export const sidebarExtraIdsAtom = atomWithStorage<string[]>(
   "sole.sidebar.extras",
-  [],
+  DEFAULT_EXTRA_NAV_IDS,
 );
 
 /*
@@ -341,20 +352,6 @@ export const toggleSelectedAddonAtom = atom(null, (get, set, id: string) => {
     adding ? [...current, id] : current.filter((entry) => entry !== id),
   );
 
-  /*
-   * The paywall, as this product actually has one.
-   *
-   * There is no "you cannot do this, upgrade" interstitial anywhere — the
-   * locked add-on card is the only place somebody meets a feature they have
-   * not paid for, so selecting one IS the paywall hit. Which feature is the
-   * whole point of the event: "forty people hit a paywall" is not actionable,
-   * "forty people wanted Payroll" is.
-   *
-   * Only on the way in. Taking an add-on back out of the cart is a different
-   * fact, and counting it here would make every change of mind look like
-   * fresh demand.
-   */
-  if (adding) track(EVENTS.PAYWALL_HIT, { feature: id, surface: "addons" });
 });
 
 /** Emptied once the charge goes through, and on nothing else. */
@@ -443,8 +440,14 @@ export const viewInvoiceIdAtom = atom<string | null>(null);
 export const attachInvoiceIdAtom = atom<string | null>(null);
 /** The invoice being reconciled against the bank feed, if any. */
 export const matchInvoiceIdAtom = atom<string | null>(null);
-/** The invoice whose match is being undone, if any. */
-export const unmatchInvoiceIdAtom = atom<string | null>(null);
+/**
+ * The invoice whose match is being undone, if any.
+ *
+ * Holds the invoice itself rather than its id: the list's rows and the shared
+ * store come from separate requests, and the undo dialog has to act on exactly
+ * the matches the row it was opened from is showing.
+ */
+export const unmatchInvoiceAtom = atom<Invoice | null>(null);
 /** The invoice whose audit trail is open, if any. */
 export const historyInvoiceIdAtom = atom<string | null>(null);
 /** The invoice being marked paid with cash — open while its payment-date dialog is. */
@@ -460,6 +463,12 @@ export const stopRecurringInvoiceIdAtom = atom<{
 } | null>(null);
 /** Rows per page on the invoices list — same shared sizes every paginated table offers. */
 export const invoicesPageSizeAtom = atom<PageSize>(25);
+/**
+ * The page of invoices the list is showing. The row dialogs (view, delete, match,
+ * cash payment, attach, quick edit) look an invoice up here, so they work off the
+ * rows the table already loaded instead of a second, larger list request.
+ */
+export const listedInvoicesAtom = atom<Invoice[]>([]);
 /**
  * The invoice open in the quick editor, if any. Set from anywhere an invoice is
  * referenced rather than listed — the linked invoice on a converted quote, so
@@ -871,6 +880,15 @@ export const proposalsStatusAtom = atom<ProposalStatus | "all">("all");
 export const proposalsPageAtom = atom(1);
 export const proposalsPageSizeAtom = atom<PageSize>(50);
 export const viewProposalIdAtom = atom<string | null>(null);
+/**
+ * The proposal templates page's filters, one set per tab — kept here, not in the
+ * screen, so they're still applied after opening a preview and coming back.
+ */
+export type TemplatesFilter = { owner: "all" | "mine" | "system"; query: string; category: EmailCategory | "all" };
+export const DEFAULT_TEMPLATES_FILTER: TemplatesFilter = { owner: "all", query: "", category: "all" };
+export const templatesFiltersAtom = atom<Partial<Record<TemplateKind, TemplatesFilter>>>({});
+/** The proposal the Send reminder dialog is open for (from the list's menu or the details sheet). */
+export const reminderProposalIdAtom = atom<string | null>(null);
 /** The row itself — the list is server-paged, so there's no store to look it up in. */
 export const deleteProposalAtom = atom<ProposalRow | null>(null);
 export const proposalTemplatePickerOpenAtom = atom(false);
@@ -946,7 +964,7 @@ export const inviteAccountantOpenAtom = atom(false);
  * authenticated, whether a request is in flight, and the error the last one
  * came back with.
  */
-export const authEmailAtom = atom("accounts.coastalspark@example.com");
+export const authEmailAtom = atom("");
 export const authPendingAtom = atom(false);
 export const authErrorAtom = atom<string | null>(null);
 
@@ -1002,6 +1020,21 @@ export const plPeriodAtom = atom<ReportPeriod>("This financial year");
 export const plRangeAtom = atom<ReportRange | null>(null);
 
 /**
+ * "Include GST" — off (GST-exclusive) by default, matching the report's
+ * existing figures. Part of the query key in `usePlReportQuery`, so flipping
+ * it refetches rather than re-slicing numbers the client never had GST-free.
+ */
+export const plGstInclusiveAtom = atom(false);
+
+/**
+ * The P&L's column layout. "total" (a single period-total column) is the
+ * default — it's what fits an A4 portrait page and what Xero/MYOB show by
+ * default; "monthly" restores the month-by-month breakdown. Purely a display
+ * concern: the full monthly dataset is always fetched either way.
+ */
+export const plLayoutAtom = atom<"total" | "monthly">("total");
+
+/**
  * Which state the P&L is being demoed in — the dev-only preview toggle.
  *
  * Defaults to "data", so a production build (where the toggle doesn't render)
@@ -1021,11 +1054,22 @@ export const tlRangeAtom = atom<ReportRange | null>(null);
 export const tlPreviewAtom = atom<PreviewState>("data");
 
 /**
- * The BAS report's period and range. Opens on last quarter — the one that's
- * actually due to be lodged, where this quarter is still being traded.
+ * The BAS report's period and range. Opens on this quarter, like every other
+ * report opens on the current period — opening on last quarter read as the
+ * current BAS to anyone who didn't check the dates. Last quarter, the one due
+ * to be lodged, is one pick away and the dropdown names its months.
  */
-export const basPeriodAtom = atom<ReportPeriod>("Last quarter");
+export const basPeriodAtom = atom<ReportPeriod>("This quarter");
 export const basRangeAtom = atom<ReportRange | null>(null);
+/**
+ * The named filing period ("last-period") the BAS screen's custom range is, or
+ * null for a range typed by hand. Kept apart from the dates so picking
+ * "Custom range" — or typing dates that happen to match a period — never
+ * reads as picking the period.
+ */
+export const basNamedPeriodAtom = atom<string | null>(null);
+/** The business the BAS screen's period was chosen on; a named period isn't carried to another. */
+export const basPeriodBusinessAtom = atom<string | null>(null);
 
 /**
  * The Asset Listing's and Customer/Supplier report's periods.

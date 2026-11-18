@@ -18,6 +18,8 @@ import {
   ensureRefreshToken,
 } from "@/lib/api/session";
 import { registerQueryCache } from "@/lib/api/teardown";
+import { useAssetRegistryStore } from "@/stores/asset-registry";
+import { useAssetsStore } from "@/stores/assets";
 import { useBusinessesStore } from "@/stores/businesses";
 import { useDashboardStore } from "@/stores/dashboard";
 import { useOnboardingStore } from "@/stores/onboarding";
@@ -25,6 +27,12 @@ import { sessionUserId, useSessionStore } from "@/stores/session";
 import { UsertourBootstrap } from "@/components/usertour/usertour-bootstrap";
 import { AnalyticsBootstrap } from "@/components/analytics/analytics-bootstrap";
 import { LocatorBootstrap } from "@/components/dev/locator-bootstrap";
+
+declare global {
+  interface Window {
+    __TANSTACK_QUERY_CLIENT__?: QueryClient;
+  }
+}
 
 /**
  * Everything React Query holds was fetched for one signed-in user, against
@@ -55,6 +63,10 @@ function QueryCacheScope() {
     // First settled scope of the session is the one already being fetched for.
     if (before === null || before === scope) return;
     queryClient.clear();
+    // The asset stores mirror queries but outlive the cache: without this the
+    // previous business's register (and registry ids) show until a refetch.
+    useAssetsStore.getState().reset();
+    useAssetRegistryStore.getState().reset();
   }, [settled, scope, queryClient]);
 
   return null;
@@ -115,6 +127,15 @@ export function Providers({ children }: { children: React.ReactNode }) {
    * it from anywhere. See `lib/api/teardown.ts`.
    */
   React.useEffect(() => registerQueryCache(queryClient), [queryClient]);
+
+  // Dev only: lets the TanStack Query devtools browser extension find the client.
+  React.useEffect(() => {
+    if (process.env.NODE_ENV !== "development") return;
+    window.__TANSTACK_QUERY_CLIENT__ = queryClient;
+    return () => {
+      delete (window as Partial<Window>).__TANSTACK_QUERY_CLIENT__;
+    };
+  }, [queryClient]);
 
   React.useEffect(() => {
     void useOnboardingStore.persist.rehydrate();

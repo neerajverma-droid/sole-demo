@@ -15,6 +15,8 @@ import { draftFromDetail } from "@/components/businesses/business-profile-form";
 import { useIndustriesQuery } from "@/hooks/use-industries-query";
 import { useActiveBusiness } from "@/hooks/use-active-business";
 import { useCountryContext } from "@/hooks/use-country-context";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
 import { apiErrorMessage } from "@/lib/api-error";
 import {
   fetchBusinessDetail,
@@ -210,6 +212,7 @@ export function InvoiceReadyDialog() {
         industryId ? Number(industryId.id) : null,
         { file },
       );
+      track(EVENTS.INVOICE_BRANDING_UPLOAD, { source: "invoice_ready" });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["businesses"] }),
         queryClient.invalidateQueries({ queryKey: ["business", business.id] }),
@@ -343,13 +346,13 @@ export function InvoiceReadyDialog() {
               </div>
 
               <div className="mt-5 flex items-center justify-between gap-3">
-                <button
+                <Button
                   type="button"
+                  variant="outline"
                   onClick={() => router.push("/invoices")}
-                  className="text-sm font-medium text-muted-foreground transition-colors hover:text-primary"
                 >
                   Back to invoices
-                </button>
+                </Button>
 
                 <Button disabled={!isReady} onClick={() => setDone(true)}>
                   {isReady ? "Start my invoice" : "Fill these in to start"}

@@ -73,6 +73,7 @@ export function NexxtapFacilitiesScreen() {
         <FormSection
           icon={WalletCards}
           title="Devices and facilities"
+          tourId="nexttap-facilities"
           description="What NextTap switches on for this merchant."
           headerClassName={NEXXTAP_SECTION_HEADER}
           className="space-y-4 p-4 sm:p-6"
@@ -159,6 +160,7 @@ export function NexxtapFacilitiesScreen() {
         <FormSection
           icon={Repeat}
           title="Subscriptions and memberships"
+          tourId="nexttap-subscriptions"
           description="Recurring charges NextTap needs to know about up front."
           headerClassName={NEXXTAP_SECTION_HEADER}
           className="space-y-4 p-4 sm:p-6"

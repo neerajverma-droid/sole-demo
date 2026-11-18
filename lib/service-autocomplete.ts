@@ -37,6 +37,8 @@ export type ServiceAutocompleteEntry = {
   category: string;
   /** What it cost to buy, not what it sells for — `cost_price` over `price`. */
   costPrice: string;
+  /** What one of the business's own items sells for (`price`); blank for catalogue rows or none set. */
+  salePrice: string;
   quantityType: QuantityType | "";
   tracked: boolean;
   openingStock: string;
@@ -60,6 +62,9 @@ function mapAutocompleteEntry(
     description: raw.description ?? "",
     category: raw.category ?? "",
     costPrice: priceFromApi(raw.cost_price ?? raw.price ?? null),
+    // Only the business's own rows have a sale price; the catalogue's `price`
+    // isn't one, so it's never carried over as such.
+    salePrice: raw.product_id != null ? priceFromApi(raw.price ?? null) : "",
     quantityType: raw.qty_type ? QTY_TYPE_TO_LABEL[raw.qty_type] : "",
     tracked,
     openingStock: tracked ? String(Number(raw.inventory_count) || 0) : "",

@@ -17,6 +17,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { PrefixInput } from "@/components/ui/prefix-input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select,
@@ -156,23 +157,15 @@ export function EditTransactionDialog() {
               </Field>
 
               <Field label="Amount" required error={amountIssue}>
-                <div className="relative">
-                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-                    {activeCurrencySymbol()}
-                  </span>
-                  <Input
-                    className={cn(
-                      "pl-7 tabular",
-                      amountIssue &&
-                        "border-destructive focus-visible:ring-destructive",
-                    )}
-                    inputMode="decimal"
-                    value={amount}
-                    onChange={(event) => setAmount(event.target.value)}
-                    aria-label="Amount"
-                    aria-invalid={!!amountIssue}
-                  />
-                </div>
+                <PrefixInput
+                  prefix={activeCurrencySymbol()}
+                  className="tabular"
+                  inputMode="decimal"
+                  value={amount}
+                  onChange={(event) => setAmount(event.target.value)}
+                  aria-label="Amount"
+                  aria-invalid={!!amountIssue}
+                />
               </Field>
             </div>
 
@@ -607,23 +600,15 @@ export function SplitTransactionDialog() {
                 First part
               </p>
               <Field label="Amount" error={issue}>
-                <div className="relative">
-                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-                    {activeCurrencySymbol()}
-                  </span>
-                  <Input
-                    className={cn(
-                      "pl-7 tabular",
-                      issue &&
-                        "border-destructive focus-visible:ring-destructive",
-                    )}
-                    inputMode="decimal"
-                    value={first}
-                    onChange={(event) => setFirst(event.target.value)}
-                    aria-label="First amount"
-                    aria-invalid={!!issue}
-                  />
-                </div>
+                <PrefixInput
+                  prefix={activeCurrencySymbol()}
+                  className="tabular"
+                  inputMode="decimal"
+                  value={first}
+                  onChange={(event) => setFirst(event.target.value)}
+                  aria-label="First amount"
+                  aria-invalid={!!issue}
+                />
               </Field>
               <Field label="Category">
                 <CategorySelect

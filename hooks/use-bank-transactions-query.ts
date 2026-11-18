@@ -1,21 +1,15 @@
 "use client";
 
 import * as React from "react";
-import {
-  useInfiniteQuery,
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { useFiscalYearStart } from "@/hooks/use-fiscal-year-start";
 import { apiErrorMessage } from "@/lib/api-error";
 import {
-  SUGGESTIONS_PAGE_SIZE,
   approveAllApi,
+  fetchSuggestedTransactions,
   fetchSuggestionsCount,
-  fetchSuggestionsPage,
   rejectSuggestionsApi,
   type ApprovalRow,
   approveTransactionApi,
@@ -251,14 +245,15 @@ export function useSuggestionsCount() {
   });
 }
 
-/** The review's rows, 25 at a time as the list scrolls — only while open. */
+/**
+ * The review's rows — only the unmatched lines with an actual AI suggestion,
+ * only while open. The same `fetchSuggestedTransactions` the banner's count
+ * uses, so the two can't disagree.
+ */
 export function useSuggestions(enabled: boolean) {
-  return useInfiniteQuery({
+  return useQuery({
     queryKey: [...BANK_TRANSACTIONS_KEY, "suggestions"],
-    queryFn: ({ pageParam }) => fetchSuggestionsPage(pageParam),
-    initialPageParam: 1,
-    getNextPageParam: (last, pages) =>
-      pages.length * SUGGESTIONS_PAGE_SIZE < last.total ? pages.length + 1 : undefined,
+    queryFn: fetchSuggestedTransactions,
     enabled,
   });
 }
@@ -269,10 +264,14 @@ export function useApproveAll() {
     mutationFn: (rows: ApprovalRow[]) => approveAllApi(rows),
     onSuccess: (message) => {
       toast.success(message || "Transactions approved successfully.");
-      void queryClient.invalidateQueries({ queryKey: BANK_TRANSACTIONS_KEY });
     },
     onError: (error) => {
       toast.error(apiErrorMessage(error, error.message || "Failed to approve transactions."));
+    },
+    // Even on failure: document matches are made one at a time, so some may
+    // have gone through before one was refused, and the list must drop those.
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: BANK_TRANSACTIONS_KEY });
     },
   });
 }

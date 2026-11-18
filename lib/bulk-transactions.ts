@@ -27,8 +27,6 @@
  */
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
 
 /** A client/contact pair as the backend echoes it back on a matched row. */
@@ -157,6 +155,21 @@ export function soleFieldIssue(row: ValidatedTransactionRow): string | null {
   return null;
 }
 
+/** Which cells of a Sole fields row `soleFieldIssue` is complaining about. */
+export function soleFieldIssueCells(
+  row: ValidatedTransactionRow,
+): ("client" | "name")[] {
+  if (!soleFieldIssue(row)) return [];
+  if (row.account_subcategory?.capital === true) {
+    const cells: ("client" | "name")[] = [];
+    if (row.client || row.client_id || row.contact_id) cells.push("client");
+    if (row.name?.trim()) cells.push("name");
+    return cells;
+  }
+  if (!row.client_id || !row.contact_id) return ["client"];
+  return ["name"];
+}
+
 /**
  * The first row the backend would reject, as a sentence naming it.
  *
@@ -247,19 +260,6 @@ export async function uploadBulkTransactions(
   const total = Number(counts?.total_transactions ?? rows.length);
   const succeeded = Number(counts?.success_transactions ?? rows.length);
   const failed = Number(counts?.failed_transactions ?? total - succeeded);
-
-  /*
-   * Both halves of the result, not just the happy one. A bulk import that
-   * half fails is the problem worth finding, and an event that only ever
-   * reports successes makes it invisible — which is the shape of every defect
-   * this instrumentation was written in response to.
-   */
-  track(EVENTS.TRANSACTIONS_BULK_ACTIONED, {
-    action: "import",
-    count: succeeded,
-    failed_count: failed,
-    total,
-  });
 
   return { succeeded, failed, total };
 }

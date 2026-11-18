@@ -6,6 +6,9 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowRight,
   Briefcase,
+  CircleCheck,
+  FileText,
+  Loader,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -32,6 +35,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { MenuAction } from "@/components/ui/menu-action";
 import { Shimmer } from "@/components/ui/shimmer";
+import { StatCards, type StatCard } from "@/components/ui/stat-cards";
 import {
   SkeletonActionCell,
   SkeletonBadgeCell,
@@ -118,6 +122,15 @@ export function ProjectsScreen() {
     [pathname, router, searchParams],
   );
 
+  // `?new=1` opens the New project dialog — the onboarding tour links here.
+  const newParam = searchParams.get("new");
+  React.useEffect(() => {
+    if (newParam !== "1") return;
+    setCreateOpen(true);
+    // Drop the param, so a refresh doesn't reopen what was closed.
+    setParams({ new: null });
+  }, [newParam, setParams]);
+
   // The search lands in the URL once typing settles, and always resets the page.
   React.useEffect(() => {
     if ((searchParams.get("search_query") ?? "") === debouncedSearch.trim()) return;
@@ -142,9 +155,10 @@ export function ProjectsScreen() {
   // A new tab, page or search shows the skeleton rather than the last view's
   // rows faded — the counts in the tabs stay up while it loads.
   const showSkeleton = listQuery.isLoading || listQuery.isPlaceholderData;
-  // Nothing at all yet: the header and one empty card, no search or tabs. The
-  // counts cover every status but follow the search, so a search with no hits
-  // (or a search's leftovers still standing in while it clears) never counts.
+  // Nothing at all yet — no projects under any status, and no search narrowing
+  // the view. The stats and the search bar still show (at zero), with "No
+  // projects yet" in the list's place, so a new account sees the same screen
+  // an established one does.
   const noProjects =
     !listQuery.isLoading &&
     !listQuery.isError &&
@@ -154,39 +168,70 @@ export function ProjectsScreen() {
     total === 0 &&
     (counts?.all ?? 0) === 0;
 
+  const figure = (value: number | undefined) => (value ?? 0).toLocaleString("en-AU");
+  const cards: StatCard[] = [
+    {
+      key: "all",
+      label: "All projects",
+      value: figure(counts?.all),
+      meta: "Across every status",
+      icon: Briefcase,
+    },
+    {
+      key: "draft",
+      label: "Draft",
+      value: figure(counts?.draft),
+      meta: "Not started yet",
+      icon: FileText,
+      tone: "warning",
+    },
+    {
+      key: "inprogress",
+      label: "In progress",
+      value: figure(counts?.inprogress),
+      meta: "Work under way",
+      icon: Loader,
+      tone: "primary",
+    },
+    {
+      key: "closed",
+      label: "Closed",
+      value: figure(counts?.closed),
+      meta: "Finished projects",
+      icon: CircleCheck,
+      tone: "success",
+    },
+  ];
+  const stats: StatCard[] = cards.map((card) => ({
+    ...card,
+    onSelect: () => setParams({ status: card.key, page: null }),
+    active: card.key !== "all" && status === card.key,
+    selectLabel: `Show ${card.label.toLowerCase()} projects`,
+  }));
+
   return (
     <div className="space-y-[15px]">
       <PageHeader
         icon={Briefcase}
         title="Projects"
         description="Track project budgets, jobs and milestones across your clients."
+        tourId="projects-header"
       >
-        <Button onClick={() => setCreateOpen(true)}>
+        <Button
+          onClick={() => setCreateOpen(true)}
+          data-usertour="project-new-button"
+        >
           <Plus />
           New project
         </Button>
       </PageHeader>
 
-      {noProjects ? (
-        <Empty>
-          <EmptyMedia>
-            <Briefcase aria-hidden />
-          </EmptyMedia>
-          <div className="space-y-1">
-            <EmptyTitle>No projects yet</EmptyTitle>
-            <EmptyDescription>
-              Get started by creating your first project to organize and track your work.
-            </EmptyDescription>
-          </div>
-          <EmptyActions>
-            <Button size="sm" onClick={() => setCreateOpen(true)}>
-              <Plus />
-              Create your first project
-            </Button>
-          </EmptyActions>
-        </Empty>
-      ) : (
-        <section className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+      <div data-usertour="project-stats">
+        <StatCards stats={stats} loading={listQuery.isLoading} />
+      </div>
+
+      <section className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+        <div data-usertour="project-filters">
           <div className="p-[15px]">
             <div className="relative">
               <Search
@@ -242,89 +287,107 @@ export function ProjectsScreen() {
               );
             })}
           </div>
+        </div>
 
-          {showSkeleton ? (
+        {showSkeleton ? (
+          <Table>
+            <ProjectsTableHeader />
+            <TableBody>
+              <SkeletonRows
+                render={() => (
+                  <>
+                    <SkeletonIdentityCell nameWidth="w-32" subtextWidth="w-16" />
+                    <SkeletonTextCell width="w-32" className={CENTRED_SKELETON} />
+                    <SkeletonBadgeCell width="w-20" className={CENTRED_SKELETON} />
+                    <SkeletonTextCell width="w-28" className={CENTRED_SKELETON} />
+                    <SkeletonTextCell width="w-12" className={CENTRED_SKELETON} />
+                    <SkeletonTextCell width="w-20" className={CENTRED_SKELETON} />
+                    <SkeletonTextCell width="w-20" className={CENTRED_SKELETON} />
+                    <SkeletonBadgeCell width="w-20" className={CENTRED_SKELETON} />
+                    <SkeletonTextCell width="w-24" className={CENTRED_SKELETON} />
+                    <SkeletonActionCell className={STICKY_ACTIONS} />
+                  </>
+                )}
+              />
+            </TableBody>
+          </Table>
+        ) : listQuery.isError && rows.length === 0 ? (
+          <Empty className="border-0 shadow-none">
+            <EmptyMedia>
+              <TriangleAlert aria-hidden />
+            </EmptyMedia>
+            <div className="space-y-1">
+              <EmptyTitle>Couldn&apos;t load projects</EmptyTitle>
+              <EmptyDescription>Something went wrong reaching the server. Try again.</EmptyDescription>
+            </div>
+            <EmptyActions>
+              <Button variant="outline" size="sm" onClick={() => listQuery.refetch()}>
+                Try again
+              </Button>
+            </EmptyActions>
+          </Empty>
+        ) : noProjects ? (
+          <Empty className="border-0 shadow-none" data-usertour="project-empty">
+            <EmptyMedia>
+              <Briefcase aria-hidden />
+            </EmptyMedia>
+            <div className="space-y-1">
+              <EmptyTitle>No projects yet</EmptyTitle>
+              <EmptyDescription>
+                Get started by creating your first project to organize and track your work.
+              </EmptyDescription>
+            </div>
+            <EmptyActions>
+              <Button size="sm" onClick={() => setCreateOpen(true)}>
+                <Plus />
+                Create your first project
+              </Button>
+            </EmptyActions>
+          </Empty>
+        ) : total === 0 && !settling ? (
+          <Empty className="border-0 shadow-none">
+            <EmptyMedia>
+              <SearchX aria-hidden />
+            </EmptyMedia>
+            <div className="space-y-1">
+              <EmptyTitle>No projects match this view</EmptyTitle>
+              <EmptyDescription>
+                Try adjusting your search terms, or switch the status tab.
+              </EmptyDescription>
+            </div>
+            <EmptyActions>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setSearch("");
+                  setParams({ search_query: null, status: null, page: null });
+                }}
+              >
+                Clear filters
+              </Button>
+            </EmptyActions>
+          </Empty>
+        ) : (
+          <>
             <Table>
               <ProjectsTableHeader />
-              <TableBody>
-                <SkeletonRows
-                  render={() => (
-                    <>
-                      <SkeletonIdentityCell nameWidth="w-32" subtextWidth="w-16" />
-                      <SkeletonTextCell width="w-32" className={CENTRED_SKELETON} />
-                      <SkeletonBadgeCell width="w-20" className={CENTRED_SKELETON} />
-                      <SkeletonTextCell width="w-28" className={CENTRED_SKELETON} />
-                      <SkeletonTextCell width="w-12" className={CENTRED_SKELETON} />
-                      <SkeletonTextCell width="w-20" className={CENTRED_SKELETON} />
-                      <SkeletonTextCell width="w-20" className={CENTRED_SKELETON} />
-                      <SkeletonBadgeCell width="w-20" className={CENTRED_SKELETON} />
-                      <SkeletonTextCell width="w-24" className={CENTRED_SKELETON} />
-                      <SkeletonActionCell className={STICKY_ACTIONS} />
-                    </>
-                  )}
-                />
+              <TableBody className={cn(settling && "opacity-60 transition-opacity")}>
+                {rows.map((project) => (
+                  <ProjectRow
+                    key={project.id}
+                    project={project}
+                    query={debouncedSearch}
+                    onOpen={() => router.push(projectHref(project.id))}
+                    onEdit={() => setEditId(project.id)}
+                    onDelete={() => setDeleteTarget({ id: project.id, name: project.name })}
+                  />
+                ))}
               </TableBody>
             </Table>
-          ) : listQuery.isError && rows.length === 0 ? (
-            <Empty className="border-0 shadow-none">
-              <EmptyMedia>
-                <TriangleAlert aria-hidden />
-              </EmptyMedia>
-              <div className="space-y-1">
-                <EmptyTitle>Couldn&apos;t load projects</EmptyTitle>
-                <EmptyDescription>Something went wrong reaching the server. Try again.</EmptyDescription>
-              </div>
-              <EmptyActions>
-                <Button variant="outline" size="sm" onClick={() => listQuery.refetch()}>
-                  Try again
-                </Button>
-              </EmptyActions>
-            </Empty>
-          ) : total === 0 && !settling ? (
-            <Empty className="border-0 shadow-none">
-              <EmptyMedia>
-                <SearchX aria-hidden />
-              </EmptyMedia>
-              <div className="space-y-1">
-                <EmptyTitle>No projects match this view</EmptyTitle>
-                <EmptyDescription>
-                  Try adjusting your search terms, or switch the status tab.
-                </EmptyDescription>
-              </div>
-              <EmptyActions>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setSearch("");
-                    setParams({ search_query: null, status: null, page: null });
-                  }}
-                >
-                  Clear filters
-                </Button>
-              </EmptyActions>
-            </Empty>
-          ) : (
-            <>
-              <Table>
-                <ProjectsTableHeader />
-                <TableBody className={cn(settling && "opacity-60 transition-opacity")}>
-                  {rows.map((project) => (
-                    <ProjectRow
-                      key={project.id}
-                      project={project}
-                      query={debouncedSearch}
-                      onOpen={() => router.push(projectHref(project.id))}
-                      onEdit={() => setEditId(project.id)}
-                      onDelete={() => setDeleteTarget({ id: project.id, name: project.name })}
-                    />
-                  ))}
-                </TableBody>
-              </Table>
-            </>
-          )}
-        </section>
-      )}
+          </>
+        )}
+      </section>
 
       {total > 0 && !listQuery.isLoading && (
         <NumberedPagination
@@ -423,6 +486,7 @@ function ProjectRow({
   return (
     <TableRow
       className="group cursor-pointer"
+      data-usertour="project-row"
       onClick={(event) => {
         // Menus, links and buttons in the row handle their own clicks.
         if ((event.target as HTMLElement).closest("a,button,[role=menu]")) return;
@@ -530,7 +594,11 @@ function ProjectRow({
                 className="h-7 w-7 text-primary hover:bg-primary/10 hover:text-primary"
                 asChild
               >
-                <Link href={href} aria-label={`View ${project.name}`}>
+                <Link
+                  href={href}
+                  aria-label={`View ${project.name}`}
+                  data-usertour="project-row-open"
+                >
                   <ArrowRight className="size-4" />
                 </Link>
               </Button>

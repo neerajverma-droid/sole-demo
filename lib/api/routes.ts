@@ -36,10 +36,22 @@ export const apiRoutes = {
   businesses: {
     list: "/businesses",
   },
+  /** A client arriving from an accountant's (SPM) invite email. */
+  spmReferral: {
+    /** The signed-in client's own invite details, for the onboarding prefill. */
+    me: "/spm-referral/me",
+    /** Public sign-up that also records the referral. */
+    signup: "/spm-referral/signup",
+  },
+  /** A client whose accountant set up and paid for their account (integration partner, F6). */
+  partnerReferral: {
+    /** What the set-password page shows, from the emailed one-time token. */
+    activateLookup: "/partner-referral/activate/lookup",
+    /** Set the password, verify the email and sign in. */
+    activate: "/partner-referral/activate",
+  },
   demo: {
-    /** No credentials: takes a free account from the demo pool. */
     login: "/demo/login",
-    /** "This tab is still open", once a minute; 401 once the visit is over. */
     heartbeat: "/demo/heartbeat",
   },
 } as const;

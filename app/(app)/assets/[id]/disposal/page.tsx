@@ -1,4 +1,11 @@
+import type { Metadata } from "next";
+import { AdvancedAssetsGate } from "@/components/assets/asset-access";
+
 import { DisposalScreen } from "@/components/assets/disposal-screen";
+
+export const metadata: Metadata = {
+  title: "Asset disposal · Sole",
+};
 
 export default async function AssetDisposalPage({
   params,
@@ -6,5 +13,9 @@ export default async function AssetDisposalPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  return <DisposalScreen assetId={id} />;
+  return (
+    <AdvancedAssetsGate feature="Disposal" needs="edit">
+      <DisposalScreen assetId={id} />
+    </AdvancedAssetsGate>
+  );
 }

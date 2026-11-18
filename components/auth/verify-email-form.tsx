@@ -4,23 +4,32 @@ import * as React from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAtom } from "jotai";
-import { Check, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import {
   AuthError,
-  AuthSuccess,
   CodeHint,
   useResendCooldown,
 } from "@/components/auth/auth-states";
 import { AuthLayout } from "@/components/auth/auth-layout";
 import { CodeInput } from "@/components/auth/code-input";
+import { EmailVerified } from "@/components/auth/email-verified";
 import { useSession } from "@/components/auth/session-provider";
 import { VerifyEmailLink } from "@/components/auth/verify-email-link";
+import { withEmail } from "@/components/auth/use-auth-entry";
 import { authEmailAtom, authErrorAtom, authPendingAtom } from "@/lib/atoms";
 import { resolvePostAuthRoute } from "@/lib/api/post-auth";
-import { CODE_LENGTH, codeIssue, requestOtp, verifyOtp } from "@/lib/auth";
+import {
+  CODE_LENGTH,
+  codeIssue,
+  requestOtp,
+  resendVerification,
+  verifyOtp,
+} from "@/lib/auth";
+
+const VERIFY_ROUTE = "/auth/verify-email";
 
 /**
  * /auth/verify-email — two arrivals, one address to confirm.
@@ -41,11 +50,17 @@ export function VerifyEmailForm() {
 }
 
 /**
- * Reached from a password sign-in or sign-up that turned out to be unverified.
+ * Where an unverified address waits for its link.
  *
- * Arriving with an address on the URL means the backend has already emailed a
- * verification LINK for it — so a code is sent right away too, straight to the
- * six-digit entry screen, rather than making the person ask for one by hand.
+ * The link is the default way to verify, and it is all this screen sends. A
+ * six-digit code is there if they would rather type than click, but only when
+ * they ask for it — it is never sent unprompted.
+ *
+ * Two ways in, and they differ in whether an email has just gone out:
+ *   - a password sign-in or sign-up that turned out to be unverified — the
+ *     backend has already emailed the link, so nothing is sent here;
+ *   - the in-app "Verify email" banner (`?send=1`) — nothing has been sent, so
+ *     a fresh link goes out on arrival.
  */
 function CheckYourEmail() {
   const router = useRouter();
@@ -57,9 +72,14 @@ function CheckYourEmail() {
   const [code, setCode] = React.useState("");
   const [verified, setVerified] = React.useState(false);
   const [edited, setEdited] = React.useState(false);
-  /** Whether a code has been sent — until then, the link is all they have. */
+  /** Whether they asked for a code — until then, the link is all they have. */
   const [codeSent, setCodeSent] = React.useState(false);
-  const resend = useResendCooldown();
+  /** Which request is in flight, so the spinner lands on the right button. */
+  const [busy, setBusy] = React.useState<"link" | "code" | null>(null);
+  // Separate clocks: asking for a code straight after arriving is reasonable,
+  // and shouldn't wait on the link that was just sent.
+  const linkCooldown = useResendCooldown();
+  const codeCooldown = useResendCooldown();
 
   /** Where to go once the address is confirmed, decided by the account. */
   const [destination, setDestination] = React.useState("/onboarding");
@@ -69,44 +89,73 @@ function CheckYourEmail() {
     setPending(false);
   }, [setError, setPending]);
 
+  const sendLink = React.useCallback(
+    async (target: string) => {
+      setBusy("link");
+      setPending(true);
+      setError(null);
+      const result = await resendVerification(target);
+      setPending(false);
+      setBusy(null);
+
+      if (!result.ok) {
+        setError(result.message);
+        return;
+      }
+      linkCooldown.start();
+      toast.success("Verification link sent");
+    },
+    [linkCooldown, setError, setPending],
+  );
+
   /** Whether this is a resend, for the toast copy — read from a ref rather
-   * than `codeSent` state so the check can't double-fire under Strict Mode's
-   * replayed updaters. */
-  const hasSentBefore = React.useRef(false);
+   * than state so the check can't double-fire under Strict Mode's replayed
+   * updaters. */
+  const hasSentCodeBefore = React.useRef(false);
 
   const sendCode = React.useCallback(
     async (targetEmail: string) => {
+      setBusy("code");
       setPending(true);
       setError(null);
       const result = await requestOtp({ email: targetEmail, purpose: "signup" });
       setPending(false);
+      setBusy(null);
 
       if (!result.ok) {
-        if (result.retryAfter) resend.start(result.retryAfter);
+        if (result.retryAfter) codeCooldown.start(result.retryAfter);
         setError(result.message);
         return;
       }
-      resend.start(result.resendAfter);
-      toast.success(hasSentBefore.current ? "A new code is on its way" : "Code sent");
-      hasSentBefore.current = true;
+      codeCooldown.start(result.resendAfter);
+      toast.success(
+        hasSentCodeBefore.current ? "A new code is on its way" : "Code sent",
+      );
+      hasSentCodeBefore.current = true;
       setCodeSent(true);
     },
-    [resend, setError, setPending],
+    [codeCooldown, setError, setPending],
   );
 
-  // Reached on its own from a password sign-in that turned out to be
-  // unverified, which carries the address rather than relying on the atom
-  // surviving a full page load. The code is sent immediately — React Strict
-  // Mode runs effects twice in dev, and the ref guards against that costing a
-  // second email.
-  const autoSent = React.useRef(false);
+  // The address comes on the URL rather than relying on the atom surviving a
+  // full page load. React Strict Mode runs effects twice in dev; the ref keeps
+  // that from costing a second email.
+  const arrived = React.useRef(false);
   React.useEffect(() => {
     const prefill = searchParams?.get("email");
     if (!prefill) return;
     setEmail(prefill);
-    if (autoSent.current) return;
-    autoSent.current = true;
-    void sendCode(prefill);
+    if (arrived.current) return;
+    arrived.current = true;
+
+    if (searchParams?.get("send")) {
+      void sendLink(prefill);
+      // So a refresh doesn't send another.
+      router.replace(withEmail(VERIFY_ROUTE, prefill));
+    } else {
+      // The backend emailed the link a moment ago — don't offer another yet.
+      linkCooldown.start();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -118,7 +167,7 @@ function CheckYourEmail() {
       if (value.length < CODE_LENGTH) return;
       setPending(true);
       setError(null);
-      const result = await verifyOtp(email, value, "verify_email");
+      const result = await verifyOtp(email, value);
 
       if (!result.ok) {
         setPending(false);
@@ -139,10 +188,15 @@ function CheckYourEmail() {
     [adopt, email, setError, setPending],
   );
 
-  const resendCode = () => {
-    if (resend.cooling || pending) return;
-    return sendCode(email);
-  };
+  const sentTo = (
+    <>
+      Sent to{" "}
+      <span className="font-medium text-foreground">
+        {email || "your email address"}
+      </span>
+      .
+    </>
+  );
 
   return (
     <AuthLayout
@@ -156,8 +210,8 @@ function CheckYourEmail() {
             ? "We've sent a six-digit code. Enter it below to confirm this is you."
             : "We've emailed you a link to verify your account. Open it to confirm this is you — it expires in 30 minutes."
       }
-      promoHeadline="Start your free trial — no card required."
-      promoSupporting="Thirty days of everything. Cancel whenever, keep your data either way."
+      promoHeadline="Your books, sorted from day one."
+      promoSupporting="Cancel whenever, keep your data either way."
       footer={
         verified ? undefined : (
           <>
@@ -173,44 +227,38 @@ function CheckYourEmail() {
       }
     >
       {verified ? (
-        <AuthSuccess
-          icon={Check}
-          title="Email verified successfully"
-          description="Your account is ready. One screen to set up your business details and GST, then you're in."
-          action={
-            <Button
-              size="lg"
-              className="h-10 w-full"
-              // A new account still owes us its business profile; an existing
-              // one goes straight into the app.
-              onClick={() => router.replace(destination)}
-            >
-              Continue
-            </Button>
-          }
-        />
+        <EmailVerified destination={destination} />
       ) : !codeSent ? (
         <div className="space-y-4">
           <AuthError message={error} />
           <CodeHint>
-            Sent to{" "}
-            <span className="font-medium text-foreground">
-              {email || "your email address"}
-            </span>
-            .
+            {sentTo} Can&apos;t see it? Check your spam folder.
           </CodeHint>
           <Button
             type="button"
             variant="outline"
             size="lg"
             className="h-10 w-full"
-            disabled={resend.cooling || pending}
-            onClick={() => void resendCode()}
+            disabled={linkCooldown.cooling || pending || !email}
+            onClick={() => void sendLink(email)}
           >
-            {pending && <Loader2 className="animate-spin" aria-hidden />}
-            {resend.cooling
-              ? `Email me a code in ${resend.seconds}s`
-              : "Email me a code instead"}
+            {busy === "link" && <Loader2 className="animate-spin" aria-hidden />}
+            {linkCooldown.cooling
+              ? `Resend link in ${linkCooldown.seconds}s`
+              : "Resend link"}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="w-full"
+            disabled={codeCooldown.cooling || pending || !email}
+            onClick={() => void sendCode(email)}
+          >
+            {busy === "code" && <Loader2 className="animate-spin" aria-hidden />}
+            {codeCooldown.cooling
+              ? `Email me a code in ${codeCooldown.seconds}s`
+              : "Use a code instead"}
           </Button>
         </div>
       ) : (
@@ -243,13 +291,7 @@ function CheckYourEmail() {
             {issue ? (
               <p className="text-xs text-destructive">{issue}</p>
             ) : (
-              <CodeHint>
-                Sent to{" "}
-                <span className="font-medium text-foreground">
-                  {email || "your email address"}
-                </span>
-                .
-              </CodeHint>
+              <CodeHint>{sentTo}</CodeHint>
             )}
           </div>
 
@@ -268,12 +310,28 @@ function CheckYourEmail() {
             variant="ghost"
             size="sm"
             className="w-full"
-            disabled={resend.cooling || pending}
-            onClick={() => void resendCode()}
+            disabled={codeCooldown.cooling || pending}
+            onClick={() => void sendCode(email)}
           >
-            {resend.cooling
-              ? `Resend code in ${resend.seconds}s`
+            {codeCooldown.cooling
+              ? `Resend code in ${codeCooldown.seconds}s`
               : "Resend code"}
+          </Button>
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="w-full"
+            disabled={pending}
+            onClick={() => {
+              setCodeSent(false);
+              setCode("");
+              setEdited(false);
+              setError(null);
+            }}
+          >
+            Use the email link instead
           </Button>
         </form>
       )}

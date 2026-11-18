@@ -2,12 +2,12 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { Check, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { AuthLayout } from "@/components/auth/auth-layout";
-import { AuthError, AuthSuccess } from "@/components/auth/auth-states";
+import { AuthError } from "@/components/auth/auth-states";
+import { EmailVerified } from "@/components/auth/email-verified";
 import { useSession } from "@/components/auth/session-provider";
 import { withEmail } from "@/components/auth/use-auth-entry";
 import { resolvePostAuthRoute } from "@/lib/api/post-auth";
@@ -29,7 +29,6 @@ export function VerifyEmailLink({
   token: string;
   email: string;
 }) {
-  const router = useRouter();
   const { adopt } = useSession();
   const handled = React.useRef(false);
   const [error, setError] = React.useState("");
@@ -79,23 +78,10 @@ export function VerifyEmailLink({
   if (destination) {
     return (
       <AuthLayout
-        promoHeadline="Start your free trial — no card required."
-        promoSupporting="Thirty days of everything. Cancel whenever, keep your data either way."
+        promoHeadline="Your books, sorted from day one."
+        promoSupporting="Cancel whenever, keep your data either way."
       >
-        <AuthSuccess
-          icon={Check}
-          title="Email verified successfully"
-          description="Your account is ready. One screen to set up your business details and GST, then you're in."
-          action={
-            <Button
-              size="lg"
-              className="h-10 w-full"
-              onClick={() => router.replace(destination)}
-            >
-              Continue
-            </Button>
-          }
-        />
+        <EmailVerified destination={destination} />
       </AuthLayout>
     );
   }
@@ -104,8 +90,8 @@ export function VerifyEmailLink({
     <AuthLayout
       heading="That link didn't work"
       subtext="Verification links work once and expire after 30 minutes. Sign in to carry on — if your address still needs confirming, we'll send you a fresh link."
-      promoHeadline="Start your free trial — no card required."
-      promoSupporting="Thirty days of everything. Cancel whenever, keep your data either way."
+      promoHeadline="Your books, sorted from day one."
+      promoSupporting="Cancel whenever, keep your data either way."
     >
       <div className="space-y-4">
         <AuthError message={error} />

@@ -32,11 +32,11 @@ export type PricingPackage = {
 };
 
 /**
- * The five tiers.
+ * The four tiers.
  *
  * The reference only spelled out the feature lists for Invoices and Expenses;
- * the other four carried a name, a price and a badge. Theirs are written here in
- * the same voice so no card renders featureless — worth checking against the
+ * the other three carried a name, a price and a badge. Theirs are written here
+ * in the same voice so no card renders featureless — worth checking against the
  * real plan comparison when it lands.
  */
 export const PRICING_PACKAGES: PricingPackage[] = [
@@ -68,35 +68,18 @@ export const PRICING_PACKAGES: PricingPackage[] = [
     price: 24.99,
     badge: "25% off",
     features: [
-      "Everything in Invoices and Expenses",
-      "BAS reporting & GST",
-      "Liability & capital tracking",
+      "Features tailored to your industry",
+      "Accounting module included",
+      "Any 2 add-ons included",
     ],
     excluded: ["Time tracking"],
   },
   {
     id: "advanced",
     name: "Advanced",
-    price: 44.99,
+    price: 49.99,
     badge: "Best value",
-    features: [
-      "Everything in the Compliance Bundle",
-      "Every add-on included",
-      "Priority support",
-    ],
-    excluded: [],
-  },
-  {
-    id: "pro",
-    name: "Pro",
-    price: 59.99,
-    badge: "Coming June 2026",
-    unavailableReason: "Pro opens in June 2026.",
-    features: [
-      "Everything in Advanced",
-      "Multi-entity consolidation",
-      "Dedicated onboarding",
-    ],
+    features: ["All features included"],
     excluded: [],
   },
 ];

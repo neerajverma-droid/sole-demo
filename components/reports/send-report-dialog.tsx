@@ -6,6 +6,7 @@ import { Check, ChevronDown, Loader2, Users, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Command,
   CommandEmpty,
@@ -26,6 +27,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Popover,
   PopoverContent,
@@ -82,6 +85,7 @@ export function SendReportDialog({
   endpoint = apiRoutes.reporting.reports,
   onSend,
   description,
+  extraFields,
 }: {
   report: SendableReport;
   /** Replaces the default line under the title when a report sends differently. */
@@ -95,6 +99,12 @@ export function SendReportDialog({
    */
   endpoint?: string;
   onSend?: (payload: { recipients: string[]; note: string }) => Promise<void>;
+  /**
+   * Extra `FormData` fields this report's own send call needs — the P&L's
+   * `gst_inclusive`, say. Flat strings only: it's appended as-is to every
+   * recipient's request, the same way `send_to` and `format` already are.
+   */
+  extraFields?: Record<string, string>;
 }) {
   const [open, setOpen] = useAtom(sendReportOpenAtom);
 
@@ -105,6 +115,14 @@ export function SendReportDialog({
   const [error, setError] = React.useState<string | undefined>();
   const [sending, setSending] = React.useState(false);
   const [picking, setPicking] = React.useState(false);
+
+  const [accountantEnabled, setAccountantEnabled] = React.useState(false);
+  const [accountantName, setAccountantName] = React.useState("");
+  const [accountantEmail, setAccountantEmail] = React.useState("");
+  const [bookkeeperEnabled, setBookkeeperEnabled] = React.useState(false);
+  const [bookkeeperName, setBookkeeperName] = React.useState("");
+  const [bookkeeperEmail, setBookkeeperEmail] = React.useState("");
+  const [roleError, setRoleError] = React.useState<string | undefined>();
 
   const directory = useRecipientContactsQuery(open);
   const withEmail = (list: typeof directory.clients) =>
@@ -143,6 +161,13 @@ export function SendReportDialog({
     setNote("");
     setFormat("PDF");
     setError(undefined);
+    setAccountantEnabled(false);
+    setAccountantName("");
+    setAccountantEmail("");
+    setBookkeeperEnabled(false);
+    setBookkeeperName("");
+    setBookkeeperEmail("");
+    setRoleError(undefined);
   };
 
   const send = async () => {
@@ -155,14 +180,24 @@ export function SendReportDialog({
       return;
     }
 
+    if (
+      (accountantEnabled && (!accountantName.trim() || !EMAIL_PATTERN.test(accountantEmail))) ||
+      (bookkeeperEnabled && (!bookkeeperName.trim() || !EMAIL_PATTERN.test(bookkeeperEmail)))
+    ) {
+      setRoleError("Name and a valid email are required for every role you've turned on");
+      return;
+    }
+    setRoleError(undefined);
+
     setDraft("");
     setSending(true);
     try {
       /*
        * `sole-ocr`'s send action takes exactly one `send_to` per request (plus
-       * two optional named roles this dialog doesn't collect) — there's no
-       * batch form of it. A chip list sends as one real request per chip
-       * rather than silently mailing only the first one.
+       * two optional named roles — `accountant`/`bookkeeper`, each a
+       * JSON-stringified `{name, email}` — this dialog now also collects)
+       * — there's no batch form of it. A chip list sends as one real request
+       * per chip rather than silently mailing only the first one.
        */
       if (onSend) {
         await onSend({ recipients: list, note: note.trim() });
@@ -181,6 +216,23 @@ export function SendReportDialog({
             }
             if (note && note.trim()) {
               form.append("note", note.trim());
+            }
+            if (accountantEnabled) {
+              form.append(
+                "accountant",
+                JSON.stringify({ name: accountantName.trim(), email: accountantEmail.trim() }),
+              );
+            }
+            if (bookkeeperEnabled) {
+              form.append(
+                "bookkeeper",
+                JSON.stringify({ name: bookkeeperName.trim(), email: bookkeeperEmail.trim() }),
+              );
+            }
+            if (extraFields) {
+              for (const [key, value] of Object.entries(extraFields)) {
+                form.append(key, value);
+              }
             }
 
             return api.post(endpoint, form);
@@ -410,6 +462,33 @@ export function SendReportDialog({
             </div>
           </Field>
 
+          {/*
+            Two named roles rather than a third recipient chip: the backend
+            addresses each by name in the email it sends, which a plain
+            address in the Recipients field has no way to supply.
+          */}
+          <div className="space-y-3 rounded-lg border border-dashed border-border px-3 py-2.5">
+            <RoleField
+              label="Accountant"
+              enabled={accountantEnabled}
+              onEnabledChange={setAccountantEnabled}
+              name={accountantName}
+              onNameChange={setAccountantName}
+              email={accountantEmail}
+              onEmailChange={setAccountantEmail}
+            />
+            <RoleField
+              label="Bookkeeper"
+              enabled={bookkeeperEnabled}
+              onEnabledChange={setBookkeeperEnabled}
+              name={bookkeeperName}
+              onNameChange={setBookkeeperName}
+              email={bookkeeperEmail}
+              onEmailChange={setBookkeeperEmail}
+            />
+            {roleError && <p className="text-xs text-destructive">{roleError}</p>}
+          </div>
+
           <Field
             label="Note"
             htmlFor="send-report-note"
@@ -471,5 +550,64 @@ export function SendReportDialog({
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * One named role: a checkbox that reveals the Name and Email it needs once
+ * turned on. Collapsed by default, since most sends go to Recipients alone —
+ * an accountant or bookkeeper CC is the exception, not the common case.
+ */
+function RoleField({
+  label,
+  enabled,
+  onEnabledChange,
+  name,
+  onNameChange,
+  email,
+  onEmailChange,
+}: {
+  label: string;
+  enabled: boolean;
+  onEnabledChange: (next: boolean) => void;
+  name: string;
+  onNameChange: (next: string) => void;
+  email: string;
+  onEmailChange: (next: string) => void;
+}) {
+  const id = label.toLowerCase();
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <Checkbox
+          id={`send-report-${id}-enable`}
+          checked={enabled}
+          onCheckedChange={(next) => onEnabledChange(next === true)}
+        />
+        <Label htmlFor={`send-report-${id}-enable`} className="text-sm font-normal">
+          Also send to my {label.toLowerCase()}
+        </Label>
+      </div>
+      {enabled && (
+        <div className="grid grid-cols-2 gap-2 pl-6">
+          <Input
+            id={`send-report-${id}-name`}
+            value={name}
+            onChange={(event) => onNameChange(event.target.value)}
+            placeholder={`${label} name`}
+            aria-label={`${label} name`}
+          />
+          <Input
+            id={`send-report-${id}-email`}
+            type="email"
+            value={email}
+            onChange={(event) => onEmailChange(event.target.value)}
+            placeholder={`${label} email`}
+            aria-label={`${label} email`}
+          />
+        </div>
+      )}
+    </div>
   );
 }

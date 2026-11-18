@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Getting started — prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700&family=Inter:wght@400;450;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    /* Sole brand palette (from project brand guidelines v1.0).
+       Variable names kept from the earlier build; values are now Sole's.
+       Primary indigo #5B5BF6, accent orange #E8833A (used sparingly),
+       green #10B981 for completed/success states. */
+    --paper:#F5F4F8;       /* Page BG */
+    --card:#FFFFFF;        /* Card */
+    --ink:#0F1117;         /* Text */
+    --ink-soft:#374151;    /* Secondary body */
+    --ink-faint:#6B7280;   /* Muted */
+    --pine:#5B5BF6;        /* Primary */
+    --pine-deep:#4F46E5;   /* Primary Dark */
+    --honey:#E8833A;       /* Accent */
+    --honey-soft:#FBEFE4;  /* Accent Soft */
+    --sage:#10B981;        /* Green (done / success) */
+    --line:#E5E7EB;        /* Border */
+    --line-soft:#ECEDF2;   /* Subtle border */
+    --shadow:0 1px 2px rgba(16,24,40,.05), 0 12px 30px rgba(16,24,40,.08);
+    --radius:16px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:'Inter',system-ui,sans-serif;
+    background:var(--paper);
+    color:var(--ink);
+    -webkit-font-smoothing:antialiased;
+    line-height:1.5;
+    display:flex;justify-content:center;
+    padding:24px 16px 64px;
+  }
+  .app{width:100%;max-width:440px;position:relative}
+
+  /* top bar */
+  .topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;padding:0 4px}
+  .brand{display:flex;align-items:center;gap:9px;font-family:'Bricolage Grotesque';font-weight:600;font-size:15px;letter-spacing:-.01em}
+  .brand .dot{width:22px;height:22px;border-radius:7px;background:var(--pine);display:grid;place-items:center}
+  .brand .dot::after{content:"";width:8px;height:8px;border-radius:2px;background:#fff}
+  .tag{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint);border:1px solid var(--line);padding:3px 8px;border-radius:20px}
+
+  /* screens */
+  .screen{display:none;animation:rise .45s cubic-bezier(.2,.7,.2,1)}
+  .screen.active{display:block}
+  @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
+
+  /* intro */
+  .intro{padding:34px 26px 28px;text-align:left}
+  .intro .eyebrow{font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:var(--pine);font-weight:600;margin-bottom:16px}
+  .intro h1{font-family:'Bricolage Grotesque';font-weight:600;font-size:30px;line-height:1.08;letter-spacing:-.02em;margin-bottom:14px}
+  .intro p{color:var(--ink-soft);font-size:15px;margin-bottom:8px}
+  .intro .meta{font-size:13px;color:var(--ink-faint);margin-top:18px}
+
+  /* progress */
+  .progress{display:flex;gap:6px;margin:0 4px 16px}
+  .progress i{height:4px;flex:1;border-radius:4px;background:var(--line);transition:background .3s}
+  .progress i.on{background:var(--pine)}
+
+  /* question */
+  .q-head{padding:0 4px;margin-bottom:18px}
+  .q-step{font-size:12px;color:var(--ink-faint);font-weight:500;margin-bottom:8px}
+  .q-head h2{font-family:'Bricolage Grotesque';font-weight:600;font-size:23px;line-height:1.14;letter-spacing:-.015em}
+  .q-help{font-size:13.5px;color:var(--ink-soft);margin-top:10px}
+  .options{display:flex;flex-direction:column;gap:10px}
+  .opt{
+    text-align:left;background:var(--card);border:1px solid var(--line);border-radius:13px;
+    padding:15px 16px;font:inherit;font-size:15px;font-weight:500;color:var(--ink);cursor:pointer;
+    display:flex;align-items:center;justify-content:space-between;gap:12px;
+    transition:border-color .15s, transform .1s, background .15s;
+  }
+  .opt:hover{border-color:var(--pine);background:#fff}
+  .opt:active{transform:scale(.99)}
+  .opt .arw{color:var(--ink-faint);font-size:18px;transition:transform .15s}
+  .opt:hover .arw{transform:translateX(3px);color:var(--pine)}
+  .opt.sel{border-color:var(--pine);background:#fff;box-shadow:0 0 0 3px rgba(91,91,246,.15)}
+
+  .back{background:none;border:none;font:inherit;font-size:13.5px;color:var(--ink-faint);cursor:pointer;padding:14px 4px 0;display:inline-flex;align-items:center;gap:6px}
+  .back:hover{color:var(--ink)}
+
+  .extra{margin-top:11px;padding:15px;border:1px dashed #D6D9E0;border-radius:13px;background:var(--card);animation:rise .3s}
+  .extra-label{display:block;font-size:13.5px;color:var(--ink-soft);margin-bottom:9px}
+  .extra-label span{color:var(--ink-faint)}
+  .extra-input{width:100%;font:inherit;font-size:15px;padding:12px 13px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);margin-bottom:10px}
+  .extra-input::placeholder{color:var(--ink-faint)}
+  .extra-input:focus{outline:none;border-color:var(--pine);box-shadow:0 0 0 3px rgba(91,91,246,.15)}
+  .extra-cta{width:100%;padding:12px}
+
+  /* generating */
+  .gen{padding:60px 26px;text-align:center}
+  .gen .spin{width:34px;height:34px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--pine);margin:0 auto 20px;animation:sp .8s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .gen p{color:var(--ink-soft);font-size:14px}
+
+  /* plan */
+  .plan-head{padding:0 4px;margin-bottom:16px}
+  .plan-topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;padding:0 4px}
+  .plan-topbar button{background:none;border:none;font:inherit;font-size:13.5px;color:var(--ink-faint);cursor:pointer;padding:0}
+  .plan-topbar button:hover{color:var(--ink)}
+  .plan-head h2{font-family:'Bricolage Grotesque';font-weight:600;font-size:25px;letter-spacing:-.02em;margin-bottom:8px}
+  .plan-head p{font-size:14px;color:var(--ink-soft)}
+
+  .banner{background:var(--honey-soft);border:1px solid #F0D9C4;border-radius:13px;padding:14px 15px;margin-bottom:18px;font-size:13px;color:#8A5320;line-height:1.5}
+  .banner b{font-weight:600}
+
+  .section-label{font-size:11.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-faint);font-weight:600;margin:22px 4px 10px}
+  .section-label:first-of-type{margin-top:4px}
+
+  .complete{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:26px 22px;text-align:center;margin-bottom:6px}
+  .complete .tick{width:46px;height:46px;border-radius:50%;background:var(--sage);color:#fff;display:grid;place-items:center;margin:0 auto 14px;font-size:22px}
+  .complete h3{font-family:'Bricolage Grotesque';font-weight:600;font-size:20px;letter-spacing:-.015em;margin-bottom:9px}
+  .complete p{font-size:14px;color:var(--ink-soft);line-height:1.6;max-width:340px;margin:0 auto}
+
+  .step{background:var(--card);border:1px solid var(--line);border-radius:14px;margin-bottom:10px;overflow:hidden;transition:box-shadow .2s,border-color .2s}
+  .step.now{border-color:#B3B3F5;box-shadow:0 2px 4px rgba(91,91,246,.10),0 14px 34px rgba(16,24,40,.09)}
+  .step-top{display:flex;align-items:center;gap:13px;padding:15px 16px;cursor:pointer}
+  .step .mark{width:24px;height:24px;border-radius:7px;flex:none;border:1.5px solid var(--ink-faint);display:grid;place-items:center;font-size:14px;cursor:pointer;transition:.13s}
+  .step .mark::after{content:"\2713";color:var(--ink-faint);opacity:0;transition:opacity .12s}
+  .step .mark:hover{border-color:var(--pine);background:rgba(91,91,246,.08)}
+  .step .mark:hover::after{opacity:.45}
+  .step.done .mark{background:var(--sage);border-color:var(--sage)}
+  .step.done .mark::after{color:#fff;opacity:1}
+  .step.done .mark:hover{background:var(--sage);border-color:var(--sage)}
+  .step-title{flex:1;font-weight:600;font-size:15px;letter-spacing:-.01em}
+  .step.done .step-title{color:var(--ink-faint);text-decoration:line-through;text-decoration-color:var(--line)}
+  .chev{color:var(--ink-faint);font-size:13px;transition:transform .2s}
+  .step.open .chev{transform:rotate(180deg)}
+  .now-flag{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;font-weight:700;color:var(--honey);margin-right:9px}
+
+  .step-body{max-height:0;overflow:hidden;transition:max-height .28s ease}
+  .step.open .step-body{max-height:420px}
+  .step-body .inner{padding:2px 16px 16px 53px}
+  .step-body .row{margin-bottom:11px}
+  .step-body .k{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--pine);font-weight:600;margin-bottom:3px}
+  .step-body .v{font-size:13.5px;color:var(--ink-soft);line-height:1.55}
+  .wlink{color:var(--pine);text-decoration:underline;text-underline-offset:2px;text-decoration-thickness:1px}
+  .wlink:hover{color:var(--pine-deep)}
+  .sole-tag{display:inline-flex;align-items:center;gap:7px;font-size:11.5px;font-weight:600;color:var(--pine);background:#EEF0FF;border-radius:8px;padding:6px 11px;margin-top:2px;text-decoration:none;cursor:pointer;transition:background .15s}
+  .sole-tag:hover{background:#E1E4FF}
+  .sole-arw{transition:transform .15s}
+  .sole-tag:hover .sole-arw{transform:translateX(2px)}
+  .sole-dot{width:7px;height:7px;border-radius:2px;background:var(--pine);flex:none}
+  .step-actions{display:flex;gap:8px;margin-top:14px}
+  .mini{font:inherit;font-size:12.5px;font-weight:500;border-radius:9px;padding:8px 13px;cursor:pointer;border:1px solid var(--line);background:#fff;color:var(--ink)}
+  .mini.solid{background:var(--pine);border-color:var(--pine);color:#fff}
+  .mini:hover{border-color:var(--pine)}
+  .mini.solid:hover{background:var(--pine-deep)}
+
+  /* setup recap */
+  .recap{padding:18px 18px 20px;margin-top:26px}
+  .recap h3{font-family:'Bricolage Grotesque';font-weight:600;font-size:16px;margin-bottom:12px}
+  .chips{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:14px}
+  .chip{font-size:12px;background:var(--paper);border:1px solid var(--line);border-radius:20px;padding:5px 11px;color:var(--ink-soft)}
+  .recap .status{font-size:13px;color:var(--ink-soft);line-height:1.6}
+  .recap .status b{color:var(--ink);font-weight:600}
+
+  /* sole */
+  .sole{margin-top:14px;padding:20px 18px;background:#4A3FBE;border-radius:var(--radius);color:#F5F4F8}
+  .sole .lead{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#BDB8F2;font-weight:600;margin-bottom:10px}
+  .sole h3{font-family:'Bricolage Grotesque';font-weight:600;font-size:19px;line-height:1.2;margin-bottom:10px;color:#fff}
+  .sole p{font-size:13.5px;color:#D9D6F6;line-height:1.6;margin-bottom:14px}
+  .sole .cta{display:inline-block;background:#fff;color:#4A3FBE;font-weight:600;font-size:14px;text-decoration:none;padding:12px 20px;border-radius:11px;transition:background .15s}
+  .sole .cta:hover{background:#EEF0FF}
+  .sole .fine{font-size:11.5px;color:#A9A4E4;margin-top:11px}
+
+  .disclaimer{font-size:11.5px;color:var(--ink-faint);line-height:1.55;margin:20px 6px 0;text-align:center}
+  .restart{display:block;margin:20px auto 0;background:none;border:none;font:inherit;font-size:13px;color:var(--ink-faint);cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+  .restart:hover{color:var(--ink)}
+
+  @media (prefers-reduced-motion:reduce){
+    *{animation:none!important;transition:none!important}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <div class="brand"><span class="dot"></span>Getting started</div>
+  </div>
+
+  <!-- INTRO -->
+  <section class="screen active" id="s-intro">
+    <div class="panel intro">
+      <div class="eyebrow">For new business owners</div>
+      <h1>Let's work out your next move.</h1>
+      <p>Five quick questions. No jargon, no long checklist.</p>
+      <p>You'll get a short, ordered plan built around where you're actually up to, starting with the one thing to do first.</p>
+      <div class="meta">Takes about a minute.</div>
+    </div>
+    <button class="mini solid" style="margin:16px 4px 0;width:100%;padding:14px;font-size:15px" onclick="start()">Start</button>
+  </section>
+
+  <!-- QUESTION -->
+  <section class="screen" id="s-q">
+    <div class="progress" id="progress"></div>
+    <div class="q-head">
+      <div class="q-step" id="q-step"></div>
+      <h2 id="q-title"></h2>
+      <div class="q-help" id="q-help"></div>
+    </div>
+    <div class="options" id="q-options"></div>
+    <div id="q-extra"></div>
+    <button class="back" id="q-back" onclick="back()">&larr; Back</button>
+  </section>
+
+  <!-- GENERATING -->
+  <section class="screen" id="s-gen">
+    <div class="panel gen">
+      <div class="spin"></div>
+      <p>Building your plan…</p>
+    </div>
+  </section>
+
+  <!-- PLAN -->
+  <section class="screen" id="s-plan">
+    <div class="plan-topbar">
+      <button onclick="editAnswers()">&larr; Back to questions</button>
+      <button onclick="restart()">Start again</button>
+    </div>
+    <div class="plan-head">
+      <h2>Your next steps</h2>
+      <p id="plan-summary"></p>
+    </div>
+    <div id="plan-banner"></div>
+    <div id="plan-steps"></div>
+
+    <div class="panel recap" id="recap"></div>
+    <div class="sole" id="sole"></div>
+
+    <p class="disclaimer">General information to help you get started, not tax, legal or financial advice. For your situation, check <a href="https://ato.gov.au" target="_blank" rel="noopener" class="wlink">ato.gov.au</a> or a registered tax agent.</p>
+  </section>
+</div>
+
+<script>
+/* ---------- diagnostic ---------- */
+const QUESTIONS = [
+  { key:'stage', title:"Where are you up to?", help:"",
+    options:[
+      ["Still deciding or planning it","deciding"],
+      ["Getting set up","setting_up"],
+      ["Already doing the work","trading"],
+    ]},
+  { key:'structure', title:"How are you setting it up?",
+    help:"Freelancers, contractors and self-employed solo operators are almost always sole traders. \u201CNot sure\u201D is a fine answer.",
+    options:[
+      ["Just me (sole trader)","sole"],
+      ["A company","company"],
+      ["With other people","partners"],
+      ["Not sure yet","unsure"],
+    ]},
+  { key:'industry', title:"What kind of work is it?", help:"",
+    options:[
+      ["Trades & construction","trades"],
+      ["Fitness & wellbeing","fitness"],
+      ["Creative & digital","creative"],
+      ["Consulting & services","consulting"],
+      ["Driving & delivery","rideshare"],
+      ["Care & support","care"],
+      ["Selling products","retail"],
+      ["Something else","other"],
+    ]},
+  { key:'turnover', title:"Roughly how much do you expect to earn in your first year?",
+    help:"$75k is the point where GST usually kicks in. A rough guess is fine.",
+    skipIf:(a)=> a.stage==='deciding',
+    options:[
+      ["Under $75k, or not sure","under"],
+      ["Around $75k or more","over"],
+    ]},
+  { key:'abn', title:"Do you have an ABN yet?",
+    help:"An ABN is your business's ID number. It's free to get.",
+    skipIf:(a)=> a.stage==='deciding',
+    options:[
+      ["Yes","yes"],
+      ["Not yet","no"],
+    ]},
+];
+
+const LABELS = {
+  stage:{deciding:"still deciding",setting_up:"getting set up",trading:"already trading"},
+  structure:{sole:"sole trader",company:"a company",partners:"a partnership",unsure:"structure undecided"},
+  industry:{trades:"trades",fitness:"fitness & wellbeing",creative:"creative & digital",consulting:"consulting",rideshare:"driving & delivery",care:"care & support",retail:"products",other:"your field"},
+  turnover:{under:"under $75k",over:"$75k or more"},
+  abn:{yes:"ABN sorted",no:"no ABN yet"},
+};
+
+let idx = 0;
+const answers = {};
+
+function start(){ idx=0; showQ(); go('s-q'); }
+function go(id){ document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active')); document.getElementById(id).classList.add('active'); window.scrollTo(0,0); }
+
+function activeQs(){ return QUESTIONS.filter(q => !(q.skipIf && q.skipIf(answers))); }
+function showQ(){
+  const list = activeQs();
+  if(idx > list.length-1) idx = list.length-1;
+  const q = list[idx];
+  document.getElementById('progress').innerHTML = list.map((_,i)=>`<i class="${i<=idx?'on':''}"></i>`).join('');
+  document.getElementById('q-step').textContent = `Question ${idx+1} of ${list.length}`;
+  document.getElementById('q-title').textContent = q.title;
+  const help = document.getElementById('q-help');
+  help.textContent = q.help; help.style.display = q.help ? 'block':'none';
+  document.getElementById('q-options').innerHTML = q.options.map(o=>
+    `<button class="opt ${answers[q.key]===o[1]?'sel':''}" onclick="pick('${o[1]}')">${o[0]}<span class="arw">&rarr;</span></button>`
+  ).join('');
+  document.getElementById('q-extra').innerHTML = '';
+  if(q.key==='industry' && answers.industry==='other') showExtra();
+  document.getElementById('q-back').style.visibility = idx===0 ? 'hidden':'visible';
+}
+function esc(s){ return (s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function linkify(t){ return (t||'').replace(/\b((?:[a-z0-9-]+\.)+(?:gov|com|org)\.au)\b/gi, '<a href="https://$1" target="_blank" rel="noopener" class="wlink">$1</a>'); }
+function showExtra(){
+  const opts = document.querySelectorAll('#q-options .opt');
+  opts.forEach(b=>b.classList.remove('sel'));
+  opts[opts.length-1].classList.add('sel');
+  document.getElementById('q-extra').innerHTML =
+    `<div class="extra">
+       <label class="extra-label">What kind of work is it? <span>(optional)</span></label>
+       <input id="industry-other" class="extra-input" type="text" maxlength="40" autocomplete="off"
+              placeholder="e.g. mobile dog grooming" value="${esc(answers.industryOther||'')}">
+       <button class="mini solid extra-cta" onclick="continueOther()">Continue</button>
+     </div>`;
+  const inp = document.getElementById('industry-other');
+  inp.focus();
+  inp.addEventListener('keydown', e=>{ if(e.key==='Enter') continueOther(); });
+}
+function continueOther(){
+  answers.industryOther = document.getElementById('industry-other').value.trim();
+  advance();
+}
+function pick(val){
+  const q = activeQs()[idx];
+  answers[q.key] = val;
+  if(q.key==='stage' && val==='deciding') delete answers.turnover;
+  if(q.key==='industry'){
+    if(val==='other'){ showExtra(); return; }
+    delete answers.industryOther;
+  }
+  advance();
+}
+function advance(){
+  const list = activeQs();
+  if(idx < list.length-1){ idx++; setTimeout(showQ,120); }
+  else { go('s-gen'); setTimeout(()=>{ buildPlan(); go('s-plan'); }, 900); }
+}
+function back(){ if(idx>0){ idx--; showQ(); } }
+function editAnswers(){ idx = activeQs().length-1; showQ(); go('s-q'); }
+function restart(){ idx=0; for(const k in answers) delete answers[k]; go('s-intro'); }
+
+/* ---------- plan engine ---------- */
+function industryLabel(){
+  return (answers.industry==='other' && answers.industryOther) ? answers.industryOther : LABELS.industry[answers.industry];
+}
+function buildPlan(){
+  const a = answers;
+  const overThreshold = a.turnover==='over';
+  const rideshare = a.industry==='rideshare';
+  const gstMandatory = overThreshold || rideshare;
+  const needsAbn = a.abn!=='yes';
+  const unsureStructure = a.structure==='unsure';
+  const companyPath = a.structure==='company' || a.structure==='partners';
+  const trading = a.stage==='trading';
+  const settingUp = a.stage==='setting_up';
+  const deciding = a.stage==='deciding';
+  const byStage = (t,s,d)=> trading?t : settingUp?s : d;
+
+  const steps = [];
+  const add = (id,p,title,why,action,where)=> steps.push({id,p,title,why,action,where,state:'todo'});
+
+  const soleLike = a.structure==='sole' || a.structure==='unsure';
+  const combined = soleLike && rideshare && needsAbn;
+
+  if(unsureStructure)
+    add('structure',100,"Decide how you'll set up",
+      "This shapes everything after it, from how you register to how you're taxed.",
+      "Compare sole trader, company and partnership. Sole trader is the simplest to start; a company or partnership can suit if you're growing or going in with others.",
+      "business.gov.au has a plain-English comparison. An accountant can confirm what fits.");
+
+  if(needsAbn){
+    if(combined)
+      add('abn_gst',98,"Get your ABN and register for GST together",
+        "Driving and delivery work needs GST from your very first dollar, not at $75k.",
+        "Apply for both in the one go. It's free and takes about 20 minutes.",
+        "abr.gov.au. You can add GST in the same application.");
+    else if(a.structure==='company')
+      add('register',92,"Register your company",
+        "A company is a separate legal entity, so it needs registering before you can trade or invoice.",
+        "Register the company with ASIC to get an ACN, apply for a director ID, then get an ABN linked to the company.",
+        "asic.gov.au and abr.gov.au. An accountant can set this up for you.");
+    else if(a.structure==='partners')
+      add('register',92,"Register your partnership",
+        "A partnership is its own entity for tax, so it needs its own registration.",
+        "Get an ABN and a tax file number for the partnership. A written partnership agreement is worth having too.",
+        "abr.gov.au for the ABN and TFN.");
+    else
+      add('abn',90,"Get your ABN",
+        "It's your business ID. You need it to invoice and to register for GST later.",
+        "Apply online. It's free and usually issued straight away.",
+        "abr.gov.au");
+  }
+
+  if(gstMandatory && !combined){
+    const p = rideshare?95 : byStage(88,70,40);
+    add('gst',p,"Register for GST",
+      rideshare
+        ? "Driving and delivery work needs GST regardless of how much you earn."
+        : "At or over $75k turnover, GST registration is required. You have 21 days once you cross it.",
+      "Add GST to your ABN, then charge 10% and set it aside as you go.",
+      "Via myGov / ATO online services, or a registered tax agent.");
+  }
+  if(!gstMandatory)
+    add('gst_opt', byStage(48,42,20),"Know your GST position",
+      "Under $75k, registering is optional. It lets you claim GST back, but adds 10% to your prices and some admin.",
+      "If most of your clients are businesses, registering can make sense. If they're everyday customers, it can make you dearer. Keep an eye on your turnover.",
+      "No rush to decide. ato.gov.au explains the trade-off.");
+
+  add('invoice', byStage(85,60,30), trading?"Tidy up how you invoice":"Set up your invoicing",
+    "Clear invoices get you paid faster and keep you ATO-ready.",
+    "Use a proper invoice with your ABN, the date, a due date and clear line items.",
+    "Any invoicing template or app does this.");
+
+  add('paid', byStage(80,45,25),"Make it easy to get paid",
+    "Late payment is the most common cash-flow problem for new businesses.",
+    "Set short payment terms, offer easy ways to pay, and follow up overdue invoices automatically.",
+    "Payment links and automatic reminders do the chasing for you.");
+
+  let taxWhy, taxAction;
+  if(a.structure==='company'){
+    taxWhy = "A company pays tax on its profit at the company rate (25% for most small companies), separately from your own income.";
+    taxAction = "Keep the company's money separate from yours, set aside part of its income for its tax, and pay yourself a wage or drawings. An accountant can set this up.";
+  } else if(a.structure==='partners'){
+    taxWhy = "A partnership doesn't pay tax itself. It lodges a return, then each partner is taxed on their share.";
+    taxAction = "Set aside part of your share for your own tax, and agree how profits are split. An accountant can confirm the setup.";
+  } else {
+    taxWhy = "Tax isn't taken out for you now, so putting some of every payment aside avoids a shock later.";
+    taxAction = "Move a portion of each payment into a separate account. An accountant can give you a figure for your situation.";
+  }
+  add('tax', byStage(70,50,35),"Set money aside for tax", taxWhy, taxAction,
+    "General guidance only. Confirm the right amount with a registered agent.");
+
+  add('expenses', byStage(60,40,22),"Keep your expenses and receipts",
+    "Every business expense you record can reduce your tax.",
+    "Snap receipts as you go and keep them in one place, rather than hunting at tax time.",
+    "A receipt scanner or expense app keeps them tidy automatically.");
+
+  if(!rideshare)
+    add('templates', byStage(65,55,28),"Use templates built for your work",
+      "The right quote and invoice format makes you look established and saves setup time.",
+      "Start from templates made for "+esc(industryLabel())+" rather than a blank page.",
+      "Industry templates cover the details clients in your field expect.");
+
+  if(!trading)
+    add('thirty', byStage(0,58,75),"Your first 30 days",
+      "Doing things in the right order keeps it from feeling overwhelming.",
+      "Sort your setup first (structure, then ABN), get ready to invoice, then build the tax and expenses habit.",
+      "That's the sequence the steps here follow.");
+
+  const SOLE_STEPS = ['invoice','paid','expenses','templates'];
+  steps.forEach(s=>{ if(SOLE_STEPS.includes(s.id)) s.sole = true; });
+  steps.sort((x,y)=>y.p-x.p);
+  window.__steps = steps;
+  window.__flags = {companyPath, rideshare, gstMandatory, overThreshold};
+  renderPlan();
+}
+
+function renderPlan(){
+  const a = answers, f = window.__flags;
+  // summary line
+  document.getElementById('plan-summary').textContent =
+    `You're ${LABELS.stage[a.stage]} in ${industryLabel()} as ${a.structure==='sole'?'a sole trader':LABELS.structure[a.structure]}. Here's the order I'd tackle things in.`;
+
+  // company banner
+  document.getElementById('plan-banner').innerHTML = '';
+
+  const steps = window.__steps.filter(s=>s.state!=='done').sort((x,y)=>{
+    if(x.state==='later'&&y.state!=='later')return 1;
+    if(y.state==='later'&&x.state!=='later')return -1;
+    return y.p-x.p;
+  });
+  const done = window.__steps.filter(s=>s.state==='done');
+
+  const now = steps[0];
+  const then = steps.slice(1,3);
+  const later = steps.slice(3);
+
+  let html = '';
+  const allDone = window.__steps.length>0 && steps.length===0;
+  if(allDone){
+    html += `<div class="complete">
+      <div class="tick">&#10003;</div>
+      <h3>That's your whole plan done.</h3>
+      <p>You've ticked off every step, so the essentials of getting established are covered. The ongoing side of running a business (invoicing, GST, expenses and getting paid) starts from here, and Sole, just below, is built to handle it.</p>
+    </div>`;
+  }
+  if(now){ html += `<div class="section-label">Do this now</div>` + card(now,true); }
+  if(then.length){ html += `<div class="section-label">Then</div>` + then.map(s=>card(s,false)).join(''); }
+  if(later.length){ html += `<div class="section-label">Later</div>` + later.map(s=>card(s,false)).join(''); }
+  if(done.length){ html += `<div class="section-label">${allDone?'All done':'Done'}</div>` + done.map(s=>card(s,false)).join(''); }
+  document.getElementById('plan-steps').innerHTML = html;
+
+  renderRecap(); renderSole();
+}
+
+function card(s,isNow){
+  const cls = ['step']; if(isNow)cls.push('now'); if(s.state==='done')cls.push('done'); if(s.open)cls.push('open');
+  return `<div class="${cls.join(' ')}" id="st-${s.id}">
+    <div class="step-top" onclick="toggle('${s.id}')">
+      <span class="mark" onclick="event.stopPropagation();toggleDone('${s.id}')" title="${s.state==='done'?'Mark as not done':'Mark done'}"></span>
+      <span class="step-title">${s.title}</span>
+      <span class="chev">&#9662;</span>
+    </div>
+    <div class="step-body"><div class="inner">
+      <div class="row"><div class="k">Why now</div><div class="v">${linkify(s.why)}</div></div>
+      <div class="row"><div class="k">What to do</div><div class="v">${linkify(s.action)}</div></div>
+      <div class="row"><div class="k">Where</div><div class="v">${linkify(s.where)}</div></div>
+      ${s.sole?`<a class="sole-tag" href="https://soleapp.com.au/sme/" target="_blank" rel="noopener"><span class="sole-dot"></span>Sole does this <span class="sole-arw">&rarr;</span></a>`:''}
+      ${s.state==='done'
+        ? `<div class="step-actions"><button class="mini" onclick="toggleDone('${s.id}')">Mark as not done</button></div>`
+        : `<div class="step-actions">
+        <button class="mini solid" onclick="markDone('${s.id}')">Mark done</button>
+        <button class="mini" onclick="notNow('${s.id}')">Not now</button>
+      </div>`}
+    </div></div>
+  </div>`;
+}
+function find(id){ return window.__steps.find(s=>s.id===id); }
+function toggle(id){ const s=find(id); s.open=!s.open; renderPlan(); }
+function toggleDone(id){ const s=find(id); s.state=(s.state==='done')?'todo':'done'; s.open=false; renderPlan(); }
+function markDone(id){ const s=find(id); s.state='done'; s.open=false; renderPlan(); }
+function notNow(id){ const s=find(id); s.state='later'; s.open=false; renderPlan(); }
+
+function renderRecap(){
+  const a=answers, f=window.__flags;
+  const parts = [LABELS.stage[a.stage], LABELS.structure[a.structure], industryLabel()];
+  if(a.turnover) parts.push(LABELS.turnover[a.turnover]);
+  if(a.abn) parts.push(LABELS.abn[a.abn]);
+  const chips = parts.map(c=>`<span class="chip">${esc(c)}</span>`).join('');
+  let gstLine;
+  if(f.rideshare) gstLine = "GST is required from your first dollar for driving and delivery work.";
+  else if(f.overThreshold) gstLine = "You'll need to register for GST at $75k turnover.";
+  else if(a.stage==='deciding') gstLine = "GST starts at $75k turnover. You can register once you expect to reach it.";
+  else gstLine = "GST is optional for now. Keep an eye on your turnover.";
+  let regLabel='ABN', regStatus;
+  if(a.structure==='company'){ regLabel='Registration'; regStatus = a.abn==='yes'?'company and ABN sorted.':'register the company, then get an ABN.'; }
+  else if(a.structure==='partners'){ regLabel='Registration'; regStatus = a.abn==='yes'?'partnership registered.':'get the partnership\u2019s ABN and TFN.'; }
+  else { regStatus = a.abn==='yes'?'sorted.':'not yet, an early building block.'; }
+  document.getElementById('recap').innerHTML =
+    `<h3>Your setup</h3><div class="chips">${chips}</div>
+     <div class="status"><b>GST:</b> ${gstLine}<br><b>${regLabel}:</b> ${regStatus}</div>`;
+}
+
+function renderSole(){
+  const s = answers.structure;
+  const taxNote = (s==='company'||s==='partners')
+    ? `<p style="color:#C4C0EF;font-size:12px;margin-bottom:14px">Your ${s==='company'?'company':'partnership'} tax return is a separate job for your accountant.</p>`
+    : '';
+  document.getElementById('sole').innerHTML =
+    `<div class="lead">Where to do the doing</div>
+     <h3>Everything on your plan, in one place</h3>
+     <p>Sole is Australian accounting software for small businesses that handles the day-to-day: invoicing, GST, expenses and getting paid, set up around your industry.</p>
+     ${taxNote}
+     <a class="cta" href="https://soleapp.com.au/sme/" target="_blank" rel="noopener">Take a look at Sole</a>
+     <div class="fine">Free trial, no credit card. Prototype link.</div>`;
+}
+</script>
+</body>
+</html>

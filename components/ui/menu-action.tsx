@@ -26,6 +26,7 @@ export function MenuAction({
   onSelect,
   href,
   disabledReason,
+  hint,
   destructive,
 }: {
   icon: React.ReactNode;
@@ -35,6 +36,12 @@ export function MenuAction({
   href?: string;
   /** When set, the item is disabled and this explains why. */
   disabledReason?: string;
+  /**
+   * A short note on hover for an item that *is* enabled — what it will do when
+   * the label alone can't say (e.g. why "Send again" is on offer). Ignored
+   * while disabled, where `disabledReason` takes the tooltip.
+   */
+  hint?: string;
   destructive?: boolean;
 }) {
   const className = cn(
@@ -71,10 +78,23 @@ export function MenuAction({
     );
   }
 
-  return (
+  const item = (
     <DropdownMenuItem onSelect={onSelect} className={className}>
       {icon}
       {label}
     </DropdownMenuItem>
   );
+
+  if (hint) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>{item}</TooltipTrigger>
+        <TooltipContent side="left" className="max-w-56">
+          {hint}
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  return item;
 }

@@ -12,6 +12,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { StepTracker } from "@/components/onboarding/step-tracker";
+import { fetchInvoiceDetail } from "@/lib/invoices";
+import {
+  PAYMENTS_FALLBACK_HREF,
+  clearSolePayReturn,
+  readSolePayReturn,
+  rememberSolePayReturn,
+} from "@/lib/solepay-return";
 import {
   solePayHydratedAtom,
   solePayMetaAtom,
@@ -141,6 +148,47 @@ export function SolePayOnboardingShell({
     }
   }, [draftQuery.error]);
 
+  /*
+   * Where Back goes. Onboarding started from an invoice carries that invoice's
+   * id in the URL of the first page; it's parked in sessionStorage so the other
+   * steps know it too. Read after mount — it's browser-only state.
+   */
+  const [returnHref, setReturnHref] = React.useState<string | null>(null);
+  const [returning, setReturning] = React.useState(false);
+  React.useEffect(() => {
+    rememberSolePayReturn(new URLSearchParams(window.location.search));
+    setReturnHref(readSolePayReturn());
+  }, []);
+
+  const goBack = async () => {
+    if (returning) return;
+    if (!returnHref) {
+      router.push(PAYMENTS_FALLBACK_HREF);
+      return;
+    }
+    setReturning(true);
+    try {
+      // Fetch the invoice first, so a draft that was deleted or sent in the
+      // meantime lands on the list with a reason, not on a broken editor.
+      const invoiceId = /^\/invoices\/([^/?#]+)$/.exec(returnHref)?.[1];
+      if (invoiceId) {
+        const invoice = await fetchInvoiceDetail(decodeURIComponent(invoiceId));
+        if (invoice.status !== "Draft") {
+          clearSolePayReturn();
+          toast.info("That invoice has already been sent.");
+          router.push(returnHref);
+          return;
+        }
+      }
+      clearSolePayReturn();
+      router.push(returnHref);
+    } catch {
+      clearSolePayReturn();
+      toast.error("Couldn't find that invoice any more.");
+      router.push("/invoices");
+    }
+  };
+
   const done = stepsDone(state);
   const outstanding = actionsRequired(state);
   const current = SOLEPAY_STEPS.findIndex((step) => step.id === stepId);
@@ -148,11 +196,15 @@ export function SolePayOnboardingShell({
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <div className="space-y-3">
-        <Button variant="ghost" size="sm" className="-ml-2" asChild>
-          <Link href={PAYMENTS_HREF}>
-            <ArrowLeft />
-            Payments
-          </Link>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="-ml-2"
+          onClick={goBack}
+          disabled={returning}
+        >
+          {returning ? <Loader2 className="animate-spin" /> : <ArrowLeft />}
+          Back
         </Button>
 
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -176,7 +228,7 @@ export function SolePayOnboardingShell({
         </div>
       </div>
 
-      <div className="space-y-4">
+      <div className="space-y-4" data-usertour="solepay-steps">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-xs font-medium text-muted-foreground tabular">
             {done.length} of {SOLEPAY_STEPS.length} done
@@ -199,6 +251,7 @@ export function SolePayOnboardingShell({
           onJump={(index) => router.push(SOLEPAY_STEPS[index].href)}
           label="SolePay onboarding progress"
           allowJumpAhead
+          tourPrefix="solepay"
         />
       </div>
 
@@ -259,7 +312,10 @@ export function SolePayStepFooter({
   saveDisabled?: boolean;
 }) {
   return (
-    <div className="sticky bottom-0 -mx-4 flex flex-wrap items-center justify-end gap-2 border-t border-border bg-background/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
+    <div
+      className="sticky bottom-0 -mx-4 flex flex-wrap items-center justify-end gap-2 border-t border-border bg-background/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6"
+      data-usertour="solepay-step-footer"
+    >
       <Button variant="outline" asChild>
         <Link href={SOLEPAY_OVERVIEW_HREF}>Cancel</Link>
       </Button>

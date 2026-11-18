@@ -1,4 +1,10 @@
+import type { Metadata } from "next";
+
 import { QuoteEditor } from "@/components/quotes/quote-editor";
+
+export const metadata: Metadata = {
+  title: "Quote · Sole",
+};
 
 export default async function EditQuotePage({
   params,

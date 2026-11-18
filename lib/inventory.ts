@@ -4,8 +4,6 @@
  */
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { invoiceMoney } from "@/lib/invoices";
 import { UNSPECIFIED_INDUSTRY } from "@/lib/onboarding";
 import {
@@ -451,7 +449,9 @@ function mapApiProductToItem(raw: ApiCustomProduct): InventoryItem {
  * but this form only ever has the one "I track this item" checkbox, so both
  * move together — there's no UI for the row where they'd disagree.
  *
- * No `industry_id`: this form has no industry picker to source one from.
+ * No `industry_id` here: the Inventory form has no industry picker. Products
+ * & services passes the business's own industry to `createInventoryItemApi`,
+ * and an edit leaves the stored one alone (an omitted `industry_id` is kept).
  *
  * `purchase_account_id`/`sale_account_id` — resolved below, not chosen here —
  * are the one exception: a tracked item always posts to the same "Assets →
@@ -505,39 +505,66 @@ type ApiAccountCategory = {
 };
 
 /**
+ * The chart of accounts' "Assets" subcategories, by lower-cased name.
+ *
  * Resolved once per page load and cached — the chart of accounts is fixed
  * platform data, not something that changes mid-session, so there's no
- * reason to look it up again on every save. `null` means either the lookup
- * failed or the account genuinely doesn't exist; either way the item still
- * saves fine without it, just without the asset-account link.
+ * reason to look it up again on every save. An empty map means the lookup
+ * failed; either way the record still saves fine without an account id,
+ * just without the asset-account link.
  */
-let cachedInventoryAccountId: number | null | undefined;
+let cachedAssetSubcategories: Promise<Map<string, number>> | undefined;
+
+function assetAccountSubcategories(): Promise<Map<string, number>> {
+  cachedAssetSubcategories ??= (async () => {
+    const byName = new Map<string, number>();
+    try {
+      const response = await api.get<
+        ApiEnvelope<{ account_categories: ApiAccountCategory[] }>
+      >(apiRoutes.accountCategory.list);
+      const categories = response.data?.data?.account_categories ?? [];
+      const assets = categories.find((c) => c.name?.toLowerCase() === "assets");
+      for (const subcategory of assets?.account_subcategories ?? []) {
+        const key = subcategory.name?.trim().toLowerCase();
+        if (key && !byName.has(key)) {
+          byName.set(key, subcategory.account_subcategory_id);
+        }
+      }
+    } catch {
+      // Left empty: see above.
+    }
+    // A failed (or empty) lookup is not remembered — otherwise one network
+    // blip would leave every later save without an account until a reload.
+    if (byName.size === 0) cachedAssetSubcategories = undefined;
+    return byName;
+  })();
+  return cachedAssetSubcategories ?? Promise.resolve(new Map<string, number>());
+}
+
+/**
+ * The id of the "Assets → `name`" account subcategory on the user's chart of
+ * accounts (case-insensitive), or `null` when there's no such account or the
+ * lookup failed.
+ *
+ * Exported so `lib/assets.ts` resolves an asset category's account through the
+ * same cached lookup the Inventory form uses, rather than fetching twice.
+ */
+export async function resolveAssetSubcategoryIdByName(
+  name: string,
+): Promise<number | null> {
+  const key = name.trim().toLowerCase();
+  if (!key) return null;
+  return (await assetAccountSubcategories()).get(key) ?? null;
+}
 
 /**
  * The one account subcategory a tracked item's cost posts to — same lookup
  * sole-webapp's Inventory form does (fetch the chart of accounts, find
  * "Assets → Inventory"), since that's the only account an inventory item is
  * ever meant to use, not a real per-item choice.
- *
- * Exported: a tracked (Inventory-category) asset posts to this same account,
- * so `lib/assets.ts` reuses this lookup rather than resolving it twice.
  */
 export async function resolveInventoryAccountId(): Promise<number | null> {
-  if (cachedInventoryAccountId !== undefined) return cachedInventoryAccountId;
-  try {
-    const response = await api.get<
-      ApiEnvelope<{ account_categories: ApiAccountCategory[] }>
-    >(apiRoutes.accountCategory.list);
-    const categories = response.data?.data?.account_categories ?? [];
-    const assets = categories.find((c) => c.name?.toLowerCase() === "assets");
-    const inventory = assets?.account_subcategories?.find(
-      (s) => s.name?.toLowerCase() === "inventory",
-    );
-    cachedInventoryAccountId = inventory?.account_subcategory_id ?? null;
-  } catch {
-    cachedInventoryAccountId = null;
-  }
-  return cachedInventoryAccountId;
+  return resolveAssetSubcategoryIdByName("Inventory");
 }
 
 /**
@@ -563,15 +590,19 @@ export async function fetchInventoryItems(): Promise<InventoryItem[]> {
 
 export async function createInventoryItemApi(
   draft: ItemDraft,
+  /** The business's industry id; a new product is filed under it. */
+  industryId?: number | null,
 ): Promise<InventoryItem> {
   const response = await api.post<ApiEnvelope<ApiCustomProduct>>(
     apiRoutes.customProduct.create,
-    await draftToApiPayload(draft),
+    {
+      ...(await draftToApiPayload(draft)),
+      ...(industryId != null ? { industry_id: industryId } : {}),
+    },
   );
   if (!response.data?.success || !response.data.data) {
     throw new Error(response.data?.message || "Failed to create item");
   }
-  track(EVENTS.INVENTORY_ITEM_CREATED);
   return mapApiProductToItem(response.data.data);
 }
 
@@ -618,18 +649,83 @@ export const ADJUST_REASONS: {
   { value: "other", label: "Other" },
 ];
 
-const REASON_LABELS: Record<StockAdjustReason, string> = {
+/**
+ * How the Adjust stock dialog asks for a number, per reason:
+ *
+ * - `add`    — a delivery or a return: "how many came in?" 100 + 200 → 300.
+ * - `remove` — breakage/loss: "how many went?" 100 − 5 → 95.
+ * - `set`    — a stock take: "what did you count?" 100 → 200 is 200.
+ *
+ * The backend enforces the same directions, so a "Received" can never lower
+ * stock and a "Damaged" can never raise it.
+ */
+export type StockAdjustMode = "add" | "remove" | "set";
+
+export const ADJUST_REASON_MODE: Record<
+  Exclude<StockAdjustReason, "opening">,
+  StockAdjustMode
+> = {
+  received: "add",
+  returned: "add",
+  damaged: "remove",
+  correction: "set",
+  other: "set",
+};
+
+/**
+ * Every reason the stock ledger can hold — the ones a person picks, plus the
+ * system's own: "opening" (set on create) and "invoice_sale" (an invoice took
+ * the stock).
+ */
+const REASON_LABELS: Record<StockAdjustReason | "invoice_sale", string> = {
   opening: "Opening stock",
   received: "Received stock",
   damaged: "Damaged / lost",
   returned: "Customer return",
   correction: "Stock correction",
   other: "Other",
+  invoice_sale: "Invoice sale",
+};
+
+/** System reasons beyond the stock ones — a row that records a change but moves no stock. */
+const NON_STOCK_REASON_LABELS: Record<string, string> = {
+  price_change: "Price change",
 };
 
 /** A history row's reason, in words — falls back to the raw value for anything unrecognised. */
 export function stockAdjustReasonLabel(reason: string): string {
-  return REASON_LABELS[reason as StockAdjustReason] ?? reason;
+  return (
+    REASON_LABELS[reason as keyof typeof REASON_LABELS] ??
+    NON_STOCK_REASON_LABELS[reason] ??
+    reason
+  );
+}
+
+/**
+ * A history row's Quantity cell: "+5" (in), "-3" (out), or "—" for a row that
+ * moved no stock, such as a price change.
+ */
+export function stockMovementDisplay(quantity: number): {
+  text: string;
+  tone: "in" | "out" | "none";
+} {
+  if (quantity > 0) return { text: `+${quantity}`, tone: "in" };
+  if (quantity < 0) return { text: String(quantity), tone: "out" };
+  return { text: "—", tone: "none" };
+}
+
+/**
+ * The Note column of a history row. The system writes its own entries'
+ * notes ("Sold via Invoice #…"), so an empty one is a manual adjustment the
+ * person didn't annotate — say that, rather than show a bare dash.
+ */
+export function stockAdjustmentNote(entry: {
+  note?: string | null;
+  reason: string;
+}): string {
+  const note = entry.note?.trim();
+  if (note) return note;
+  return entry.reason === "invoice_sale" ? "—" : "Manual adjustment";
 }
 
 /**
@@ -659,6 +755,31 @@ export async function adjustStockApi(
     newCount: response.data.data.new_count,
     newCostPrice: response.data.data.new_cost_price,
   };
+}
+
+/**
+ * Sets stock to a counted total (a stock take). The backend works out the
+ * change against the row as it stands at save time — not the count this
+ * screen loaded — so an invoice sale in between isn't silently undone.
+ */
+export async function setStockCountApi(
+  id: string,
+  newCount: number,
+  reason: StockAdjustReason,
+  options: { note?: string } = {},
+): Promise<{ newCount: number }> {
+  const response = await api.post<ApiEnvelope<{ new_count: number }>>(
+    apiRoutes.customProduct.adjust(id),
+    {
+      new_count: newCount,
+      reason,
+      ...(options.note?.trim() ? { note: options.note.trim() } : {}),
+    },
+  );
+  if (!response.data?.success || !response.data.data) {
+    throw new Error(response.data?.message || "Failed to adjust stock");
+  }
+  return { newCount: response.data.data.new_count };
 }
 
 /* ------------------------------------------------------------------ *

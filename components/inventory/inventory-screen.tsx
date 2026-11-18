@@ -63,9 +63,8 @@ export function InventoryScreen() {
         </Button>
       </PageHeader>
 
-      {/* Stock counts of nothing say nothing — with no items yet, the header's
-          "Add item" and the table's own empty state are the whole page. */}
-      {!isEmpty && <InventorySummary items={items} loading={loading} />}
+      {/* Shown with no items yet too, as zeroes. */}
+      <InventorySummary items={items} loading={loading} />
       <InventoryTable items={items} loading={loading} isEmpty={isEmpty} />
 
       {/* The same detail view Products & services uses, editing on this side's

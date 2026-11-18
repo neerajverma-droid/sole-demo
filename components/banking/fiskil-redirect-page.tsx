@@ -6,6 +6,8 @@ import { CircleCheck, CircleX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyActions, EmptyDescription, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { SoleLogo } from "@/components/layout/sole-logo";
+import { EVENTS } from "@/lib/analytics-events";
+import { useTrackOnce } from "@/hooks/use-track-once";
 
 /**
  * What Fiskil (the CDR provider) redirects the iframe to once the user
@@ -26,6 +28,9 @@ export function FiskilRedirectPage({
   title: string;
   description: string;
 }) {
+  useTrackOnce(EVENTS.BANK_ACCOUNT_CONNECTED, tone === "success", {
+    provider: "fiskil",
+  });
   const router = useRouter();
   // A Lucide icon is a component, not RSC-serializable data — resolved here
   // from `tone` rather than taken as a prop, since the page that renders this

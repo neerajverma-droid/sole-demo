@@ -52,6 +52,8 @@ describe("fetchServiceAutocomplete", () => {
         description: "18V cordless mitre saw",
         category: "Tools",
         costPrice: "1249",
+        // A catalogue row has no sale price of its own.
+        salePrice: "",
         quantityType: "Items",
         tracked: false,
         openingStock: "",
@@ -65,6 +67,8 @@ describe("fetchServiceAutocomplete", () => {
         category: "Inventory",
         // No cost_price on this row — falls back to price.
         costPrice: "26",
+        // The business's own item: `price` is its sale price.
+        salePrice: "26",
         quantityType: "Items",
         tracked: true,
         openingStock: "128",

@@ -29,10 +29,12 @@ import {
   kmMethodLabel,
   linkKmTripsToInvoiceApi,
   saveKmSettingsApi,
+  saveKmVehiclesApi,
   updateKmTripApi,
   type KmCalculationMethod,
   type KmRules,
   type KmSettings,
+  type KmVehicle,
   type KmTripFilters,
 } from "@/lib/km-tracker";
 
@@ -212,6 +214,21 @@ export function useLinkKmTripsMutation() {
     }) => linkKmTripsToInvoiceApi(tripIds, invoice),
     // Refetch either way: a partial failure still linked some of them.
     onSettled: invalidate,
+  });
+}
+
+/**
+ * Stores the vehicle list on its own, straight from the vehicle dialog and the
+ * Remove button — they don't wait for "Save settings".
+ */
+export function useSaveKmVehiclesMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vehicles: KmVehicle[]) => saveKmVehiclesApi(vehicles),
+    onSuccess: (saved) => {
+      queryClient.setQueryData(["km-settings"], saved);
+      return queryClient.invalidateQueries({ queryKey: ["km-stats"] });
+    },
   });
 }
 

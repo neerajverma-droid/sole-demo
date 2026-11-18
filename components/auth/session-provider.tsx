@@ -45,6 +45,17 @@ type SessionValue = {
     /** What the sign-in screen says on arrival. Defaults to a plain sign-out. */
     reason?: "signed_out" | "account_deleted";
   }) => Promise<void>;
+  /**
+   * Whether a deliberate `signOut()` is already under way.
+   *
+   * Signing out flips `status` to "unauthenticated" (via `clearSession`'s
+   * listener) before the hard navigation below actually runs — leaving a
+   * window where `AuthGuard`, still mounted on the page being left, sees the
+   * same status change and fires its own redirect first, always labelled
+   * "session_expired". Checking this lets it stand down and leave the
+   * labelled redirect below to win.
+   */
+  isSigningOut: () => boolean;
 };
 
 const SessionContext = React.createContext<SessionValue | null>(null);
@@ -62,6 +73,11 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
    * token, so the form still arrives in a single paint.
    */
   const [status, setStatus] = React.useState<SessionStatus>("loading");
+
+  /** See `isSigningOut` on `SessionValue`. A ref, not state: nothing needs to
+   *  re-render off it, it only has to be readable from AuthGuard's effect. */
+  const signingOutRef = React.useRef(false);
+  const isSigningOut = React.useCallback(() => signingOutRef.current, []);
 
   const load = React.useCallback(async () => {
     // The no-network shortcut, and it has to test BOTH halves of the pair: a
@@ -181,7 +197,13 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         setUser(next);
         setStatus(next ? "authenticated" : "unauthenticated");
       },
+      isSigningOut,
       signOut: async ({ redirect = true, reason = "signed_out" } = {}) => {
+        // Set before anything else: `signOutRequest` clears the session, and
+        // that flips `status` to "unauthenticated" synchronously, before this
+        // function ever reaches its own redirect below. AuthGuard needs to
+        // see this flag is already up at that moment, not after.
+        signingOutRef.current = true;
         await signOutRequest();
         setUser(null);
         setStatus("unauthenticated");
@@ -202,7 +224,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         if (redirect) redirectToLogin(reason);
       },
     }),
-    [user, status, load],
+    [user, status, load, isSigningOut],
   );
 
   return (

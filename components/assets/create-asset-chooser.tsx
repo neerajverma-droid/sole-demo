@@ -6,6 +6,8 @@ import { ArrowLeft, FilePlus2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { HeroHairline } from "@/components/layout/page-header";
 import { cn } from "@/lib/utils";
+import { useTrackOnce } from "@/hooks/use-track-once";
+import { EVENTS } from "@/lib/analytics-events";
 
 /**
  * The same flat two-card chooser as Create expense and Create invoice — an
@@ -13,6 +15,8 @@ import { cn } from "@/lib/utils";
  * gradients.
  */
 export function CreateAssetChooser() {
+  // "Add asset" lands here, before manual or upload is picked — the start.
+  useTrackOnce(EVENTS.ASSET_ADDITION_INITIATED, true, { asset_type: null });
   return (
     <div className="mx-auto max-w-6xl space-y-8">
       <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">

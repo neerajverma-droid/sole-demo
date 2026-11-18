@@ -4,12 +4,13 @@
  * Ported from sole-webapp's `components/Migration/BulkExpenseMigration.js`,
  * which posts `{ expenses: [...] }` to `/expense/bulk/create`.
  *
- * The one piece that isn't pure data is the category. The file carries a name
- * ("Office supplies"); the backend wants an `account_subcategory_id`. That
- * resolution needs the chart of accounts, which is fetched, so the spec is
- * built by `expenseImportSpec(categories)` rather than exported as a
- * constant — the Category rule can only tell "unrecognised" from "valid" once
- * it knows what the real categories are.
+ * The one piece that isn't pure data is the category. The backend wants an
+ * `account_subcategory_id`, and the chart of accounts that says what those are
+ * is fetched — so the spec is built by `expenseImportSpec(categories)` rather
+ * than exported as a constant. That same list goes to the AI formatter with
+ * the file (as id and name), which answers each row with the id of the account
+ * it fits, or nothing; the row holds that id, Review shows a dropdown of the
+ * accounts with it already chosen, and the person can change it.
  */
 import {
   DEFAULT_BULK_IMPORT_COUNTRY,
@@ -36,9 +37,10 @@ const YES_NO = ["Yes", "No"] as const;
  * Builds the spec against a known set of categories.
  *
  * Passing an empty list (the fetch hasn't landed, or failed) deliberately
- * suppresses the "not a category we recognise" rule rather than failing every
- * row: the dialog blocks the import while the list is loading, so a row that
- * reads clean at that moment is never actually submitted unchecked.
+ * suppresses the category rule rather than failing every row: the dialog
+ * blocks the upload while the list is loading, and when it failed there's
+ * nothing to choose from, so requiring a pick would make every row
+ * unimportable with no way to fix it.
  *
  * `country` words the tax column and its messages ("VAT included" in South
  * Africa); a file headed "GST included" still maps — that's the label.
@@ -48,6 +50,10 @@ export function expenseImportSpec(
   country: BulkImportCountry = DEFAULT_BULK_IMPORT_COUNTRY,
 ): BulkImportSpec {
   const known = categories.length > 0;
+  const categoryOptions = categories.map(({ id, name }) => ({
+    value: id,
+    label: name,
+  }));
   const tax = country.taxWord;
   const renamed = tax !== "GST";
   const taxWord = tax.toLowerCase();
@@ -76,7 +82,11 @@ export function expenseImportSpec(
           "expense",
           "details",
         ],
-        review: { heading: "Expense", editor: { kind: "text" } },
+        review: {
+          heading: "Expense",
+          editor: { kind: "text" },
+          editWidth: "min-w-48",
+        },
       },
       {
         label: "Supplier name",
@@ -84,7 +94,11 @@ export function expenseImportSpec(
         required: true,
         desc: "Who you paid",
         aliases: ["supplier name", "supplier", "vendor", "vendor name", "payee"],
-        review: { heading: "Supplier", editor: { kind: "text" } },
+        review: {
+          heading: "Supplier",
+          editor: { kind: "text" },
+          editWidth: "min-w-44",
+        },
       },
       {
         label: "Date",
@@ -92,7 +106,12 @@ export function expenseImportSpec(
         required: true,
         desc: "DD/MM/YYYY",
         aliases: ["date", "expense date", "transaction date", "paid on"],
-        review: { heading: "Date", editor: { kind: "text" }, mono: true },
+        review: {
+          heading: "Date",
+          editor: { kind: "text" },
+          mono: true,
+          editWidth: "min-w-36",
+        },
       },
       {
         label: "Total amount",
@@ -104,6 +123,7 @@ export function expenseImportSpec(
           heading: "Amount",
           editor: { kind: "text", inputMode: "decimal" },
           mono: true,
+          editWidth: "min-w-32",
         },
       },
       {
@@ -123,6 +143,7 @@ export function expenseImportSpec(
         review: {
           heading: tax,
           editor: { kind: "select", options: YES_NO, placeholder: "Yes / No" },
+          editWidth: "min-w-28",
         },
       },
       {
@@ -131,7 +152,17 @@ export function expenseImportSpec(
         required: true,
         desc: "An expense account from your chart of accounts",
         aliases: ["category", "expense category", "account", "expense type"],
-        review: { heading: "Category", editor: { kind: "text" } },
+        review: {
+          heading: "Category",
+          editor: {
+            kind: "choice",
+            options: categoryOptions,
+            placeholder: "Choose a category",
+            // A plain-parse fallback leaves the file's own wording in the cell.
+            resolve: (raw) => matchCategory(raw, categories) ?? "",
+          },
+          editWidth: "min-w-56",
+        },
       },
       {
         label: "Paid",
@@ -142,6 +173,7 @@ export function expenseImportSpec(
         review: {
           heading: "Paid",
           editor: { kind: "select", options: YES_NO, placeholder: "Yes / No" },
+          editWidth: "min-w-28",
         },
       },
       {
@@ -149,12 +181,23 @@ export function expenseImportSpec(
         apiKey: "client_email",
         desc: "Optional",
         aliases: ["supplier email", "email", "vendor email", "e mail"],
+        review: {
+          heading: "Email",
+          editor: { kind: "text", inputMode: "email" },
+          editWidth: "min-w-64",
+        },
       },
       {
         label: "Supplier phone",
         apiKey: "client_phone",
         desc: "Optional",
         aliases: ["supplier phone", "phone", "mobile", "vendor phone"],
+        review: {
+          heading: "Phone",
+          editor: { kind: "text", inputMode: "tel" },
+          mono: true,
+          editWidth: "min-w-44",
+        },
       },
     ],
 
@@ -201,21 +244,36 @@ export function expenseImportSpec(
     issues: [
       {
         message: "Expense name is required",
+        hint: "Required",
+        field: "Expense name",
         summary: "missing an expense name",
         test: (row) => row["Expense name"].trim() === "",
       },
       {
         message: "Supplier name is required",
+        hint: "Required",
+        field: "Supplier name",
         summary: "missing a supplier name",
         test: (row) => row["Supplier name"].trim() === "",
       },
       {
+        message: "Date is required (DD/MM/YYYY)",
+        hint: "Required",
+        field: "Date",
+        summary: "missing a Date",
+        test: (row) => row["Date"].trim() === "",
+      },
+      {
         message: "Date must be DD/MM/YYYY",
-        summary: "missing a valid Date",
-        test: (row) => !parseBulkDate(row["Date"]),
+        hint: "Use DD/MM/YYYY",
+        field: "Date",
+        summary: "carrying a Date that isn't DD/MM/YYYY",
+        test: (row) => row["Date"].trim() !== "" && !parseBulkDate(row["Date"]),
       },
       {
         message: "Date is in the future",
+        hint: "Can't be in the future",
+        field: "Date",
         summary: "dated in the future",
         test: (row) => {
           const date = parseBulkDate(row["Date"]);
@@ -223,42 +281,63 @@ export function expenseImportSpec(
         },
       },
       {
+        message: "Total amount is required",
+        hint: "Required",
+        field: "Total amount",
+        summary: "missing a Total amount",
+        test: (row) => row["Total amount"].trim() === "",
+      },
+      {
         message: "Total amount must be a positive number",
-        summary: "missing a valid Total amount",
+        hint: "Enter a number, e.g. 482.90",
+        field: "Total amount",
+        summary: "carrying a Total amount that isn't a number",
         test: (row) =>
-          row["Total amount"].trim() === "" || !isMoney(row["Total amount"]),
+          row["Total amount"].trim() !== "" && !isMoney(row["Total amount"]),
       },
       {
         message: `${tax} included must be Yes or No`,
+        hint: "Choose Yes or No",
+        field: "GST included",
         summary: `missing a Yes/No for ${tax}`,
         test: (row) => parseBulkBoolean(row["GST included"]) === null,
       },
       {
         message: "Paid must be Yes or No",
+        hint: "Choose Yes or No",
+        field: "Paid",
         summary: "missing a Yes/No for Paid",
         test: (row) => parseBulkBoolean(row["Paid"]) === null,
       },
       {
         message: "Category is required",
-        summary: "missing a category",
-        test: (row) => row["Category"].trim() === "",
+        hint: "Choose a category",
+        field: "Category",
+        summary: "without a category",
+        test: (row) => known && row["Category"].trim() === "",
       },
       {
-        message: "Category doesn't match one of your expense accounts",
+        message: "Category isn't one of your expense accounts",
+        hint: "Not on your chart of accounts",
+        field: "Category",
         summary: "naming a category that isn't on your chart of accounts",
         test: (row) =>
           known &&
           row["Category"].trim() !== "" &&
-          matchCategory(row["Category"], categories) === null,
+          !categories.some((category) => category.id === row["Category"].trim()),
       },
       {
         message: "Invalid supplier email",
+        hint: "Not a valid email",
+        field: "Supplier email",
         summary: "carrying a malformed email",
         test: (row) =>
           row["Supplier email"].trim() !== "" && !isEmail(row["Supplier email"]),
       },
       {
         message: "Invalid supplier phone",
+        hint: "Use 8–15 digits",
+        field: "Supplier phone",
         summary: "carrying a malformed phone number",
         test: (row) =>
           row["Supplier phone"].trim() !== "" && !isPhone(row["Supplier phone"]),
@@ -303,6 +382,11 @@ export function splitGst(total: number, inclusive: boolean, ratePercent: number 
   };
 }
 
+/**
+ * `values["Category"]` is the category's id (from the AI formatter or the
+ * dropdown); `matchCategory` still reads a name, so a row that carries one
+ * posts the right id too, and an id the list doesn't know posts as null.
+ */
 export function expensePayload(
   values: BulkValues,
   categories: readonly ExpenseCategoryOption[],

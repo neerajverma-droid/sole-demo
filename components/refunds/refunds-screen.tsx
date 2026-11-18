@@ -40,17 +40,15 @@ export function RefundsScreen() {
         description="Refunds and credit notes issued to your clients — returned goods, overpayments and billing adjustments."
       />
 
-      {/* Gone once the account turns out to have no refunds at all — three
-          zeroes over an empty table say nothing the empty state doesn't. */}
-      {!isEmpty && (
-        <div data-usertour="refund-stats">
-          {loading ? (
-            <StatStripSkeleton />
-          ) : (
-            <StatStrip stats={refundStats(refunds)} />
-          )}
-        </div>
-      )}
+      {/* Kept for an account with no refunds yet too — its zeroes are the
+          first thing to fill in, and the tour has something to point at. */}
+      <div data-usertour="refund-stats">
+        {loading ? (
+          <StatStripSkeleton />
+        ) : (
+          <StatStrip stats={refundStats(refunds)} />
+        )}
+      </div>
 
       <RefundsTable refunds={refunds} loading={loading} isEmpty={isEmpty} />
 

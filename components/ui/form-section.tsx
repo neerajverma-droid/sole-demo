@@ -1,3 +1,6 @@
+"use client";
+
+import * as React from "react";
 import type { LucideIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -24,6 +27,25 @@ const TILE: Record<FormSectionTone, string> = {
   warm: "bg-warm text-warm-foreground",
 };
 
+/**
+ * Lets a screen retune every section beneath it without threading
+ * `headerClassName` through each card it composes (the invoice editor's From /
+ * To / extras cards come from shared components). An explicit
+ * `headerClassName` on a section still wins.
+ */
+export type FormSectionDensity = {
+  /** Classes for the header band, e.g. its vertical padding. */
+  header?: string;
+  /** Classes for the padded body, e.g. `p-3` in place of the default `p-4`. */
+  body?: string;
+};
+
+const FormSectionDensityContext = React.createContext<
+  FormSectionDensity | undefined
+>(undefined);
+
+export const FormSectionDensityProvider = FormSectionDensityContext.Provider;
+
 export function FormSection({
   icon: Icon,
   title,
@@ -33,6 +55,7 @@ export function FormSection({
   className,
   headerClassName,
   tourId,
+  tourState,
   bare = false,
   children,
 }: {
@@ -48,15 +71,22 @@ export function FormSection({
   headerClassName?: string;
   /** Rendered as `data-tour`, for a walkthrough to point at — as FilterPills does. */
   tourId?: string;
+  /**
+   * `data-tour-state` — "done", "next" or "todo" for a section in a sequence,
+   * so a walkthrough can say what to do next (as the migrations page does).
+   */
+  tourState?: string;
   /** Header only: no rule beneath it and no padded body, for a collapsed section. */
   bare?: boolean;
   children: React.ReactNode;
 }) {
+  const density = React.useContext(FormSectionDensityContext);
   return (
     // overflow-hidden so the header band clips to the card's radius.
     <section
       className="overflow-hidden rounded-lg border border-border bg-card shadow-sm"
       data-tour={tourId}
+      data-tour-state={tourState}
     >
       {/* The colour lives here and nowhere else. A wash this faint plus the
           rule beneath it is enough to read the strip as a header; the fields
@@ -72,6 +102,7 @@ export function FormSection({
           // 4.48. Dark starts at 7.35:1 and can afford the stronger wash it
           // needs to be visible at all.
           "bg-primary/[0.02] dark:bg-primary/[0.06]",
+          density?.header,
           headerClassName,
         )}
       >
@@ -105,7 +136,9 @@ export function FormSection({
       {bare ? (
         children
       ) : (
-        <div className={cn("p-4", className || "space-y-4")}>{children}</div>
+        <div className={cn("p-4", density?.body, className || "space-y-4")}>
+          {children}
+        </div>
       )}
     </section>
   );

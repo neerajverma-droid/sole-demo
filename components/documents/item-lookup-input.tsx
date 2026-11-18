@@ -10,6 +10,11 @@ import {
   PopoverAnchor,
   PopoverContent,
 } from "@/components/ui/popover";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { ItemSuggestion } from "@/lib/invoice-item-search";
 import { cn } from "@/lib/utils";
 
@@ -40,6 +45,11 @@ export function ItemLookupInput({
   inputRef,
   className,
   invalid,
+  tooltipOnOverflow = false,
+  skipEmptyQuery = false,
+  emptyQueryLabel = "Start typing to search.",
+  numberFirst = false,
+  selectedText,
 }: {
   value: string;
   /** Free typing — the description as entered. */
@@ -57,22 +67,48 @@ export function ItemLookupInput({
   inputRef?: (node: HTMLElement | null) => void;
   className?: string;
   invalid?: boolean;
+  /**
+   * Shows the whole text in a tooltip on hover when it's too long for the field.
+   * A support's name can run well past the column, and a field can't scroll
+   * back to show what's hidden. Off by default; the NDIS table turns it on.
+   */
+  tooltipOnOverflow?: boolean;
+  /**
+   * Asks nothing until something has been typed. For a lookup whose empty
+   * answer would be something other than what the field is for — the support
+   * item number's, which would only be the business's own products.
+   */
+  skipEmptyQuery?: boolean;
+  /** What the list says while nothing has been typed, with `skipEmptyQuery`. */
+  emptyQueryLabel?: string;
+  /**
+   * Leads each row with the support item number and puts the name beneath it,
+   * for a field that is searched by number.
+   */
+  numberFirst?: boolean;
+  /** What the field reads after a pick; the suggestion's name by default. */
+  selectedText?: (suggestion: ItemSuggestion) => string;
 }) {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState(value);
   const [debounced, setDebounced] = React.useState(value);
+  const fieldNode = React.useRef<HTMLInputElement | null>(null);
+  const [hovering, setHovering] = React.useState(false);
+  const [overflowing, setOverflowing] = React.useState(false);
 
   React.useEffect(() => {
     const timer = setTimeout(() => setDebounced(query), DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [query]);
 
+  const idle = skipEmptyQuery && debounced.trim() === "";
+
   const suggestionsQuery = useQuery({
     queryKey: ["item-lookup", queryKey, debounced],
     queryFn: () => search(debounced),
     // Only asked for while the dropdown is actually showing, so a table of
     // twelve rows doesn't fire twelve requests on mount.
-    enabled: open,
+    enabled: open && !idle,
     // The dictionaries change rarely; the business's own products change on
     // their own screen, which invalidates nothing here.
     staleTime: 60_000,
@@ -83,35 +119,75 @@ export function ItemLookupInput({
   const suggestions = suggestionsQuery.data ?? [];
   const loading = suggestionsQuery.isFetching;
 
+  const field = (
+    <PopoverAnchor asChild>
+      <Input
+        ref={(node) => {
+          fieldNode.current = node;
+          inputRef?.(node);
+        }}
+        className={cn(
+          "h-9",
+          invalid && "border-destructive focus-visible:ring-destructive",
+          className,
+        )}
+        value={value}
+        onChange={(event) => {
+          onChange(event.target.value);
+          setQuery(event.target.value);
+          if (!open) setOpen(true);
+        }}
+        onFocus={() => {
+          // The value may have been filled from another field since this one
+          // was last typed into, so the search starts from what it shows now.
+          setQuery(value);
+          setOpen(true);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && open) {
+            event.stopPropagation();
+            setOpen(false);
+          }
+        }}
+        placeholder={placeholder}
+        aria-label={label}
+        aria-invalid={invalid}
+        autoComplete="off"
+      />
+    </PopoverAnchor>
+  );
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverAnchor asChild>
-        <Input
-          ref={inputRef}
-          className={cn(
-            "h-9",
-            invalid && "border-destructive focus-visible:ring-destructive",
-            className,
-          )}
-          value={value}
-          onChange={(event) => {
-            onChange(event.target.value);
-            setQuery(event.target.value);
-            if (!open) setOpen(true);
-          }}
-          onFocus={() => setOpen(true)}
-          onKeyDown={(event) => {
-            if (event.key === "Escape" && open) {
-              event.stopPropagation();
-              setOpen(false);
-            }
-          }}
-          placeholder={placeholder}
-          aria-label={label}
-          aria-invalid={invalid}
-          autoComplete="off"
-        />
-      </PopoverAnchor>
+      {tooltipOnOverflow ? (
+        // Open state is driven by hover alone: left to Radix it would also open
+        // on focus, covering the suggestions while the user is typing.
+        <Tooltip
+          open={hovering && overflowing && !open && value.trim() !== ""}
+        >
+          <TooltipTrigger asChild>
+            <div
+              onMouseEnter={() => {
+                const node = fieldNode.current;
+                setOverflowing(!!node && node.scrollWidth > node.clientWidth);
+                setHovering(true);
+              }}
+              onMouseLeave={() => setHovering(false)}
+            >
+              {field}
+            </div>
+          </TooltipTrigger>
+          <TooltipContent
+            side="top"
+            align="start"
+            className="max-w-sm whitespace-pre-wrap break-words text-sm"
+          >
+            {value}
+          </TooltipContent>
+        </Tooltip>
+      ) : (
+        field
+      )}
 
       <PopoverContent
         align="start"
@@ -123,7 +199,11 @@ export function ItemLookupInput({
         // reopening the popover the moment it's dismissed.
         onCloseAutoFocus={(event) => event.preventDefault()}
       >
-        {loading && suggestions.length === 0 ? (
+        {idle ? (
+          <p className="px-3 py-4 text-sm text-muted-foreground">
+            {emptyQueryLabel}
+          </p>
+        ) : loading && suggestions.length === 0 ? (
           <p className="flex items-center gap-2 px-3 py-4 text-sm text-muted-foreground">
             <Loader2 className="size-3.5 animate-spin" aria-hidden />
             Searching
@@ -145,18 +225,32 @@ export function ItemLookupInput({
                   onMouseDown={(event) => {
                     event.preventDefault();
                     onSelect(suggestion);
-                    setQuery(suggestion.name);
+                    setQuery(selectedText?.(suggestion) ?? suggestion.name);
                     setOpen(false);
                   }}
                   className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
                 >
-                  <span className="text-sm font-medium leading-snug">
-                    {suggestion.name}
-                  </span>
-                  {suggestion.detail && (
-                    <span className="text-xs text-muted-foreground">
-                      {suggestion.detail}
-                    </span>
+                  {numberFirst && suggestion.supportItemNumber ? (
+                    <>
+                      <span className="text-sm font-medium leading-snug tabular">
+                        {suggestion.supportItemNumber}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {suggestion.name}
+                        {suggestion.legacyNote && ` · ${suggestion.legacyNote}`}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-sm font-medium leading-snug">
+                        {suggestion.name}
+                      </span>
+                      {suggestion.detail && (
+                        <span className="text-xs text-muted-foreground">
+                          {suggestion.detail}
+                        </span>
+                      )}
+                    </>
                   )}
                   {/* The catalogue publishes price limits per region rather
                       than a price, so it's labelled as guidance. */}

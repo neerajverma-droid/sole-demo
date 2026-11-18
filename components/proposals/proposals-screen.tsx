@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useSetAtom } from "jotai";
+import { useAtom, useSetAtom } from "jotai";
 import { FileSignature, Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -10,10 +10,12 @@ import { DeleteProposalDialog } from "@/components/proposals/delete-proposal-dia
 import { ProposalDetailsSheet } from "@/components/proposals/proposal-details-sheet";
 import { ProposalTemplatePickerDialog } from "@/components/proposals/proposal-template-picker-dialog";
 import { ProposalsTable } from "@/components/proposals/proposals-table";
-import { proposalTemplatePickerOpenAtom } from "@/lib/atoms";
+import { SendReminderDialog } from "@/components/proposals/send-reminder-dialog";
+import { proposalTemplatePickerOpenAtom, reminderProposalIdAtom } from "@/lib/atoms";
 
 export function ProposalsScreen() {
   const setPickerOpen = useSetAtom(proposalTemplatePickerOpenAtom);
+  const [reminderId, setReminderId] = useAtom(reminderProposalIdAtom);
 
   return (
     <div className="space-y-[15px]">
@@ -34,6 +36,7 @@ export function ProposalsScreen() {
       <ProposalTemplatePickerDialog />
       <ProposalDetailsSheet />
       <DeleteProposalDialog />
+      <SendReminderDialog proposalId={reminderId} onOpenChange={(open) => !open && setReminderId(null)} />
     </div>
   );
 }

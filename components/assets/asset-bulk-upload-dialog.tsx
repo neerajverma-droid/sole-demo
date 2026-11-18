@@ -24,7 +24,7 @@ import { useBulkImportCountry } from "@/hooks/use-bulk-import-country";
  * batch endpoint is all-or-nothing and has no brand/type columns at all, so
  * those are set from the asset screen afterwards rather than from the file.
  */
-export function AssetBulkUploadDialog() {
+export function AssetBulkUploadDialog({ page = false }: { page?: boolean } = {}) {
   const [open, setOpen] = useAtom(assetBulkOpenAtom);
   const categoriesQuery = useAccountCategoriesQuery("Assets");
   const categories = React.useMemo(
@@ -43,18 +43,22 @@ export function AssetBulkUploadDialog() {
 
   return (
     <BulkImportDialog
+      page={page}
       spec={spec}
       open={open}
       onOpenChange={setOpen}
       busy={categoriesQuery.isLoading}
       busyLabel="Loading categories…"
+      // Wide enough for the Review columns, and the summary stays one line.
+      contentClassName="sm:max-w-6xl"
+      compactIssues
       onImport={(rows) => importAssets.mutateAsync(rows)}
       reviewFooter={
         categoriesQuery.isError ? (
           <p className="text-xs text-destructive">
-            Your chart of accounts could not be loaded, so categories
-            can&apos;t be checked against it. Importing now would leave every
-            asset uncategorised — close this and try again.
+            Your chart of accounts could not be loaded, so categories can&apos;t
+            be suggested or chosen. Importing now would leave every asset
+            uncategorised — close this and try again.
           </p>
         ) : null
       }

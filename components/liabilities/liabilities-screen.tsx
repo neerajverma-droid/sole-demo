@@ -29,7 +29,7 @@ export function LiabilitiesScreen() {
         title="Liabilities"
         description="Accrued wages, loans and anything else you owe outside your bills."
       >
-        <Button asChild>
+        <Button asChild data-usertour="liability-new-button">
           <Link href="/liabilities/new">
             <Plus />
             New liability

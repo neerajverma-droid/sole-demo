@@ -446,7 +446,20 @@ function QuoteBody({ quote }: { quote: PublicQuote }) {
             <TableBody>
               {items.map((item) => (
                 <TableRow key={item.id}>
-                  <TableCell className="min-w-48 font-medium">{item.name}</TableCell>
+                  <TableCell className="min-w-48 font-medium">
+                    {item.name}
+                    {/* An NDIS quote says which support item and claim type each line is for. */}
+                    {(item.supportItemNumber || item.claimType) && (
+                      <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
+                        {[
+                          item.supportItemNumber && `Support item ${item.supportItemNumber}`,
+                          item.claimType,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </span>
+                    )}
+                  </TableCell>
                   <TableCell className={cn(HUG_COLUMN, "text-right tabular-nums")}>
                     {item.qty || "—"}
                   </TableCell>

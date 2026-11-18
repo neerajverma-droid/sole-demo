@@ -372,7 +372,7 @@ describe("updateContactApi reconciliation edges", () => {
     ]);
   });
 
-  it("treats a primary swap as two person PATCHes (is_primary flipped on both)", async () => {
+  it("promotes the new primary first and never sends is_primary 0 for the one it demotes", async () => {
     apiMock.patch.mockResolvedValue({ data: { success: true } });
     // Sarah promoted into the flat fields; Michael demoted into additionalContacts.
     const values = formValues({
@@ -390,9 +390,12 @@ describe("updateContactApi reconciliation edges", () => {
     expect(apiMock.post).not.toHaveBeenCalled();
     expect(apiMock.delete).not.toHaveBeenCalled();
     const personCalls = apiMock.patch.mock.calls.slice(1);
+    // The promotion lands before the demoted person's own PATCH.
+    expect(personCalls[0][0]).toBe(`${apiRoutes.companyContact.update}/11`);
     const byUrl = Object.fromEntries(personCalls.map(([url, body]) => [url, decryptedFieldsFromBody(body)]));
     expect(byUrl[`${apiRoutes.companyContact.update}/11`]).toMatchObject({ is_primary: 1 });
-    expect(byUrl[`${apiRoutes.companyContact.update}/10`]).toMatchObject({ is_primary: 0 });
+    // The server refuses to unflag the current primary; it demotes it itself.
+    expect(byUrl[`${apiRoutes.companyContact.update}/10`]).not.toHaveProperty("is_primary");
   });
 
   it("surfaces a person POST's fallback message after the company PATCH has already landed", async () => {

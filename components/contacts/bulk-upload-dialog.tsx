@@ -18,7 +18,7 @@ import { useBulkImportCountry } from "@/hooks/use-bulk-import-country";
  * changed; what's left here is where the rows go, and the business's
  * country — which names and checks the business-number column (ABN, NZBN).
  */
-export function BulkUploadDialog() {
+export function BulkUploadDialog({ page = false }: { page?: boolean } = {}) {
   const [open, setOpen] = useAtom(bulkUploadOpenAtom);
   const bulkCreateContacts = useBulkCreateContactsMutation();
   const country = useBulkImportCountry();
@@ -26,9 +26,13 @@ export function BulkUploadDialog() {
 
   return (
     <BulkImportDialog
+      page={page}
       spec={spec}
       open={open}
       onOpenChange={setOpen}
+      // Wide enough for the Review columns, and the summary stays one line.
+      contentClassName="sm:max-w-6xl"
+      compactIssues
       onImport={(rows) => bulkCreateContacts.mutateAsync(rows)}
     />
   );

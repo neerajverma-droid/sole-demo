@@ -4,6 +4,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useAtom, useSetAtom } from "jotai";
 import {
+  BellRing,
   Eye,
   FileSignature,
   Loader2,
@@ -58,6 +59,7 @@ import {
   proposalsQueryAtom,
   proposalsStatusAtom,
   viewProposalIdAtom,
+  reminderProposalIdAtom,
 } from "@/lib/atoms";
 import { apiErrorMessage } from "@/lib/api-error";
 import {
@@ -68,6 +70,7 @@ import {
   proposalStatusLabel,
   type ProposalRow,
   type ProposalStatus,
+  reminderBlockedReason,
 } from "@/lib/proposals";
 import type { PageInfo } from "@/lib/products";
 import { cn } from "@/lib/utils";
@@ -87,6 +90,7 @@ export function ProposalsTable() {
   const [pageSize, setPageSize] = useAtom(proposalsPageSizeAtom);
   const setViewId = useSetAtom(viewProposalIdAtom);
   const setDeleteRow = useSetAtom(deleteProposalAtom);
+  const setReminderId = useSetAtom(reminderProposalIdAtom);
   const setPickerOpen = useSetAtom(proposalTemplatePickerOpenAtom);
   const markPaid = useMarkProposalPaidMutation();
   const [markingId, setMarkingId] = React.useState<string | null>(null);
@@ -117,7 +121,9 @@ export function ProposalsTable() {
     to: Math.min(currentPage * pageSize, total),
   };
 
-  const loading = query !== debouncedQuery || proposalsQuery.isPlaceholderData;
+  // Skeleton rows whenever the list is on its way: first load, a new search or
+  // page, and the reload after a delete or mark-paid.
+  const loading = query !== debouncedQuery || proposalsQuery.isPlaceholderData || proposalsQuery.isFetching;
 
   // Manual payments have no automatic confirmation — this is the owner
   // asserting they've been paid outside the app.
@@ -141,15 +147,6 @@ export function ProposalsTable() {
       onStatusChange={setStatus}
     />
   );
-
-  if (proposalsQuery.isLoading) {
-    return (
-      <div className="space-y-4">
-        {filters}
-        <Shimmer className="h-96 w-full rounded-lg border border-border" />
-      </div>
-    );
-  }
 
   if (total === 0 && !loading) {
     const failed = proposalsQuery.isError;
@@ -226,7 +223,8 @@ export function ProposalsTable() {
               <TableHead className={cn(HUG_COLUMN, "text-center")}>Status</TableHead>
               <TableHead className={cn(HUG_COLUMN, "text-center")}>Amount</TableHead>
               <TableHead className={cn(HUG_COLUMN, "text-center")}>Paid</TableHead>
-              <TableHead className={cn(HUG_COLUMN, "text-center")}>Created</TableHead>
+              {/* Phones: Created goes, so the rest fits without scrolling. */}
+              <TableHead className={cn(HUG_COLUMN, "hidden text-center md:table-cell")}>Created</TableHead>
               <TableHead className={cn(HUG_COLUMN, "text-right")}>Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -235,7 +233,7 @@ export function ProposalsTable() {
               ? Array.from({ length: 5 }).map((_, index) => (
                   <TableRow key={`skeleton-${index}`}>
                     <TableCell>
-                      <Shimmer className="h-4 w-48" />
+                      <Shimmer className="h-4 w-32 sm:w-48" />
                       <Shimmer className="mt-2 h-3 w-28" />
                     </TableCell>
                     <TableCell>
@@ -247,7 +245,7 @@ export function ProposalsTable() {
                     <TableCell>
                       <Shimmer className="mx-auto h-5 w-16 rounded-md" />
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       <Shimmer className="mx-auto h-4 w-20" />
                     </TableCell>
                     <TableCell>
@@ -264,6 +262,7 @@ export function ProposalsTable() {
                     onView={() => setViewId(row.id)}
                     onEdit={() => router.push(`/proposals/${row.id}`)}
                     onDelete={() => setDeleteRow(row)}
+                    onRemind={() => setReminderId(row.id)}
                     onMarkPaid={(paid) => handleMarkPaid(row, paid)}
                   />
                 ))}
@@ -334,6 +333,7 @@ function ProposalTableRow({
   onView,
   onEdit,
   onDelete,
+  onRemind,
   onMarkPaid,
 }: {
   row: ProposalRow;
@@ -342,6 +342,7 @@ function ProposalTableRow({
   onView: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onRemind: () => void;
   onMarkPaid: (paid: boolean) => void;
 }) {
   const locks = proposalLocks(row);
@@ -349,7 +350,7 @@ function ProposalTableRow({
 
   return (
     <TableRow className="cursor-pointer" onClick={onView}>
-      <TableCell className="max-w-[320px]">
+      <TableCell className="max-w-[200px] sm:max-w-[320px]">
         <span className="block truncate font-medium">
           <Highlight text={row.title} query={query} />
         </span>
@@ -392,7 +393,7 @@ function ProposalTableRow({
           )}
         </div>
       </TableCell>
-      <TableCell className={cn(HUG_COLUMN, "text-center tabular text-muted-foreground")}>
+      <TableCell className={cn(HUG_COLUMN, "hidden text-center tabular text-muted-foreground md:table-cell")}>
         {formatProposalDate(row.createdAt)}
       </TableCell>
       <TableCell className={HUG_COLUMN} onClick={(event) => event.stopPropagation()}>
@@ -415,6 +416,13 @@ function ProposalTableRow({
                 label="Edit"
                 onSelect={onEdit}
                 disabledReason={locks.editReason ?? undefined}
+              />
+              {/* Always listed; disabled, with the reason, until the client has it to answer. */}
+              <MenuAction
+                icon={<BellRing />}
+                label="Send reminder"
+                onSelect={onRemind}
+                disabledReason={reminderBlockedReason(row.status) ?? undefined}
               />
               <DropdownMenuSeparator />
               <MenuAction

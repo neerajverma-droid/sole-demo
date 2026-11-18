@@ -6,6 +6,7 @@ import { Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PrefixInput } from "@/components/ui/prefix-input";
 import {
   Select,
   SelectContent,
@@ -25,6 +26,7 @@ import {
 import {
   DEFAULT_DISCOUNT_TYPE,
   GST_PERCENT,
+  MONEY_DECIMALS,
   currencySymbol,
   formatDocumentMoney,
   lineItemErrors,
@@ -55,6 +57,7 @@ export function DocumentLineItems({
   onRemove,
   onAdd,
   register,
+  issueFor,
   showGst = true,
   gstPercent = GST_PERCENT,
   lookup = true,
@@ -70,6 +73,11 @@ export function DocumentLineItems({
   onAdd: () => void;
   /** Registers a focus target so submit can jump to the first error. */
   register: (key: string) => (node: HTMLElement | null) => void;
+  /**
+   * What's missing from a field, by its key — the editor's own lookup, which
+   * holds back "not filled in yet" until a save has been attempted.
+   */
+  issueFor?: (key: string) => string | undefined;
   /** False when Sales settings has GST switched off for this document type. */
   showGst?: boolean;
   /** The business's own GST rate, so line amounts match what's invoiced. */
@@ -125,7 +133,7 @@ export function DocumentLineItems({
                 Quantity
                 <Required />
               </TableHead>
-              <TableHead className="w-[110px] text-center">Unit</TableHead>
+              <TableHead className="w-[110px] text-center">Type</TableHead>
               <TableHead className="w-[130px] text-center">
                 Price
                 <Required />
@@ -149,6 +157,9 @@ export function DocumentLineItems({
               const errors = lineItemErrors(item);
               const line = lineTotals(item, gstPercent);
               const rowLabel = `line ${index + 1}`;
+              const descriptionIssue = issueFor?.(`item-${item.id}-description`);
+              const quantityIssue = errors.quantity ?? issueFor?.(`item-${item.id}-quantity`);
+              const priceIssue = errors.price ?? issueFor?.(`item-${item.id}-price`);
 
               return (
                 <TableRow key={item.id} className="align-top">
@@ -173,11 +184,17 @@ export function DocumentLineItems({
                         }
                         placeholder="What are you billing for?"
                         label={`Description, ${rowLabel}`}
+                        invalid={!!descriptionIssue}
                       />
                     ) : (
                       <Input
                         ref={register(`item-${item.id}-description`)}
-                        className="h-9"
+                        className={cn(
+                          "h-9",
+                          descriptionIssue &&
+                            "border-destructive focus-visible:ring-destructive",
+                        )}
+                        aria-invalid={!!descriptionIssue}
                         value={item.description}
                         onChange={(event) =>
                           onPatch(item.id, { description: event.target.value })
@@ -186,12 +203,17 @@ export function DocumentLineItems({
                         aria-label={`Description, ${rowLabel}`}
                       />
                     )}
+                    {descriptionIssue && (
+                      <p className="mt-1 text-xs text-destructive">
+                        {descriptionIssue}
+                      </p>
+                    )}
                   </TableCell>
 
                   <NumericCell
                     label={`Quantity, ${rowLabel}`}
                     value={item.quantity}
-                    error={errors.quantity}
+                    error={quantityIssue}
                     inputRef={register(`item-${item.id}-quantity`)}
                     onChange={(value) => onPatch(item.id, { quantity: value })}
                   />
@@ -200,16 +222,17 @@ export function DocumentLineItems({
                     <QtyTypeSelect
                       value={item.qtyType}
                       onChange={(qtyType) => onPatch(item.id, { qtyType })}
-                      label={`Unit, ${rowLabel}`}
+                      label={`Type, ${rowLabel}`}
                     />
                   </TableCell>
 
                   <NumericCell
                     label={`Price, ${rowLabel}`}
                     value={item.price}
-                    error={errors.price}
+                    error={priceIssue}
                     hint={item.priceHint}
                     prefix={symbol}
+                    maxDecimals={MONEY_DECIMALS}
                     inputRef={register(`item-${item.id}-price`)}
                     onChange={(value) => onPatch(item.id, { price: value })}
                   />
@@ -238,6 +261,7 @@ export function DocumentLineItems({
                         suffix={
                           perLineDiscountType || isAmount ? undefined : "%"
                         }
+                        maxDecimals={MONEY_DECIMALS}
                         inputRef={register(`item-${item.id}-discountPercent`)}
                         onChange={(value) =>
                           onPatch(item.id, { discountPercent: value })
@@ -319,14 +343,16 @@ export function DocumentLineItems({
   );
 }
 
-/** The 0.75rem edge offset, the adornment's own width, and a small gap. */
-function adornmentInset(text: string): string {
-  return `calc(0.75rem + ${text.length}ch + 0.375rem)`;
+/** Drops anything typed past `max` places after the decimal point. */
+function limitDecimals(value: string, max: number): string {
+  const point = value.indexOf(".");
+  return point === -1 ? value : value.slice(0, point + 1 + max);
 }
 
 /**
  * Numeric fields accept anything typed and show a live error, rather than
- * blocking keystrokes — a deliberate call recorded in the design handoff.
+ * blocking keystrokes — a deliberate call recorded in the design handoff. The
+ * one exception is `maxDecimals`: cents are a hard stop, not an error.
  * Exported so the NDIS table gets the same treatment rather than its own.
  */
 export function NumericCell({
@@ -336,6 +362,7 @@ export function NumericCell({
   hint,
   prefix,
   suffix,
+  maxDecimals,
   inputRef,
   onChange,
   trailing,
@@ -350,6 +377,11 @@ export function NumericCell({
   hint?: string;
   prefix?: string;
   suffix?: string;
+  /**
+   * Stops typing (or pasting) past this many places after the point — the
+   * extra digits never reach the field. Money fields set it; quantity doesn't.
+   */
+  maxDecimals?: number;
   inputRef: (node: HTMLElement | null) => void;
   onChange: (value: string) => void;
   /** A control shown beside the field itself — the discount's %/$ picker. */
@@ -368,40 +400,37 @@ export function NumericCell({
             "border-destructive focus-within:ring-destructive",
         )}
       >
-        <div className="relative flex-1">
-          {prefix && (
-            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-              {prefix}
-            </span>
+        {/* The prefix sits beside the value, not over it, so a long symbol
+            ("NZ$", "AED") can't run into the number. With a trailing picker
+            the surrounding box already carries the border. */}
+        <PrefixInput
+          ref={inputRef}
+          prefix={prefix}
+          suffix={
+            suffix ? (
+              <span className="text-sm text-muted-foreground">{suffix}</span>
+            ) : undefined
+          }
+          wrapperClassName={cn(
+            // min-w-0: a flex item won't shrink below its content's natural
+            // width otherwise, which pushes a trailing control out of the cell.
+            "min-w-0 flex-1",
+            trailing &&
+              "border-0 bg-transparent shadow-none focus-within:ring-0",
           )}
-          <Input
-            ref={inputRef}
-            className={cn(
-              "h-9 text-right tabular",
-              trailing &&
-                "border-0 bg-transparent shadow-none focus-visible:ring-0",
-              !trailing &&
-                error &&
-                "border-destructive focus-visible:ring-destructive",
-            )}
-            // Sized to the adornment rather than a fixed pl-7: that only fits
-            // a one-character "$", and a code like "AED" ran over the value.
-            style={{
-              paddingLeft: prefix ? adornmentInset(prefix) : undefined,
-              paddingRight: suffix ? adornmentInset(suffix) : undefined,
-            }}
-            inputMode="decimal"
-            value={value}
-            onChange={(event) => onChange(event.target.value)}
-            aria-label={label}
-            aria-invalid={!!error}
-          />
-          {suffix && (
-            <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-              {suffix}
-            </span>
-          )}
-        </div>
+          className="text-right tabular"
+          inputMode="decimal"
+          value={value}
+          onChange={(event) =>
+            onChange(
+              maxDecimals === undefined
+                ? event.target.value
+                : limitDecimals(event.target.value, maxDecimals),
+            )
+          }
+          aria-label={label}
+          aria-invalid={!!error}
+        />
         {trailing}
       </div>
       {error ? (

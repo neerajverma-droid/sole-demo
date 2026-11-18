@@ -84,7 +84,11 @@ export function DocumentPreview({
     (sum, line) => sum + (Number(line.quantity) || 0) * line.price,
     0,
   );
-  const gst = fields.gst ? (subtotal * taxRate) / 100 : 0;
+  // The document's tax is the document's tax: the GST switch doesn't touch it.
+  // It only decides whether each line shows its own GST (the column below),
+  // exactly as the rendered PDF treats `show_gst` — so the heading, the totals
+  // and the tax row are the same with the switch on or off.
+  const gst = (subtotal * taxRate) / 100;
   // "TAX INVOICE" when tax is charged, as the rendered PDF heads it.
   const heading = documentHeading(country, doc.kind === "Quote" ? "quote" : "invoice", gst > 0);
   const businessNumbers = doc.businessIdentifiers
@@ -140,7 +144,10 @@ export function DocumentPreview({
 
         <div
           className={cn(
-            "flex min-h-0 flex-1 flex-col",
+            // `min-w-0`: without it the column is as wide as its widest
+            // unbreakable line (the footer, the table's fixed columns), so
+            // turning a column on pushed the page's right edge out of view.
+            "flex min-h-0 min-w-0 flex-1 flex-col",
             compact ? "gap-1.5 p-2.5" : "gap-2 p-3",
           )}
         >
@@ -202,11 +209,12 @@ export function DocumentPreview({
                   : undefined
               }
             >
-              <span className="flex-1">Item</span>
-              {fields.quantityType && (
-                <span className="w-8 text-right">Qty</span>
-              )}
+              <span className="min-w-0 flex-1">Item</span>
+              {/* The quantity is always there; the switch only adds its unit. */}
+              <span className="w-8 text-right">Qty</span>
               <span className="w-8 text-right">Price</span>
+              {/* Off removes this column and nothing else. */}
+              {fields.gst && <span className="w-8 text-right">{tax}</span>}
               <span className="w-9 text-right">Amount</span>
             </div>
             {doc.lines.map((line, index) => (
@@ -225,14 +233,22 @@ export function DocumentPreview({
                     </span>
                   )}
                 </span>
-                {fields.quantityType && (
-                  <span className="w-8 shrink-0 text-right">
-                    {line.quantity} {line.quantityType}
-                  </span>
-                )}
+                <span className="w-8 shrink-0 text-right">
+                  {fields.quantityType
+                    ? `${line.quantity} ${line.quantityType}`
+                    : line.quantity}
+                </span>
                 <span className="w-8 shrink-0 text-right">
                   {invoiceMoney(line.price)}
                 </span>
+                {fields.gst && (
+                  <span className="w-8 shrink-0 text-right">
+                    {invoiceMoney(
+                      ((Number(line.quantity) || 0) * line.price * taxRate) /
+                        100,
+                    )}
+                  </span>
+                )}
                 <span className="w-9 shrink-0 text-right">
                   {invoiceMoney((Number(line.quantity) || 0) * line.price)}
                 </span>
@@ -243,8 +259,7 @@ export function DocumentPreview({
           {/* Totals */}
           <div className="ml-auto w-24 space-y-0.5">
             <Total label="Subtotal" value={invoiceMoney(subtotal)} />
-            {/* Tax off means no tax line at all, not a zero. */}
-            {fields.gst && <Total label={tax} value={invoiceMoney(gst)} />}
+            <Total label={tax} value={invoiceMoney(gst)} />
             <div
               className="flex justify-between border-t pt-0.5 font-semibold"
               style={{ borderColor: brand, color: brand }}

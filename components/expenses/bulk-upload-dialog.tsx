@@ -14,13 +14,13 @@ import { useBulkImportCountry } from "@/hooks/use-bulk-import-country";
  * Expense bulk upload.
  *
  * The whole wizard is `BulkImportDialog`; what's here is the chart of
- * accounts, because an expense's Category column names an account and the
- * backend wants its id. The spec is rebuilt when that list arrives so the
- * "isn't one of your expense accounts" rule can actually fire — and the
- * import is held until it does, since validating a category against an empty
- * list would wave every row through.
+ * accounts. It goes to the AI formatter with the file so each row comes back
+ * with the id of the category it fits, it fills the Category dropdown on
+ * Review, and the backend wants the chosen id. The spec is rebuilt when that
+ * list arrives, and the upload waits for it — a file formatted or checked
+ * against an empty list would come back with no category on any row.
  */
-export function ExpenseBulkUploadDialog() {
+export function ExpenseBulkUploadDialog({ page = false }: { page?: boolean } = {}) {
   const [open, setOpen] = useAtom(expenseBulkOpenAtom);
   const categoriesQuery = useAccountCategoriesQuery("Expenses");
   const categories = React.useMemo(
@@ -39,18 +39,22 @@ export function ExpenseBulkUploadDialog() {
 
   return (
     <BulkImportDialog
+      page={page}
       spec={spec}
       open={open}
       onOpenChange={setOpen}
+      // Wide enough for the ten Review columns without scrolling sideways.
+      contentClassName="sm:max-w-6xl"
+      compactIssues
       busy={categoriesQuery.isLoading}
       busyLabel="Loading categories…"
       onImport={(rows) => importExpenses.mutateAsync(rows)}
       reviewFooter={
         categoriesQuery.isError ? (
           <p className="text-xs text-destructive">
-            Your chart of accounts could not be loaded, so categories
-            can&apos;t be checked against it. Importing now would leave every
-            expense uncategorised — close this and try again.
+            Your chart of accounts could not be loaded, so categories can&apos;t
+            be suggested or chosen. Importing now would leave every expense
+            uncategorised — close this and try again.
           </p>
         ) : null
       }

@@ -16,6 +16,7 @@ const {
   fetchSubscriptionCatalogue,
   isSubscriptionActivated,
   parseCheckoutReturn,
+  resolveCheckoutCoupon,
   selectionMonthlyTotal,
   validateCoupon,
 } = await import("@/lib/subscription");
@@ -353,6 +354,7 @@ describe("selectionMonthlyTotal — matches what create-session charges", () => 
     comingSoon: false,
     includes: [],
     excludes: [],
+    content: null,
   });
   const addons = [plan("accounting", 7.99), plan("time", 4.99), plan("km", 4.99), plan("booking", 4.99)];
 
@@ -367,11 +369,81 @@ describe("selectionMonthlyTotal — matches what create-session charges", () => 
     expect(selectionMonthlyTotal(plan("bundle", 24.99), addons)).toBeCloseTo(24.99 + 4.99);
   });
 
-  it("charges nothing extra on pro, which includes them all", () => {
-    expect(selectionMonthlyTotal(plan("pro", 59.99), addons)).toBeCloseTo(59.99);
+  it("charges nothing extra on Advanced, which includes them all", () => {
+    expect(selectionMonthlyTotal(plan("advanced", 49.99), addons)).toBeCloseTo(49.99);
   });
 
   it("is zero with no package chosen", () => {
     expect(selectionMonthlyTotal(null, addons)).toBe(0);
+  });
+});
+
+describe("resolveCheckoutCoupon", () => {
+  const valid = {
+    valid: true as const,
+    code: "SOLE20",
+    discount: { type: "percent" as const, amount: 20, duration: "once", durationInMonths: null },
+  };
+
+  it("treats an empty or blank box as no coupon, without asking the server", async () => {
+    await expect(resolveCheckoutCoupon("   ")).resolves.toEqual({
+      proceed: true,
+      code: "",
+      check: null,
+    });
+    expect(apiMock.post).not.toHaveBeenCalled();
+  });
+
+  it("checks a code the page hasn't, and sends the trimmed code on", async () => {
+    apiMock.post.mockResolvedValueOnce({
+      data: {
+        success: true,
+        valid: true,
+        discount: { type: "percent", amount: 20, duration: "once" },
+      },
+    });
+
+    await expect(resolveCheckoutCoupon("  SOLE20 ")).resolves.toMatchObject({
+      proceed: true,
+      code: "SOLE20",
+    });
+    expect(apiMock.post).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't ask twice about a code that was already Applied", async () => {
+    await expect(resolveCheckoutCoupon("SOLE20", valid)).resolves.toEqual({
+      proceed: true,
+      code: "SOLE20",
+      check: valid,
+    });
+    expect(apiMock.post).not.toHaveBeenCalled();
+  });
+
+  it("asks again when the box no longer holds the code that was checked", async () => {
+    apiMock.post.mockRejectedValueOnce({
+      response: { status: 404, data: { valid: false, message: "Invalid or expired coupon code" } },
+    });
+
+    const result = await resolveCheckoutCoupon("SOLE30", valid);
+
+    expect(apiMock.post).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      proceed: false,
+      check: { valid: false, code: "SOLE30", message: "Invalid or expired coupon code" },
+    });
+  });
+
+  it("stops the checkout on a bad code rather than charging full price", async () => {
+    const invalid = { valid: false as const, code: "NOPE", message: "Invalid or expired coupon code" };
+    await expect(resolveCheckoutCoupon("NOPE", invalid)).resolves.toEqual({
+      proceed: false,
+      check: invalid,
+    });
+    expect(apiMock.post).not.toHaveBeenCalled();
+  });
+
+  it("lets a server failure through as an error, not as an answer", async () => {
+    apiMock.post.mockRejectedValueOnce({ response: { status: 500, data: {} } });
+    await expect(resolveCheckoutCoupon("SOLE20")).rejects.toBeTruthy();
   });
 });

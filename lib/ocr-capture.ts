@@ -1,5 +1,5 @@
 /**
- * Document capture for invoices and expenses — upload a file, have sole-ocr
+ * Document capture for invoices, expenses and bills — upload a file, have sole-ocr
  * read it, get a draft back. Ported from sole-webapp's `InvoiceUploadComponent`
  * and the `ExpenseUploadComponent` inside `AddExpenses`, against the same
  * endpoints: `POST /upload/s3`, then `POST /invoice/extract` or
@@ -150,6 +150,9 @@ type ApiInvoiceFields = {
   invoiceDate?: string | null;
   dueDate?: string | null;
   totalAmount?: number | string | null;
+  /** The amount before tax, and the tax alone — only where the document shows them. */
+  subtotal?: number | string | null;
+  tax_amount?: number | string | null;
   description?: string | null;
   notes?: string | null;
   items?: ApiInvoiceItem[] | null;
@@ -163,6 +166,10 @@ export type InvoiceExtractionFields = {
   issued: string;
   due: string;
   total: string;
+  /** The amount before tax; empty when the document doesn't charge tax. */
+  subtotal: string;
+  /** The tax the document charges (GST/VAT), alone; empty when it charges none. */
+  tax: string;
   description: string;
   notes: string;
   /** The lines read off the document, or one line for the total when there were none. */
@@ -200,6 +207,16 @@ export async function extractInvoiceApi(
   const total = amountText(raw.totalAmount);
   const description = raw.description?.trim() ?? "";
 
+  // Tax the document charges, kept apart from what it was charged on. Nothing
+  // here when it charges none, so the lines come in untaxed and no GST shows.
+  const tax = amountText(raw.tax_amount);
+  const taxed = tax !== "";
+  const beforeTax =
+    amountText(raw.subtotal) ||
+    (taxed && total
+      ? String(Math.round((Number(total) - Number(tax)) * 100) / 100)
+      : "");
+
   const items = (raw.items ?? [])
     .filter((item) => item && (item.description || item.price || item.amount))
     .map((item): InvoiceLineItem => {
@@ -209,10 +226,10 @@ export async function extractInvoiceApi(
         description: item.description?.trim() ?? "",
         quantity: String(Number(item.qty) > 0 ? Number(item.qty) : 1),
         price,
-        // sole-webapp leaves GST off the lines it reads: the document's
-        // figures are what was billed, and it doesn't say whether they
-        // include tax.
-        gst: false,
+        // The lines are before tax whenever the document shows its tax
+        // separately, so the invoice adds GST on top; with no tax on the
+        // document they stay untaxed.
+        gst: taxed,
       };
     });
 
@@ -228,6 +245,8 @@ export async function extractInvoiceApi(
       issued,
       due: isoDateFrom(raw.dueDate, ""),
       total,
+      subtotal: taxed ? beforeTax : "",
+      tax,
       description,
       notes: raw.notes?.trim() ?? "",
       items:
@@ -238,8 +257,9 @@ export async function extractInvoiceApi(
                 ...newLineItem(),
                 description,
                 quantity: "1",
-                price: total,
-                gst: false,
+                // The amount before tax when there is tax to add on top.
+                price: taxed && beforeTax ? beforeTax : total,
+                gst: taxed,
               },
             ],
     },
@@ -316,6 +336,110 @@ export async function extractExpenseApi(
 }
 
 /* ------------------------------------------------------------------ *
+ * Bill
+ * ------------------------------------------------------------------ */
+
+/**
+ * `POST /v2/bill/extract`. A bill is the supplier's invoice, but the party
+ * that matters is the issuer, so the server reads `vendor_name` (not the
+ * bill-to party the invoice extract calls the client) and matches it to one
+ * of the user's own suppliers when the name is an exact fit.
+ */
+type ApiBillFields = {
+  supplier_name?: string | null;
+  supplier_id?: number | string | null;
+  bill_no?: string | null;
+  bill_date?: string | null;
+  due_date?: string | null;
+  total?: number | string | null;
+  tax_amount?: number | string | null;
+  items_taxed?: boolean | null;
+  items?: ApiInvoiceItem[] | null;
+  notes?: string | null;
+  confidence?: number | string | null;
+  currency?: string | null;
+  business_currency?: string | null;
+  foreign_currency?: boolean | null;
+};
+
+export type BillExtractionLine = {
+  description: string;
+  quantity: string;
+  /** Excluding tax, as the bill form takes it. */
+  price: string;
+  gst: boolean;
+};
+
+export type BillExtractionFields = {
+  supplierName: string;
+  /** Set only when the read name is exactly one of the user's suppliers. */
+  supplierId: string | null;
+  billNo: string;
+  billDate: string;
+  dueDate: string;
+  total: string;
+  notes: string;
+  lines: BillExtractionLine[];
+  /**
+   * Set when the bill is in another currency than the business's — bills are
+   * recorded in the business's own, so it needs converting before approval.
+   */
+  foreignCurrency: { currency: string; businessCurrency: string } | null;
+};
+
+export type BillExtraction = {
+  confidence: number;
+  fields: BillExtractionFields;
+};
+
+export async function extractBillApi(
+  file: File,
+  upload: CaptureUpload,
+  today: string,
+): Promise<BillExtraction> {
+  const response = await api.post<{
+    success: boolean;
+    error?: string;
+    message?: string;
+    extractedData?: ApiBillFields;
+  }>(apiRoutes.bill.extract, {
+    [upload.source === "s3" ? "s3Key" : "localFile"]: upload.identifier,
+    fileType: file.type,
+  });
+  const data = response.data;
+  if (!data?.success || !data.extractedData) {
+    throw new Error(data?.message || data?.error || "Couldn't read that bill.");
+  }
+
+  const raw = data.extractedData;
+  const taxed = Boolean(raw.items_taxed);
+  return {
+    confidence: confidenceFrom(raw.confidence),
+    fields: {
+      supplierName: raw.supplier_name?.trim() ?? "",
+      supplierId: raw.supplier_id != null ? String(raw.supplier_id) : null,
+      billNo: raw.bill_no?.trim() ?? "",
+      billDate: isoDateFrom(raw.bill_date, today),
+      dueDate: isoDateFrom(raw.due_date, ""),
+      total: amountText(raw.total),
+      notes: raw.notes?.trim() ?? "",
+      foreignCurrency:
+        raw.foreign_currency && raw.currency && raw.business_currency
+          ? { currency: raw.currency, businessCurrency: raw.business_currency }
+          : null,
+      lines: (raw.items ?? [])
+        .filter((item) => item && (item.description || item.price))
+        .map((item) => ({
+          description: item.description?.trim() ?? "",
+          quantity: String(Number(item.qty) > 0 ? Number(item.qty) : 1),
+          price: amountText(item.price),
+          gst: taxed,
+        })),
+    },
+  };
+}
+
+/* ------------------------------------------------------------------ *
  * Editing a reading before it's used — sole-webapp's "Edit Extracted Data"
  * dialog. Each is the pair the dialog needs: which fields it offers, and how
  * an edit lands back on the extraction.
@@ -377,6 +501,39 @@ export const invoiceCaptureEditor: CaptureEditor<InvoiceExtraction> = {
                 },
               ]
             : fields.items,
+      },
+    };
+  },
+};
+
+export const billCaptureEditor: CaptureEditor<BillExtraction> = {
+  fields: [
+    { key: "supplierName", label: "Supplier", kind: "text" },
+    { key: "billNo", label: "Bill number", kind: "text" },
+    { key: "billDate", label: "Bill date", kind: "date" },
+    { key: "dueDate", label: "Due date", kind: "date" },
+  ],
+  read: ({ fields }) => ({
+    supplierName: fields.supplierName,
+    billNo: fields.billNo,
+    billDate: fields.billDate,
+    dueDate: fields.dueDate,
+  }),
+  write: (extraction, values) => {
+    const supplierName = values.supplierName.trim();
+    return {
+      ...extraction,
+      fields: {
+        ...extraction.fields,
+        // A renamed supplier no longer points at the one the server matched.
+        supplierId:
+          supplierName === extraction.fields.supplierName
+            ? extraction.fields.supplierId
+            : null,
+        supplierName,
+        billNo: values.billNo.trim(),
+        billDate: values.billDate,
+        dueDate: values.dueDate,
       },
     };
   },

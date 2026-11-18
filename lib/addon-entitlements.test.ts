@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   addedMonthlyCost,
+  addonBilledPrice,
   addonBillingMode,
   addonMonthlyPrice,
   currentMonthlyCost,
@@ -53,6 +54,7 @@ const plan = (
   comingSoon: false,
   includes: [],
   excludes: [],
+  content: null,
 });
 
 describe("the catalogue join", () => {
@@ -205,6 +207,37 @@ describe("addonMonthlyPrice", () => {
   });
 });
 
+describe("addonBilledPrice", () => {
+  const km = addonById("km-tracker")!;
+  // As the API sends them: the annual row is the year's charge, not a month.
+  const catalogue = [
+    { ...plan("km", 4.99, "monthly") },
+    { ...plan("km", 47.9 / 12, "annual"), price: 47.9 },
+  ];
+
+  it("quotes the charge for the plan's interval, not the month it divides to", () => {
+    expect(addonBilledPrice(km, catalogue, "monthly")).toEqual({
+      amount: 4.99,
+      interval: "monthly",
+    });
+    expect(addonBilledPrice(km, catalogue, "annual")).toEqual({
+      amount: 47.9,
+      interval: "annual",
+    });
+  });
+
+  it("falls back to the monthly row, then to the card", () => {
+    expect(addonBilledPrice(km, [catalogue[0]], "annual")).toEqual({
+      amount: 4.99,
+      interval: "monthly",
+    });
+    expect(addonBilledPrice(km, [], "annual")).toEqual({
+      amount: km.priceMonthly,
+      interval: "monthly",
+    });
+  });
+});
+
 describe("addedMonthlyCost", () => {
   const catalogue = [
     plan("assets-advanced", 4.99),
@@ -246,9 +279,9 @@ describe("addedMonthlyCost", () => {
     ).toBe(4.99);
   });
 
-  it("charges nothing on pro, whose allowance is unlimited", () => {
+  it("charges nothing on Advanced, whose allowance is unlimited", () => {
     const onPlan = sub({
-      planSlug: "pro",
+      planSlug: "advanced",
       addons: ["accounting", "time", "project", "km", "booking", "inventory"],
     });
 

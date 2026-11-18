@@ -15,10 +15,10 @@
  */
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
 import { formatInvoiceDate, invoiceMoney } from "@/lib/invoices";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
 
 /** The period tabs above the cards, matching Expenses and Vendor refunds. */
 export const SUPER_PERIODS = ["This year", "This month"] as const;
@@ -388,12 +388,12 @@ function syntheticMatches(
   const reconciled = Math.max(0, amount - Math.max(0, remaining));
   return reconciled > 0.005
     ? [
-      {
-        transactionId: `reconciled-${id}`,
-        reference: "Bank reconciliation",
-        amount: reconciled,
-      },
-    ]
+        {
+          transactionId: `reconciled-${id}`,
+          reference: "Bank reconciliation",
+          amount: reconciled,
+        },
+      ]
     : [];
 }
 
@@ -529,10 +529,7 @@ export async function createContributionApi(
   if (!response.data?.success) {
     throw new Error(response.data?.message || "Failed to record contribution");
   }
-  track(EVENTS.SUPER_CONTRIBUTION_RECORDED, {
-    amount: contributionAmount(draft),
-    is_taxable: Boolean(draft.taxDeduction),
-  });
+  track(EVENTS.CONTRIBUTION_ADDED);
 }
 
 /**
@@ -600,11 +597,7 @@ export async function fetchContributionMatrix(
     apiRoutes.superContribution.kpi,
     { params: { type } },
   );
-  const raw = response.data?.data;
-  if (!raw || !Array.isArray(raw.cards_data)) {
-    return { has_previous_data: false, cards_data: [] };
-  }
-  return raw;
+  return response.data?.data ?? { has_previous_data: false, cards_data: [] };
 }
 
 export type SuperMatrixStats = {
@@ -629,8 +622,8 @@ function matrixDeltaLine(
 
 /**
  * Total, matched and pending come straight from the matrix — the backend's
- * own reconciled/unreconciled split, all-or-nothing per contribution, rather
- * than this module's own partial-match-aware sums. Tax-deductible has no
+ * own split, where a partially matched contribution counts its matched part
+ * as matched and the rest as pending. Tax-deductible has no
  * server equivalent, so the cards screen still computes that one from
  * `superStats`.
  */

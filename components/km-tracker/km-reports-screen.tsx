@@ -42,8 +42,6 @@ import { DatePicker } from "@/components/documents/date-picker";
 import { Field } from "@/components/documents/field";
 import { useKmFormat, useKmRules, type KmFormat } from "@/hooks/use-km-tracker-query";
 import { apiErrorMessage } from "@/lib/api-error";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import {
   KM_BUSINESS_USE_BASES,
   fetchKmReport,
@@ -60,8 +58,6 @@ import {
   type KmTierSummary,
 } from "@/lib/km-tracker";
 import { cn } from "@/lib/utils";
-
-const REPORT_NAME = "km-tracker";
 
 /**
  * Method-specific trip reports — sole-webapp's `ReportsPage`: pick a method
@@ -82,7 +78,6 @@ export function KmReportsScreen() {
 
   const reportMutation = useMutation({
     mutationFn: fetchKmReport,
-    onSuccess: () => track(EVENTS.REPORT_VIEWED, { report: REPORT_NAME }),
     onError: (error) => toast.error(apiErrorMessage(error, "Couldn't load the report.")),
   });
   const report = reportMutation.data;
@@ -163,7 +158,6 @@ export function KmReportsScreen() {
       );
     }
     XLSX.writeFile(workbook, kmReportFilename(report));
-    track(EVENTS.REPORT_EXPORTED, { report: REPORT_NAME, format: "xlsx" });
     toast.success("Report downloaded", { description: kmReportFilename(report) });
   };
 

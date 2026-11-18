@@ -83,7 +83,6 @@ export function LeaveTable({
   failed,
   onRetry,
   filtered,
-  empty,
   status,
   onStatusChange,
   leaveType,
@@ -112,11 +111,6 @@ export function LeaveTable({
   onRetry: () => void;
   /** Any of status, type or search is narrowing the list. */
   filtered: boolean;
-  /**
-   * Nothing on file at all, unnarrowed — the tabs, type and search have
-   * nothing to work on, so only the empty state shows.
-   */
-  empty: boolean;
   status: LeaveStatusFilter;
   onStatusChange: (next: LeaveStatusFilter) => void;
   leaveType: LeaveTypeFilter;
@@ -137,71 +131,69 @@ export function LeaveTable({
 }) {
   return (
     <div className="space-y-4">
-      {!empty && (
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          {/* Five tabs with counts are wider than a phone — they scroll inside
-              the row rather than pushing past the screen edge. */}
-          <Tabs
-            className="max-w-full overflow-x-auto"
-            value={status}
-            onValueChange={(next) => onStatusChange(next as LeaveStatusFilter)}
-          >
-            <TabsList aria-label="Leave status" data-usertour="payroll-leave-status-tabs">
-              {LEAVE_STATUS_TABS.map((tab) => (
-                <TabsTrigger
-                  key={tab.value}
-                  value={tab.value}
-                  className="gap-1.5 font-normal"
-                >
-                  {tab.label}
-                  {counts ? (
-                    <span className="text-xs text-muted-foreground tabular">
-                      {counts[tab.count]}
-                    </span>
-                  ) : countsFailed ? null : (
-                    <Shimmer className="h-3.5 w-4" aria-hidden />
-                  )}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {/* Five tabs with counts are wider than a phone — they scroll inside
+            the row rather than pushing past the screen edge. */}
+        <Tabs
+          className="max-w-full overflow-x-auto"
+          value={status}
+          onValueChange={(next) => onStatusChange(next as LeaveStatusFilter)}
+        >
+          <TabsList aria-label="Leave status" data-usertour="payroll-leave-status-tabs">
+            {LEAVE_STATUS_TABS.map((tab) => (
+              <TabsTrigger
+                key={tab.value}
+                value={tab.value}
+                className="gap-1.5 font-normal"
+              >
+                {tab.label}
+                {counts ? (
+                  <span className="text-xs text-muted-foreground tabular">
+                    {counts[tab.count]}
+                  </span>
+                ) : countsFailed ? null : (
+                  <Shimmer className="h-3.5 w-4" aria-hidden />
+                )}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
 
-          <div
-            className="flex w-full flex-wrap items-center gap-2 sm:w-auto"
-            data-usertour="payroll-leave-search-filters"
+        <div
+          className="flex w-full flex-wrap items-center gap-2 sm:w-auto"
+          data-usertour="payroll-leave-search-filters"
+        >
+          <Select
+            value={leaveType}
+            onValueChange={(next) => onLeaveTypeChange(next as LeaveTypeFilter)}
           >
-            <Select
-              value={leaveType}
-              onValueChange={(next) => onLeaveTypeChange(next as LeaveTypeFilter)}
-            >
-              <SelectTrigger className="w-full sm:w-48" aria-label="Leave type">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All leave types</SelectItem>
-                {LEAVE_TYPES.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <div className="relative w-full sm:w-72">
-              <Search
-                className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-                aria-hidden
-              />
-              <Input
-                value={query}
-                onChange={(event) => onQueryChange(event.target.value)}
-                placeholder="Search employee name or notes"
-                aria-label="Search employee name or notes"
-                className="pl-9"
-              />
-            </div>
+            <SelectTrigger className="w-full sm:w-48" aria-label="Leave type">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All leave types</SelectItem>
+              {LEAVE_TYPES.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <div className="relative w-full sm:w-72">
+            <Search
+              className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+              aria-hidden
+            />
+            <Input
+              value={query}
+              onChange={(event) => onQueryChange(event.target.value)}
+              placeholder="Search employee name or notes"
+              aria-label="Search employee name or notes"
+              className="pl-9"
+            />
           </div>
         </div>
-      )}
+      </div>
 
       {loading ? (
         <TableFrame>

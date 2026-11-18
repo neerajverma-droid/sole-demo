@@ -1,18 +1,18 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAtom } from "jotai";
-import { Info, Landmark, Plus, Trash2, Wallet, X } from "lucide-react";
+import { Info, Landmark, Plus, Target, TrendingUp, Wallet, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { FormSection } from "@/components/ui/form-section";
 import { InfoTip } from "@/components/ui/info-tip";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
+import { Shimmer } from "@/components/ui/shimmer";
 import {
   Select,
   SelectContent,
@@ -24,13 +24,15 @@ import { DatePicker } from "@/components/documents/date-picker";
 import { Field } from "@/components/documents/field";
 import { MoneyInput } from "@/components/planner/money-input";
 import {
+  GOAL_ALLOCATION_HASH,
   PLANNER_ROOT,
   PlannerDetailHeader,
+  PlannerFormFooter,
   PlannerNotFound,
+  useFieldTouch,
   usePlannerSection,
 } from "@/components/planner/planner-detail";
 import { DeleteGoalDialog } from "@/components/planner/planner-dialogs";
-import { StepNumber } from "@/components/planner/step-number";
 import { deleteGoalIdAtom } from "@/lib/atoms";
 import { formatInvoiceDate, invoiceMoney, toIsoDate } from "@/lib/invoices";
 import {
@@ -67,6 +69,8 @@ import {
 } from "@/hooks/use-planner-query";
 import { fundingSourcesFromSummary } from "@/lib/planner-api";
 import { usePlannerStore } from "@/stores/planner";
+import { EVENTS } from "@/lib/analytics-events";
+import { useTrackOnce } from "@/hooks/use-track-once";
 
 const WEEKLY_TIP =
   "What's left to reach the target, divided by the weeks until the target date.";
@@ -86,6 +90,7 @@ export function GoalDetail({
   /** Undefined when creating; a goal id when opening one. */
   goalId?: string;
 }) {
+  useTrackOnce(EVENTS.CREATE_GOAL_INITIATED, !goalId);
   const router = useRouter();
   // Dated here rather than passed in, as the expense and refund forms do.
   const today = toIsoDate(new Date());
@@ -111,10 +116,30 @@ export function GoalDetail({
   const fundingQuery = useGoalFundingQuery();
 
   const editing = goalId ? goals.find((goal) => goal.id === goalId) : undefined;
+
+  /*
+   * A link ending in #allocation (a row on the Goals list) means "take me to
+   * the funding". The browser can't do it itself: this page often mounts
+   * before the goal has loaded, so the section isn't there to scroll to yet.
+   * Once the goal is, go there — once, so a later refetch doesn't pull the page
+   * back from wherever the person has since scrolled to.
+   */
+  const scrolledToAllocation = React.useRef(false);
+  React.useEffect(() => {
+    if (!editing || scrolledToAllocation.current) return;
+    if (window.location.hash !== `#${GOAL_ALLOCATION_HASH}`) return;
+    const frame = requestAnimationFrame(() => {
+      document
+        .getElementById(GOAL_ALLOCATION_HASH)
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+      scrolledToAllocation.current = true;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [editing]);
   const [draft, setDraft] = React.useState<GoalDraft>(() =>
     editing ? draftFromGoal(editing) : emptyGoalDraft(),
   );
-  const [edited, setEdited] = React.useState(false);
+  const fields = useFieldTouch();
 
   /**
    * Seed the form again the first time the goal actually arrives.
@@ -129,27 +154,34 @@ export function GoalDetail({
     if (!editing || seededId.current === editing.id) return;
     seededId.current = editing.id;
     setDraft(draftFromGoal(editing));
-    setEdited(false);
-  }, [editing]);
+    fields.reset();
+  }, [editing, fields.reset]);
 
   const patch = (values: Partial<GoalDraft>) => {
-    setEdited(true);
     setDraft((current) => ({ ...current, ...values }));
   };
 
   const issues = goalIssues(draft, goalAllocated(editing ?? { allocations: [] }));
-  const issueFor = (key: string) =>
-    edited ? issues.find((issue) => issue.key === key)?.message : undefined;
+  // Shown once a field has been left, or everything once Save is pressed.
+  const issueFor = (key: string) => fields.visible(issues, key);
 
   /**
    * The figures are read from the draft plus the saved allocations, so editing
    * the target updates them live — but a goal that hasn't been saved yet has no
    * allocations, which is the honest starting point.
    */
+  // The badge is the server's, as on the goals list, for as long as the target
+  // the server judged is the one on the form. Once the amount or date is being
+  // edited it no longer applies, so the local pacing answers live instead.
+  const serverStatusApplies =
+    !!editing &&
+    draft.targetAmount === editing.targetAmount &&
+    draft.targetDate === editing.targetDate;
   const live = {
     ...draft,
     created: editing?.created ?? today,
     allocations: editing?.allocations ?? [],
+    computedStatus: serverStatusApplies ? (editing?.computedStatus ?? null) : null,
   };
 
   const target = goalTarget(live);
@@ -166,26 +198,21 @@ export function GoalDetail({
   );
 
   const onSave = async () => {
-    setEdited(true);
+    fields.submit();
     if (issues.length > 0) return;
 
     try {
-      const saved = await saveGoal.mutateAsync({
+      await saveGoal.mutateAsync({
         id: editing?.id ?? null,
         draft,
       });
 
-      if (editing) {
-        toast.success("Goal saved", { description: goalSummaryLine(draft) });
-        router.push(PLANNER_ROOT);
-        return;
-      }
-
-      toast.success("Goal created", { description: goalSummaryLine(draft) });
-      // Replaces rather than pushes, and lands on the saved goal so allocating
-      // to it is the obvious next step — Back then leaves for the list, not for
-      // a blank form that no longer exists.
-      router.replace(`${PLANNER_ROOT}/goals/${saved.id}`);
+      toast.success(editing ? "Goal saved" : "Goal created", {
+        description: goalSummaryLine(draft),
+      });
+      // Creating and editing both end on the list; the new goal is one click
+      // away there when it's time to allocate to it.
+      router.push(PLANNER_ROOT);
     } catch (error) {
       toast.error(apiErrorMessage(error, "Failed to save goal."));
     }
@@ -215,7 +242,7 @@ export function GoalDetail({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-[15px]">
       <PlannerDetailHeader
         backHref={PLANNER_ROOT}
         backLabel="Goals"
@@ -224,32 +251,23 @@ export function GoalDetail({
           { label: "Goals", href: PLANNER_ROOT },
           { label: editing ? editing.name || "Untitled goal" : "New goal" },
         ]}
-        action={
-          <Button
-            onClick={onSave}
-            disabled={(edited && issues.length > 0) || saveGoal.isPending}
-            data-usertour="goal-save"
-          >
-            {saveGoal.isPending ? "Saving..." : "Save goal"}
-          </Button>
-        }
       />
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="space-y-4">
+      <div className="grid gap-[15px] lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="space-y-[15px]">
           {/* Step 1 ------------------------------------------------------- */}
-          <Card data-usertour="goal-target">
-            <CardHeader className="pb-4">
-              <CardTitle className="flex items-center gap-2.5 text-base">
-                <StepNumber n={1} />
-                Set the target
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
+          <div data-usertour="goal-target">
+            <FormSection
+              icon={Target}
+              title="Set the target"
+              description="What you're saving for, how much, and by when."
+              className="space-y-4"
+            >
               <Field label="Goal name" required error={issueFor("name")}>
                 <Input
                   value={draft.name}
                   onChange={(event) => patch({ name: event.target.value })}
+                  onBlur={() => fields.touch("name")}
                   placeholder="Three-month buffer"
                   aria-invalid={!!issueFor("name")}
                 />
@@ -282,6 +300,7 @@ export function GoalDetail({
                   <MoneyInput
                     value={draft.targetAmount}
                     onChange={(value) => patch({ targetAmount: value })}
+                    onBlur={() => fields.touch("targetAmount")}
                     label="Target amount"
                     invalid={!!issueFor("targetAmount")}
                   />
@@ -297,6 +316,8 @@ export function GoalDetail({
                   <DatePicker
                     value={draft.targetDate}
                     onChange={(iso) => patch({ targetDate: iso })}
+                    onClose={() => fields.touch("targetDate")}
+                    invalid={!!issueFor("targetDate")}
                     fromDate={new Date()}
                     label="Target date"
                   />
@@ -319,22 +340,27 @@ export function GoalDetail({
                   tip={WEEKLY_TIP}
                 />
               </dl>
-            </CardContent>
-          </Card>
+            </FormSection>
+          </div>
 
           {/* Step 2 ------------------------------------------------------- */}
-          <Card data-usertour="goal-progress">
-            <CardHeader className="flex-row items-center justify-between space-y-0 pb-4">
-              <CardTitle className="flex items-center gap-2.5 text-base">
-                <StepNumber n={2} />
-                Track progress
-              </CardTitle>
-              {/* Suppressed entirely until the goal is measurable. */}
-              {status && (
-                <Badge variant={goalStatusVariant(status)}>{status}</Badge>
-              )}
-            </CardHeader>
-            <CardContent className="space-y-5">
+          <div
+            id={GOAL_ALLOCATION_HASH}
+            data-usertour="goal-progress"
+            className="scroll-mt-6"
+          >
+            <FormSection
+              icon={TrendingUp}
+              title="Track progress"
+              description="What's been set aside against the target."
+              // Suppressed entirely until the goal is measurable.
+              action={
+                status ? (
+                  <Badge variant={goalStatusVariant(status)}>{status}</Badge>
+                ) : undefined
+              }
+              className="space-y-5"
+            >
               <div className="flex flex-wrap items-center gap-5">
                 <ProgressRing
                   percent={progress * 100}
@@ -382,7 +408,7 @@ export function GoalDetail({
                 <AllocationBlock
                   goalId={editing.id}
                   sources={sources}
-                  loadingSources={fundingQuery.isLoading}
+                  loadingSources={fundingQuery.isFetching}
                   // Never more than the goal still needs, and never more than
                   // the account holds — whichever runs out first.
                   remaining={remaining}
@@ -468,19 +494,17 @@ export function GoalDetail({
                   )}
                 </div>
               )}
-            </CardContent>
-          </Card>
+            </FormSection>
+          </div>
         </div>
 
         {/* Sidebar ------------------------------------------------------- */}
-        <Card className="h-fit lg:sticky lg:top-6">
-          <CardHeader className="pb-4">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Info className="size-4 text-primary" aria-hidden />
-              How Sole tracks this goal
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4 text-sm">
+        <div className="h-fit lg:sticky lg:top-6">
+          <FormSection
+            icon={Info}
+            title="How Sole tracks this goal"
+            className="space-y-4 text-sm"
+          >
             <div className="space-y-1">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 Contribution rule
@@ -500,25 +524,19 @@ export function GoalDetail({
                 accounts and nothing appears in your ledger.
               </p>
             </div>
-          </CardContent>
-        </Card>
+          </FormSection>
+        </div>
       </div>
 
-      {/* Footer. Save lives in the header row, so it isn't offered twice. */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-        <Button
-          variant="ghost"
-          className="text-destructive hover:text-destructive"
-          disabled={!editing}
-          onClick={() => editing && setDeleteId(editing.id)}
-        >
-          <Trash2 />
-          Delete
-        </Button>
-        <Button variant="outline" asChild>
-          <Link href={PLANNER_ROOT}>Back to goals</Link>
-        </Button>
-      </div>
+      {/* Save, like every other form, lives bottom right. */}
+      <PlannerFormFooter
+        onCancel={() => router.push(PLANNER_ROOT)}
+        onSave={onSave}
+        saving={saveGoal.isPending}
+        saveLabel={editing ? "Update goal" : "Save goal"}
+        onDelete={editing ? () => setDeleteId(editing.id) : undefined}
+        saveTourId="goal-save"
+      />
 
       {/* Mounted here rather than on the list: this is the only place a goal
           can be deleted from, and confirming has to leave the page. */}
@@ -648,11 +666,39 @@ function AllocationBlock({
     setNote("");
   };
 
-  if (loadingSources && sources.length === 0) {
+  // Whenever the sources are being fetched, including a refresh over cached
+  // ones: the balances shown beside the radio buttons are what a person
+  // allocates against, so stale figures aren't worth showing.
+  if (loadingSources) {
     return (
-      <p className="rounded-lg border border-dashed border-border surface-subtle p-4 text-sm text-muted-foreground">
-        Loading funding sources...
-      </p>
+      <div
+        className="space-y-4 rounded-lg border border-border p-4"
+        aria-busy
+        aria-label="Loading funding sources"
+      >
+        <Shimmer className="h-4 w-36" />
+        <div className="space-y-2">
+          {[0, 1].map((row) => (
+            <div
+              key={row}
+              className="flex items-center gap-3 rounded-md border border-border p-3"
+            >
+              <Shimmer className="size-4 rounded-full" />
+              <Shimmer className="size-8 rounded-md" />
+              <Shimmer className="h-4 flex-1" />
+              <div className="space-y-1.5">
+                <Shimmer className="ml-auto h-4 w-20" />
+                <Shimmer className="ml-auto h-3 w-24" />
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Shimmer className="h-9" />
+          <Shimmer className="h-9" />
+        </div>
+        <Shimmer className="h-8 w-24" />
+      </div>
     );
   }
 

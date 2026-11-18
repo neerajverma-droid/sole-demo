@@ -4,8 +4,6 @@
  */
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
 import {
   formatInvoiceDate,
@@ -14,6 +12,8 @@ import {
   type InvoiceDraft,
   type InvoiceLineItem,
 } from "@/lib/invoices";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
 
 export const EXPENSE_FILTERS = ["All", "Matched", "Pending"] as const;
 export type ExpenseFilter = (typeof EXPENSE_FILTERS)[number];
@@ -191,6 +191,17 @@ export type Expense = {
   isSplit: boolean;
   /** The full original amount, before the personal portion was split out. */
   totalAmount: number;
+  /**
+   * The server's own breakdown of `totalAmount` — detail response only, null
+   * on a list row. What sole-webapp's View (`ExpensesInfo.js`) shows as Sub
+   * Total, GST and Price (Personal).
+   */
+  subTotal?: number | null;
+  totalGst?: number | null;
+  personalAmount?: number | null;
+  /** The supplier bill this expense was approved from, if any. */
+  billId?: string | null;
+  billNo?: string | null;
 };
 
 /**
@@ -759,12 +770,17 @@ type ApiExpenseDocument = {
 };
 
 /** The shape common to both the list row and the detail response. */
-type ApiExpenseRow = {
+export type ApiExpenseRow = {
   expense_id: number | string;
   name?: string | null;
   price?: number | string | null;
   total_price?: number | string | null;
   is_split?: number | boolean | null;
+  business_amount?: number | string | null;
+  personal_amount?: number | string | null;
+  /** Detail response only — the breakdown of `total_price`. */
+  sub_total?: number | string | null;
+  total_gst?: number | string | null;
   date: string;
   gst?: number | boolean | null;
   gst_percentage?: number | string | null;
@@ -779,6 +795,8 @@ type ApiExpenseRow = {
   journal_entry_id?: number | string | null;
   credit_note_id?: number | string | null;
   credit_note_no?: string | null;
+  bill_id?: number | string | null;
+  bill_no?: string | null;
   account_subcategory?: ApiExpenseCategory | null;
   client?: ApiExpenseParty | null;
   documents?: ApiExpenseDocument[] | null;
@@ -788,13 +806,31 @@ type ApiExpenseRow = {
   contact?: { contact_id?: number | string | null; name?: string | null } | null;
 };
 
+function optionalNumber(value: number | string | null | undefined): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+/**
+ * sole-webapp's own test (`isSplitExpense` in `ExpensesInfo.js`): the flag,
+ * or a business portion that's less than the total for rows saved before the
+ * flag was reliably set.
+ */
+function isApiExpenseSplit(raw: ApiExpenseRow): boolean {
+  if (Number(raw.is_split) === 1) return true;
+  const business = Number(raw.business_amount) || 0;
+  const total = Number(raw.total_price) || Number(raw.price) || 0;
+  return business > 0 && total > 0 && business < total;
+}
+
 /**
  * The backend only ever persists cash vs. not-cash — a specific method like
  * "Bank transfer" or "Direct debit" has no column to round-trip through, so
  * anything that isn't cash reads back as this generic default rather than a
  * guess at which one it really was.
  */
-function mapApiExpense(raw: ApiExpenseRow): Expense {
+export function mapApiExpense(raw: ApiExpenseRow): Expense {
   const amount = Number(raw.price) || 0;
   const remaining = Math.max(0, Number(raw.remainingAmount) || 0);
   const reconciled = Boolean(Number(raw.is_reconciled)) || (amount > 0 && remaining <= 0);
@@ -853,8 +889,13 @@ function mapApiExpense(raw: ApiExpenseRow): Expense {
     possibleMatch: Number(raw.possible_match) || 0,
     creditNoteId: raw.credit_note_id != null ? String(raw.credit_note_id) : null,
     creditNoteNo: raw.credit_note_no?.trim() || null,
-    isSplit: Boolean(Number(raw.is_split)),
+    isSplit: isApiExpenseSplit(raw),
     totalAmount: Number(raw.total_price) || amount,
+    subTotal: optionalNumber(raw.sub_total),
+    totalGst: optionalNumber(raw.total_gst),
+    personalAmount: optionalNumber(raw.personal_amount),
+    billId: raw.bill_id != null ? String(raw.bill_id) : null,
+    billNo: raw.bill_no?.trim() || null,
   };
 }
 
@@ -1090,24 +1131,10 @@ export async function createExpenseApi(
   if (!response.data?.success || response.data.data?.id == null) {
     throw new Error(response.data?.message || "Failed to save expense.");
   }
-
-  /*
-   * `amount` is required, not optional: "how much are people expensing" is
-   * the question this answers, and a count of expenses answers none of it.
-   *
-   * `has_receipt` is here because it is the one thing about an expense that
-   * can only be known at the moment it is created — whether a file came with
-   * it. Reading it back later from the record cannot distinguish a receipt
-   * attached at creation from one added a week afterwards.
-   */
-  track(EVENTS.EXPENSE_LOGGED, {
-    amount: draft.amount,
-    has_receipt: !!files?.length,
-    has_gst: Boolean(draft.gst),
-    payment_method: draft.paymentMethod ?? null,
-    is_split: Boolean(draft.splitEnabled),
+  track(EVENTS.EXPENSE_ADDED, {
+    source: files?.length ? "upload" : "manual",
+    expense_category: draft.category || null,
   });
-
   return { id: String(response.data.data.id) };
 }
 

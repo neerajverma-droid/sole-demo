@@ -15,7 +15,7 @@ describe("MIGRATION_STEPS", () => {
 
   it("routes only Bank Transactions; every other step opens its own dialog", () => {
     expect(MIGRATION_STEPS.map((step) => step.target)).toEqual([
-      { kind: "route", href: "/transactions/bulk" },
+      { kind: "route", href: "/transactions/bulk?from=migrations" },
       { kind: "dialog", dialog: "contacts" },
       { kind: "dialog", dialog: "invoices" },
       { kind: "dialog", dialog: "expenses" },

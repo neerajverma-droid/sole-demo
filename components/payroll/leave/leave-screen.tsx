@@ -111,15 +111,6 @@ export function LeaveScreen() {
   const rowsLoading =
     query !== debouncedQuery || requestsQuery.isPlaceholderData;
 
-  /*
-   * Nothing on file at all — loaded, unnarrowed (the "All" tab included) and
-   * empty, never a failed fetch. Cards and tabs counting zeros have nothing
-   * to say then, so only the header and "No leave requests yet" remain. The
-   * header keeps its button: it's how the first request gets made.
-   */
-  const trulyEmpty =
-    requestsQuery.isSuccess && !rowsLoading && !filtered && total === 0;
-
   const openNew = () => setDrawer({ open: true, editId: null });
 
   const header = (
@@ -155,14 +146,12 @@ export function LeaveScreen() {
     <div className="space-y-[15px]">
       {header}
 
-      {!trulyEmpty && (
-        <div data-usertour="payroll-leave-stats">
-          <StatCards
-            stats={leaveCards(counts, countsQuery.isError)}
-            loading={countsQuery.isPending && !countsQuery.isError}
-          />
-        </div>
-      )}
+      <div data-usertour="payroll-leave-stats">
+        <StatCards
+          stats={leaveCards(counts, countsQuery.isError)}
+          loading={countsQuery.isPending && !countsQuery.isError}
+        />
+      </div>
 
       <LeaveTable
         requests={requests}
@@ -172,7 +161,6 @@ export function LeaveScreen() {
         failed={requestsQuery.isError}
         onRetry={() => void requestsQuery.refetch()}
         filtered={filtered}
-        empty={trulyEmpty}
         status={status}
         onStatusChange={setStatus}
         leaveType={leaveType}

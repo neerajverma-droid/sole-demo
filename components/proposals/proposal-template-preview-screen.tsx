@@ -25,21 +25,19 @@ import {
 } from "@/components/ui/empty";
 import {
   PREVIEW_TABS,
+  PreviewSectionNav,
   ProposalDocumentPages,
   SectionCard,
 } from "@/components/proposals/proposal-document";
-import { useAccountIdentity } from "@/hooks/use-account-identity";
+import { PreviewScreenSkeleton } from "@/components/proposals/preview-screen-skeleton";
+import { SectionTemplatePreviewScreen } from "@/components/proposals/section-template-preview-screen";
 import { useActiveBusiness } from "@/hooks/use-active-business";
 import { useInvalidateProposals } from "@/hooks/use-proposals-query";
 import { proposalTemplatePickerOpenAtom } from "@/lib/atoms";
 import { apiErrorMessage } from "@/lib/api-error";
 import { generateProposalPdf } from "@/lib/proposal-pdf";
-import {
-  createProposalFromTemplateApi,
-  fetchProposalTemplates,
-  previewFromTemplate,
-} from "@/lib/proposals";
-import { cn } from "@/lib/utils";
+import { templateQueryOptions } from "@/lib/proposal-templates";
+import { createProposalFromTemplateApi, previewFromTemplate } from "@/lib/proposals";
 
 /**
  * A template as the client will step through the proposal made from it —
@@ -51,15 +49,15 @@ export function ProposalTemplatePreviewScreen({ templateId }: { templateId: stri
   const invalidate = useInvalidateProposals();
   const setPickerOpen = useSetAtom(proposalTemplatePickerOpenAtom);
   const { business } = useActiveBusiness();
-  const identity = useAccountIdentity();
   const [index, setIndex] = React.useState(0);
   const [downloading, setDownloading] = React.useState(false);
   const [applying, setApplying] = React.useState(false);
   const pdfRef = React.useRef<HTMLDivElement>(null);
 
-  // The picker's own list — already cached when this opens from it.
-  const query = useQuery({ queryKey: ["proposal-templates"], queryFn: fetchProposalTemplates });
-  const template = query.data?.find((entry) => entry.id === templateId) ?? null;
+  // Just this template, with its content — GET /proposal/templates/:id. The
+  // list only carries what the cards show.
+  const query = useQuery(templateQueryOptions(templateId));
+  const template = query.data && query.data.type === "PROPOSAL" ? query.data : null;
 
   const preview = React.useMemo(() => {
     if (!template) return null;
@@ -75,14 +73,9 @@ export function ProposalTemplatePreviewScreen({ templateId }: { templateId: stri
               account_number: business.bank.accountNumber,
             }
           : null,
-      },
-      {
-        name: business?.name || "",
-        email: business?.email || identity.email || "",
-        phone: business?.countryCode && business?.mobile ? `${business.countryCode}${business.mobile}` : "",
-      },
+      }
     );
-  }, [template, business, identity.email]);
+  }, [template, business]);
 
   // Back to the picker it came from; straight to Proposals on a direct visit.
   const close = () => {
@@ -93,12 +86,12 @@ export function ProposalTemplatePreviewScreen({ templateId }: { templateId: stri
   const goTo = (next: number) => setIndex(Math.min(Math.max(next, 0), PREVIEW_TABS.length - 1));
 
   if (query.isLoading) {
-    return (
-      <div className="flex h-dvh flex-col items-center justify-center gap-3">
-        <Loader2 className="size-8 animate-spin text-primary" aria-hidden />
-        <p className="text-sm font-medium text-muted-foreground">Loading template preview…</p>
-      </div>
-    );
+    return <PreviewScreenSkeleton label="Loading template preview" />;
+  }
+
+  // Introduction, terms, thank-you and email templates: the one page (or email) they fill.
+  if (query.data && query.data.type !== "PROPOSAL") {
+    return <SectionTemplatePreviewScreen template={query.data} />;
   }
 
   if (!template || !preview) {
@@ -156,40 +149,14 @@ export function ProposalTemplatePreviewScreen({ templateId }: { templateId: stri
   return (
     <div className="flex h-dvh flex-col">
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border bg-background px-4 py-3 md:px-5">
-        <span className="min-w-0 truncate text-sm font-semibold">{template.name}</span>
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold xl:flex-none">{template.name}</span>
 
-        <nav className="hidden items-center md:flex" aria-label="Proposal sections">
-          {PREVIEW_TABS.map((tab, at) => (
-            <button
-              key={tab}
-              type="button"
-              onClick={() => goTo(at)}
-              aria-current={at === index ? "step" : undefined}
-              className={cn(
-                "flex items-center text-sm",
-                at === index ? "text-foreground" : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <span className="flex items-center gap-2">
-                <span
-                  className={cn(
-                    "grid size-5 place-items-center rounded-full border text-[10px]",
-                    at === index ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background",
-                  )}
-                >
-                  {at + 1}
-                </span>
-                {tab}
-              </span>
-              {at !== PREVIEW_TABS.length - 1 && <ChevronRight className="mx-3 size-3.5 text-muted-foreground" />}
-            </button>
-          ))}
-        </nav>
+        <PreviewSectionNav index={index} onSelect={goTo} className="hidden xl:flex" />
 
-        <div className="flex shrink-0 items-center gap-2">
-          <Button variant="outline" size="sm" disabled={downloading || applying} onClick={download}>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" aria-label="Download PDF" disabled={downloading || applying} onClick={download}>
             {downloading ? <Loader2 className="animate-spin" /> : <Download />}
-            {downloading ? "Generating…" : "Download PDF"}
+            <span className="hidden sm:inline">{downloading ? "Generating…" : "Download PDF"}</span>
           </Button>
           <Button size="sm" disabled={applying} onClick={useTemplate}>
             {applying && <Loader2 className="animate-spin" />}
@@ -201,6 +168,13 @@ export function ProposalTemplatePreviewScreen({ templateId }: { templateId: stri
           </Button>
         </div>
       </header>
+
+      {/* Below xl the steps get their own row, scrolling sideways. */}
+      <PreviewSectionNav
+        index={index}
+        onSelect={goTo}
+        className="shrink-0 border-b border-border bg-background px-4 py-2 xl:hidden"
+      />
 
       <div className="shrink-0 border-b border-primary/30 bg-primary/10 px-5 py-2 text-sm">
         <span className="font-medium">Template Preview</span> — this is what your client will see in a proposal made

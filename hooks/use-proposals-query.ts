@@ -13,6 +13,8 @@ import {
   fetchProposalsPage,
   markProposalPaidApi,
   sendProposalApi,
+  sendProposalReminderApi,
+  type ReminderDraft,
   type ProposalStatus,
 } from "@/lib/proposals";
 
@@ -64,6 +66,14 @@ export function useMarkProposalPaidMutation() {
   return useMutation({
     mutationFn: ({ id, paid }: { id: string; paid: boolean }) =>
       markProposalPaidApi(id, paid),
+    onSuccess: invalidate,
+  });
+}
+
+export function useSendReminderMutation() {
+  const invalidate = useInvalidateProposals();
+  return useMutation({
+    mutationFn: ({ id, draft }: { id: string; draft: ReminderDraft }) => sendProposalReminderApi(id, draft),
     onSuccess: invalidate,
   });
 }

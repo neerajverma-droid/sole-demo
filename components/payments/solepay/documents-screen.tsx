@@ -190,6 +190,7 @@ export function SolePayDocumentsScreen() {
         <FormSection
           icon={FileText}
           title="Documents"
+          tourId="solepay-documents"
           description="The paperwork that verifies everything above."
           headerClassName={SECTION_HEADER}
           className="space-y-4 p-4 sm:p-6"

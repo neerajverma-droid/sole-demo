@@ -4,9 +4,12 @@
  * Ported from sole-webapp's `components/Migration/BulkAssetMigration.js`,
  * which posts `{ assets: [...] }` to `/assets/bulk/create`.
  *
- * As with expenses, the Category column names an account from the chart of
- * accounts and has to resolve to an `account_subcategory_id`, so the spec is
- * built against the fetched list rather than exported as a constant.
+ * As with expenses, the backend wants an `account_subcategory_id`, so the spec
+ * is built against the fetched chart of accounts (its Assets accounts — the
+ * same ones the old importer's dropdown offered) rather than exported as a
+ * constant. That list goes to the AI formatter with the file as id and name;
+ * each row comes back with the id of the account it fits, or nothing, and
+ * Review shows a dropdown with it chosen, for the person to change.
  *
  * This replaces the older row-at-a-time importer in `lib/asset-import.ts`,
  * whose header warned off `/assets/bulk/create` because the endpoint dropped
@@ -45,6 +48,10 @@ export function assetImportSpec(
   country: BulkImportCountry = DEFAULT_BULK_IMPORT_COUNTRY,
 ): BulkImportSpec {
   const known = categories.length > 0;
+  const categoryOptions = categories.map(({ id, name }) => ({
+    value: id,
+    label: name,
+  }));
   const tax = country.taxWord;
   const renamed = tax !== "GST";
   const taxWord = tax.toLowerCase();
@@ -66,7 +73,11 @@ export function assetImportSpec(
         required: true,
         desc: "What it is",
         aliases: ["asset name", "name", "asset", "item", "equipment"],
-        review: { heading: "Asset", editor: { kind: "text" } },
+        review: {
+          heading: "Asset",
+          editor: { kind: "text" },
+          editWidth: "min-w-48",
+        },
       },
       {
         label: "Category",
@@ -74,7 +85,17 @@ export function assetImportSpec(
         required: true,
         desc: "An asset account from your chart of accounts",
         aliases: ["category", "asset category", "account", "asset type"],
-        review: { heading: "Category", editor: { kind: "text" } },
+        review: {
+          heading: "Category",
+          editor: {
+            kind: "choice",
+            options: categoryOptions,
+            placeholder: "Choose a category",
+            // A plain-parse fallback leaves the file's own wording in the cell.
+            resolve: (raw) => matchCategory(raw, categories) ?? "",
+          },
+          editWidth: "min-w-56",
+        },
       },
       {
         label: "Purchase date",
@@ -82,7 +103,12 @@ export function assetImportSpec(
         required: true,
         desc: "DD/MM/YYYY",
         aliases: ["purchase date", "date", "date of purchase", "acquired"],
-        review: { heading: "Purchased", editor: { kind: "text" }, mono: true },
+        review: {
+          heading: "Purchased",
+          editor: { kind: "text" },
+          mono: true,
+          editWidth: "min-w-36",
+        },
       },
       {
         label: "Purchase price",
@@ -94,6 +120,7 @@ export function assetImportSpec(
           heading: "Price",
           editor: { kind: "text", inputMode: "decimal" },
           mono: true,
+          editWidth: "min-w-32",
         },
       },
       {
@@ -105,6 +132,7 @@ export function assetImportSpec(
         review: {
           heading: "Paid",
           editor: { kind: "select", options: YES_NO, placeholder: "Yes / No" },
+          editWidth: "min-w-28",
         },
       },
       {
@@ -123,6 +151,7 @@ export function assetImportSpec(
           heading: tax,
           editor: { kind: "text", inputMode: "decimal" },
           mono: true,
+          editWidth: "min-w-28",
         },
       },
       {
@@ -135,6 +164,13 @@ export function assetImportSpec(
         label: "Supplier phone",
         desc: "Optional",
         aliases: ["supplier phone", "phone", "mobile", "vendor phone"],
+        // Checked on import, so it needs a cell to be fixed in.
+        review: {
+          heading: "Phone",
+          editor: { kind: "text", inputMode: "tel" },
+          mono: true,
+          editWidth: "min-w-44",
+        },
       },
       {
         label: "Description",
@@ -186,29 +222,41 @@ export function assetImportSpec(
     issues: [
       {
         message: "Asset name is required",
+        hint: "Required",
+        field: "Asset name",
         summary: "missing an asset name",
         test: (row) => row["Asset name"].trim() === "",
       },
       {
         message: "Category is required",
-        summary: "missing a category",
-        test: (row) => row["Category"].trim() === "",
+        hint: "Choose a category",
+        field: "Category",
+        summary: "without a category",
+        // Not while the list is empty (still loading, or failed): there's
+        // nothing to choose from, so asking would make every row unfixable.
+        test: (row) => known && row["Category"].trim() === "",
       },
       {
-        message: "Category doesn't match one of your asset accounts",
+        message: "Category isn't one of your asset accounts",
+        hint: "Not on your chart of accounts",
+        field: "Category",
         summary: "naming a category that isn't on your chart of accounts",
         test: (row) =>
           known &&
           row["Category"].trim() !== "" &&
-          matchCategory(row["Category"], categories) === null,
+          !categories.some((category) => category.id === row["Category"].trim()),
       },
       {
         message: "Purchase date must be DD/MM/YYYY",
+        hint: "Use DD/MM/YYYY",
+        field: "Purchase date",
         summary: "missing a valid Purchase date",
         test: (row) => !parseBulkDate(row["Purchase date"]),
       },
       {
         message: "Purchase date is in the future",
+        hint: "Can't be in the future",
+        field: "Purchase date",
         summary: "dated in the future",
         test: (row) => {
           const date = parseBulkDate(row["Purchase date"]);
@@ -217,23 +265,31 @@ export function assetImportSpec(
       },
       {
         message: "Purchase price must be a positive number",
+        hint: "Enter a valid amount",
+        field: "Purchase price",
         summary: "missing a valid Purchase price",
         test: (row) =>
           row["Purchase price"].trim() === "" || !isMoney(row["Purchase price"]),
       },
       {
         message: "Paid must be Yes or No",
+        hint: "Choose Yes or No",
+        field: "Paid",
         summary: "missing a Yes/No for Paid",
         test: (row) => parseBulkBoolean(row["Paid"]) === null,
       },
       {
         message: `${tax} amount must be a number`,
+        hint: "Enter an amount",
+        field: "GST amount",
         summary: `carrying an unreadable ${tax} amount`,
         test: (row) =>
           row["GST amount"].trim() !== "" && !isMoney(row["GST amount"]),
       },
       {
         message: `${tax} amount is more than the purchase price`,
+        hint: "More than the price",
+        field: "GST amount",
         summary: `carrying more ${tax} than price`,
         // Caught here because nothing downstream checks it, and an asset
         // whose GST exceeds its cost quietly distorts every depreciation
@@ -247,6 +303,8 @@ export function assetImportSpec(
       },
       {
         message: "Invalid supplier phone",
+        hint: "Use 8–15 digits",
+        field: "Supplier phone",
         summary: "carrying a malformed phone number",
         test: (row) =>
           row["Supplier phone"].trim() !== "" && !isPhone(row["Supplier phone"]),

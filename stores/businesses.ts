@@ -7,8 +7,6 @@ import {
   type BusinessProfile,
   type BusinessSubscription,
 } from "@/lib/businesses";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { getBusinessId, setBusinessId } from "@/utils/businessStorage";
 
 /**
@@ -130,24 +128,10 @@ export const useBusinessesStore = create<BusinessesState>()(
         const target = get().businesses.find((business) => business.id === id);
         if (!target || !target.paid) return;
 
-        /*
-         * Only a real change counts. `select` is also called on rehydrate and
-         * whenever the switcher re-renders with the same business open, and
-         * counting those would turn "how often do people switch business"
-         * into a count of page loads.
-         */
-        const previous = get().activeId;
-
         // The axios client reads business_id from here on every request —
         // this is the one place selecting a business actually takes effect.
         setBusinessId(id);
         set({ activeId: id });
-
-        if (previous && previous !== id) {
-          track(EVENTS.BUSINESS_SWITCHED, {
-            business_count: get().businesses.length,
-          });
-        }
       },
 
       setDefault: async (id) => {

@@ -122,6 +122,22 @@ export type PlReport = {
     expenses: PlAmounts;
     grossProfit: PlAmounts;
   };
+  /**
+   * Whether Income, Cost of Sales, Expenses and LIDT fold GST back into each
+   * account's own figure. Echoed back from the backend rather than read off
+   * the request, so the banner can never disagree with the numbers under it.
+   */
+  gstInclusive: boolean;
+};
+
+/** One of the business's financial years, as `getFinancialYears` lists them. */
+export type PlFinancialYear = {
+  id: string;
+  /** "2025-2026". */
+  label: string;
+  /** ISO `YYYY-MM-DD`. */
+  from: string;
+  to: string;
 };
 
 /* ------------------------------------------------------------------ *
@@ -141,6 +157,7 @@ type BackendPlResponse = {
   message?: string;
   columns?: string[];
   sections?: BackendReportSection[];
+  gst_inclusive?: boolean;
 };
 
 const MONTH_ABBREVIATIONS = [
@@ -186,12 +203,16 @@ function parseReportAmount(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-async function postPlView(span: Span): Promise<BackendPlResponse> {
+async function postPlView(
+  span: Span,
+  gstInclusive: boolean,
+): Promise<BackendPlResponse> {
   const form = new FormData();
   form.append("report_type_id", PL_REPORT_TYPE_ID);
   form.append("action", "view");
   form.append("start_date", format(span.from, "yyyy-MM-dd"));
   form.append("end_date", format(span.to, "yyyy-MM-dd"));
+  form.append("gst_inclusive", gstInclusive ? "true" : "false");
   const response = await api.post<BackendPlResponse>(
     apiRoutes.reporting.reports,
     form,
@@ -388,11 +409,12 @@ export async function fetchPlReport(
   period: PlPeriod,
   range: PlRange | null,
   fiscalYearStart: FiscalYearStart = AU_FISCAL_YEAR_START,
+  gstInclusive = false,
 ): Promise<PlReport> {
   const shape = periodShape(period, range, undefined, fiscalYearStart);
   const [current, previous] = await Promise.all([
-    postPlView(shape.current),
-    postPlView(shape.previous),
+    postPlView(shape.current, gstInclusive),
+    postPlView(shape.previous, gstInclusive),
   ]);
 
   if (current.success === false) {
@@ -430,7 +452,41 @@ export async function fetchPlReport(
     columns,
     blocks,
     headline: { netProfit, income, expenses, grossProfit },
+    // The backend's own flag, which is what actually shaped these figures —
+    // not the request's, which a stale response could disagree with.
+    gstInclusive: current.gst_inclusive ?? gstInclusive,
   };
+}
+
+/**
+ * The business's financial years, for picking one further back than "Last
+ * financial year" covers.
+ *
+ * `sole-ocr`'s `getFinancialYears` has no date-range params of its own — it
+ * always returns every year on file, earliest first — so there's nothing to
+ * parameterise here.
+ */
+export async function fetchPlFinancialYears(): Promise<PlFinancialYear[]> {
+  const response = await api.post<{
+    success?: boolean;
+    data?: {
+      financialYear?: Array<{
+        id: number | string;
+        start_year: number | string;
+        end_year: number | string;
+        start_date: string;
+        end_date: string;
+      }>;
+    };
+  }>(apiRoutes.tax.getFinancialYears, new FormData());
+
+  const years = response.data?.data?.financialYear ?? [];
+  return years.map((year) => ({
+    id: String(year.id),
+    label: `${year.start_year}-${year.end_year}`,
+    from: year.start_date,
+    to: year.end_date,
+  }));
 }
 
 /* ------------------------------------------------------------------ *

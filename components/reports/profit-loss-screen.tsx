@@ -1,6 +1,5 @@
 "use client";
 
-import * as React from "react";
 import { format } from "date-fns";
 import { useAtom, useSetAtom } from "jotai";
 import {
@@ -29,7 +28,11 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { InfoTip } from "@/components/ui/info-tip";
+import { Label } from "@/components/ui/label";
 import { Shimmer } from "@/components/ui/shimmer";
+import { Switch } from "@/components/ui/switch";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { PageHeader } from "@/components/layout/page-header";
 import { ProfitLossBar } from "@/components/reports/profit-loss-bar";
 import { ProfitLossSummary } from "@/components/reports/profit-loss-summary";
@@ -40,19 +43,27 @@ import {
 } from "@/components/reports/report-controls";
 import { ReportPrintFrame } from "@/components/reports/report-print-frame";
 import { SendReportDialog } from "@/components/reports/send-report-dialog";
-import { usePlReportQuery } from "@/hooks/use-profit-loss-query";
+import {
+  usePlFinancialYearsQuery,
+  usePlReportQuery,
+} from "@/hooks/use-profit-loss-query";
 import { useFiscalYearStart } from "@/hooks/use-fiscal-year-start";
 import { apiErrorMessage } from "@/lib/api-error";
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
 import {
+  plGstInclusiveAtom,
+  plLayoutAtom,
   plPeriodAtom,
   plRangeAtom,
   sendReportOpenAtom,
 } from "@/lib/atoms";
-import {  periodShape, spanLabel } from "@/lib/report-periods";
-import { PL_PERIODS, PL_REPORT_TYPE_ID, reportMoney } from "@/lib/reports";
-import { useCountryContext } from "@/hooks/use-country-context";
+import { periodShape, spanLabel } from "@/lib/report-periods";
+import {
+  PL_PERIODS,
+  PL_REPORT_TYPE_ID,
+  reportMoney,
+} from "@/lib/reports";
 
 const PL_TIP =
   "Income less every cost, for the period you choose. The figures are what's been recorded in Sole — coding anything still unreconciled will move them.";
@@ -73,6 +84,8 @@ const PL_TIP =
 export function ProfitLossScreen() {
   const [period, setPeriod] = useAtom(plPeriodAtom);
   const [range, setRange] = useAtom(plRangeAtom);
+  const [gstInclusive, setGstInclusive] = useAtom(plGstInclusiveAtom);
+  const [layout, setLayout] = useAtom(plLayoutAtom);
   const setSendOpen = useSetAtom(sendReportOpenAtom);
 
   const {
@@ -81,7 +94,10 @@ export function ProfitLossScreen() {
     isError,
     error,
     refetch,
-  } = usePlReportQuery(period, range);
+  } = usePlReportQuery(period, range, gstInclusive);
+  // Years further back than "Last financial year", offered in the period
+  // control itself rather than a second year picker beside it.
+  const { data: financialYears } = usePlFinancialYearsQuery();
 
   const empty = report ? report.blocks.length === 0 : false;
   // The header and the custom-range control need a range label before the
@@ -91,7 +107,7 @@ export function ProfitLossScreen() {
   const shape = periodShape(period, range, undefined, fiscalYearStart);
   const rangeLabel = report?.rangeLabel ?? spanLabel(shape.current);
 
-  const downloadReport = async (fileFormat: "pdf" | "csv") => {
+  const downloadReport = async (fileFormat: "pdf" | "csv" | "xlsx") => {
     try {
       const toastId = toast.loading(`Preparing ${fileFormat.toUpperCase()}...`);
       const form = new FormData();
@@ -100,6 +116,7 @@ export function ProfitLossScreen() {
       form.append("start_date", format(shape.current.from, "yyyy-MM-dd"));
       form.append("end_date", format(shape.current.to, "yyyy-MM-dd"));
       form.append("format", fileFormat);
+      form.append("gst_inclusive", gstInclusive ? "true" : "false");
 
       const response = await api.post(apiRoutes.reporting.reports, form, {
         responseType: "blob",
@@ -123,7 +140,7 @@ export function ProfitLossScreen() {
       link.click();
       document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
-      
+
       toast.success("Download started", { id: toastId });
     } catch (err: unknown) {
       toast.error(apiErrorMessage(err, "Couldn't download the report. Try again."));
@@ -144,9 +161,10 @@ export function ProfitLossScreen() {
           onChange={setPeriod}
           range={range}
           onRangeChange={setRange}
+          financialYears={financialYears}
         />
 
-        <Button onClick={() => setSendOpen(true)}>
+        <Button onClick={() => setSendOpen(true)} data-usertour="report-send">
           <Send />
           Send report
         </Button>
@@ -166,6 +184,10 @@ export function ProfitLossScreen() {
               <FileSpreadsheet className="text-muted-foreground" />
               Download CSV
             </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => downloadReport("xlsx")}>
+              <FileSpreadsheet className="text-muted-foreground" />
+              Download Excel
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             {/* The one action here the browser can actually do today. */}
             <DropdownMenuItem onSelect={() => window.print()}>
@@ -180,10 +202,64 @@ export function ProfitLossScreen() {
         <ReportCustomRange
           from={range?.from ?? ""}
           to={range?.to ?? ""}
-          label={rangeLabel}
           onChange={setRange}
         />
       )}
+
+      {/*
+        Outside `ReportPrintFrame`, so none of this reaches the printed page —
+        `globals.css` only unhides `.print-document` when printing.
+      */}
+      <div className="flex flex-wrap items-center justify-end gap-3 rounded-lg border border-dashed border-border px-4 py-2.5">
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="flex items-center gap-2">
+            <Label htmlFor="pl-layout" className="text-xs text-muted-foreground">
+              Columns
+            </Label>
+            <ToggleGroup
+              id="pl-layout"
+              type="single"
+              value={layout}
+              onValueChange={(next) =>
+                next && setLayout(next as "total" | "monthly")
+              }
+              className="gap-1.5"
+            >
+              <ToggleGroupItem
+                value="total"
+                variant="outline"
+                size="sm"
+                className="px-3 text-xs data-[state=on]:border-primary/30 data-[state=on]:bg-primary/10 data-[state=on]:text-primary"
+              >
+                Period total
+              </ToggleGroupItem>
+              <ToggleGroupItem
+                value="monthly"
+                variant="outline"
+                size="sm"
+                className="px-3 text-xs data-[state=on]:border-primary/30 data-[state=on]:bg-primary/10 data-[state=on]:text-primary"
+              >
+                Monthly breakdown
+              </ToggleGroupItem>
+            </ToggleGroup>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Label
+              htmlFor="pl-gst-inclusive"
+              className="flex items-center gap-1 text-xs text-muted-foreground"
+            >
+              Include GST
+              <InfoTip text="On: every account across Income, Cost of Sales, Expenses and LIDT includes GST. Off: all amounts exclude GST (default)." />
+            </Label>
+            <Switch
+              id="pl-gst-inclusive"
+              checked={gstInclusive}
+              onCheckedChange={setGstInclusive}
+            />
+          </div>
+        </div>
+      </div>
 
       {isLoading ? (
         <ReportLoadingSkeleton />
@@ -196,7 +272,7 @@ export function ProfitLossScreen() {
         <ReportPrintFrame title="Profit & Loss" rangeLabel={rangeLabel}>
           <ProfitLossSummary report={report} empty={empty} />
           <ProfitLossBar report={report} empty={empty} />
-          <ProfitLossTable report={report} empty={empty} />
+          <ProfitLossTable report={report} empty={empty} layout={layout} />
         </ReportPrintFrame>
       ) : null}
 
@@ -215,6 +291,7 @@ export function ProfitLossScreen() {
             value: reportMoney(empty ? 0 : report.headline.netProfit.amount),
           },
         }}
+        extraFields={{ gst_inclusive: gstInclusive ? "true" : "false" }}
       />
     </div>
   );

@@ -295,25 +295,36 @@ export function ProductsScreen() {
           General/NDIS meant finding something in the reference catalogue and
           then having to switch tabs before you could add anything yourself.
         */}
-        <Button variant="outline" onClick={() => setBulkOpen(true)}>
-          <Upload />
-          Bulk import
-        </Button>
-        <Button onClick={() => setDialog({ open: true, editId: null })}>
-          <Plus />
-          Create custom product
-        </Button>
+        {/* One wrapper so the catalogue tour can highlight both actions together. */}
+        <div
+          className="flex flex-wrap items-center gap-3"
+          data-usertour="products-actions"
+        >
+          <Button variant="outline" onClick={() => setBulkOpen(true)}>
+            <Upload />
+            Bulk import
+          </Button>
+          <Button onClick={() => setDialog({ open: true, editId: null })}>
+            <Plus />
+            Create custom product
+          </Button>
+        </div>
       </PageHeader>
 
       {hasNoProducts ? (
         // Custom is the only catalogue the user fills themselves, so its
         // empty state — with Create custom product — is the one worth showing.
-        <TabEmptyState
-          tab="Custom"
-          narrowed={false}
-          onClear={() => setQuery("")}
-          onCreate={() => setDialog({ open: true, editId: null })}
-        />
+        <div className="space-y-4">
+          <div data-usertour="products-stats">
+            <StatStrip stats={customStats([])} />
+          </div>
+          <TabEmptyState
+            tab="Custom"
+            narrowed={false}
+            onClear={() => setQuery("")}
+            onCreate={() => setDialog({ open: true, editId: null })}
+          />
+        </div>
       ) : (
         <>
           {/* Tabs and the controls that act on them share a line: which catalogue
@@ -377,20 +388,27 @@ export function ProductsScreen() {
           {tabLoading ? (
             <CatalogueSkeleton />
           ) : page.total === 0 ? (
-            <TabEmptyState
-              tab={tab}
-              narrowed={narrowed}
-              onClear={() => {
-                setQuery("");
-                setFilters(EMPTY_PRODUCT_FILTERS);
-                setGeneralFilters(EMPTY_GENERAL_FILTERS);
-                setNdisFilters(EMPTY_NDIS_FILTERS);
-              }}
-              onCreate={() => setDialog({ open: true, editId: null })}
-            />
+            <div className="space-y-4">
+              <div data-usertour="products-stats">
+                <StatStrip stats={stats} />
+              </div>
+              <TabEmptyState
+                tab={tab}
+                narrowed={narrowed}
+                onClear={() => {
+                  setQuery("");
+                  setFilters(EMPTY_PRODUCT_FILTERS);
+                  setGeneralFilters(EMPTY_GENERAL_FILTERS);
+                  setNdisFilters(EMPTY_NDIS_FILTERS);
+                }}
+                onCreate={() => setDialog({ open: true, editId: null })}
+              />
+            </div>
           ) : (
             <div className="space-y-4">
-              <StatStrip stats={stats} />
+              <div data-usertour="products-stats">
+                <StatStrip stats={stats} />
+              </div>
 
               {tab === "General" && (
                 <GeneralCatalogueTable rows={generalPage.rows} query={query} />

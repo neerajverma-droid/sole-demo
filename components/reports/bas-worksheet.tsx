@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { ArrowDownLeft, ArrowUpRight, Calculator, Landmark } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Landmark } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { CountUp } from "@/components/ui/count-up";
@@ -25,7 +25,7 @@ import {
   ROW_TONE,
   RULE,
 } from "@/components/reports/report-table-tokens";
-import { basTotals, type BasLine, type BasQuarter, type BasReport } from "@/lib/bas-report";
+import { basDate, basTotals, periodNoun, type BasLine, type BasQuarter, type BasReport } from "@/lib/bas-report";
 import { reportMoney } from "@/lib/report-periods";
 import { cn } from "@/lib/utils";
 
@@ -57,9 +57,11 @@ export function BasWorksheet({ report }: { report: BasReport }) {
   // GST and the ATO in Australia, GST and Inland Revenue in New Zealand, VAT
   // and SARS in South Africa.
   const tax = report.taxLabel;
-  const authority = report.taxAuthority;
 
   const multi = report.quarters.length > 1;
+  // "quarter" for a quarterly filer; "period" for New Zealand's two-monthly or
+  // six-monthly GST, whose tabs the backend labels "Period N".
+  const noun = periodNoun(report);
   const worksheetTitle = `${report.returnName} worksheet`;
   const [selected, setSelected] = React.useState<string>("all");
 
@@ -71,12 +73,15 @@ export function BasWorksheet({ report }: { report: BasReport }) {
   const shown = quarter ? [quarter] : report.quarters;
   const totals = basTotals(shown);
 
+  // One period: its dates, and its due date where the return shows one.
+  const periodScope = (q: BasQuarter) =>
+    `${q.label} · ${q.rangeLabel}${q.dueDate ? ` · Due ${basDate(q.dueDate)}` : ""}`;
   const scopeLabel = quarter
-    ? `${quarter.label} · ${quarter.rangeLabel}`
+    ? periodScope(quarter)
     : multi
-      ? `${report.quarters.length} quarters · ${report.rangeLabel}`
+      ? `${report.quarters.length} ${noun}s · ${report.rangeLabel}`
       : report.quarters[0]
-        ? `${report.quarters[0].label} · ${report.quarters[0].rangeLabel}`
+        ? periodScope(report.quarters[0])
         : report.rangeLabel;
 
   const refund = totals.outcome === "refund";
@@ -92,9 +97,9 @@ export function BasWorksheet({ report }: { report: BasReport }) {
           // The choice has already narrowed what's below it by the time this
           // prints — a control with nothing left to switch on paper.
           className="flex-wrap justify-start print:hidden"
-          aria-label="Quarter"
+          aria-label={noun === "quarter" ? "Quarter" : "Period"}
         >
-          <ToggleGroupItem value="all">All quarters</ToggleGroupItem>
+          <ToggleGroupItem value="all">All {noun}s</ToggleGroupItem>
           {report.quarters.map((q, index) => (
             <ToggleGroupItem key={q.label} value={String(index)}>
               {q.label}
@@ -135,7 +140,13 @@ export function BasWorksheet({ report }: { report: BasReport }) {
         </div>
       </section>
 
-      <dl className="grid gap-4 sm:grid-cols-3">
+      {/*
+       * Two cards, not three: a "Net" card here would only repeat the hero
+       * above in different clothes — same number, same `sales − purchases`
+       * formula, nothing new to check. Sales and purchases are each an
+       * input the hero is built from, which is what earns them a card.
+       */}
+      <dl className="grid gap-4 sm:grid-cols-2">
         <ReportStatCard
           icon={ArrowUpRight}
           tone="primary"
@@ -149,13 +160,6 @@ export function BasWorksheet({ report }: { report: BasReport }) {
           label={`${tax} on purchases`}
           tip={`The ${tax} included in what you bought for the business. This is what you claim back.`}
           value={totals.taxOnPurchases}
-        />
-        <ReportStatCard
-          icon={Calculator}
-          tone={refund ? "success" : "warning"}
-          label={refund ? "Net refund" : "Net payable"}
-          tip={`${tax} on sales less ${tax} on purchases. Positive is paid${authority ? ` to the ${authority}` : ""}; negative comes back to you.`}
-          value={totals.net}
         />
       </dl>
 
@@ -204,6 +208,10 @@ function combine(quarters: BasQuarter[], rangeLabel: string): BasQuarter {
     taxOnPurchases: totals.taxOnPurchases,
     net: totals.net,
     outcome: totals.outcome,
+    // Same form every period, so the same box; several periods have several due dates.
+    summaryCode: quarters[0]?.summaryCode ?? null,
+    summaryLabel: quarters[0]?.summaryLabel ?? null,
+    dueDate: "",
   };
 }
 
@@ -214,6 +222,7 @@ function QuarterTable({ quarter, title, tax }: { quarter: BasQuarter; title: str
         <h2 className="text-sm font-semibold">{title}</h2>
         <p className="text-xs text-muted-foreground tabular">
           {quarter.label} · {quarter.rangeLabel}
+          {quarter.dueDate && ` · Due ${basDate(quarter.dueDate)}`}
         </p>
       </div>
       <Table>
@@ -233,9 +242,21 @@ function QuarterTable({ quarter, title, tax }: { quarter: BasQuarter; title: str
             <SectionRows key={section.title} title={section.title} lines={section.rows} />
           ))}
           <TableRow className="hover:bg-transparent">
-            <TableCell colSpan={2} className={cn(CELL, RESULT_TINT, "font-semibold")}>
-              Expected {tax} {quarter.outcome === "refund" ? "refund" : "payment"}
-            </TableCell>
+            {quarter.summaryCode && quarter.summaryLabel ? (
+              // The form numbers this line (GST101A Box 15): print it like every other box.
+              <>
+                <TableCell className={cn(CELL, RESULT_TINT, "font-semibold")}>
+                  {quarter.summaryLabel} — {tax} {quarter.outcome === "refund" ? "refund" : "to pay"}
+                </TableCell>
+                <TableCell className={cn(CELL, RESULT_TINT, RULE, "font-mono text-xs font-semibold")}>
+                  {quarter.summaryCode}
+                </TableCell>
+              </>
+            ) : (
+              <TableCell colSpan={2} className={cn(CELL, RESULT_TINT, "font-semibold")}>
+                Expected {tax} {quarter.outcome === "refund" ? "refund" : "payment"}
+              </TableCell>
+            )}
             <TableCell
               className={cn(CELL, RESULT_TINT, RULE, "text-right font-semibold tabular")}
             >

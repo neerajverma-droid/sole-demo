@@ -19,7 +19,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  fetchPossibleMatches,
+  possibleMatchesQuery,
   filterMatchCandidates,
   matchMultipleTransactions,
   matchSelectionTotals,
@@ -29,6 +29,7 @@ import {
 import { apiErrorMessage } from "@/lib/api-error";
 import { matchExpenseAtom } from "@/lib/atoms";
 import {
+  expenseRemaining,
   expenseTotal,
   formatExpenseDate,
   type Expense,
@@ -97,16 +98,15 @@ function MatchBody({
    * rather than ones sized to what's still owing), so switching tabs
    * refetches rather than re-filtering.
    */
-  const query = useQuery({
-    queryKey: ["possible-matches", "expense", expense.id, tab === "multiple"],
-    queryFn: () =>
-      fetchPossibleMatches("expense", expense.id, {
-        multiple: tab === "multiple",
-      }),
-  });
+  const query = useQuery(
+    possibleMatchesQuery("expense", expense.id, tab === "multiple"),
+  );
 
   const candidates = query.data?.candidates ?? [];
-  const remainingAmount = query.data?.remainingAmount ?? 0;
+  // The row's own figure until the server's lands, rather than $0 — which
+  // would read as "fully matched" for the moment the fetch is in flight.
+  const remainingAmount =
+    query.data?.remainingAmount ?? expenseRemaining(expense);
 
   // Selection and search are cleared on a tab switch — the two tabs query
   // different candidate pools, so a ticked id or a typed search from one has
@@ -394,8 +394,9 @@ function CandidateMeta({ candidate }: { candidate: MatchCandidate }) {
 /**
  * Potential transactions — one "Match" per row, matching sole-webapp: no
  * selection step, clicking Match confirms that transaction immediately.
+ * Also the bill match dialog's list, so the two read the same.
  */
-function MatchableList({
+export function MatchableList({
   loading,
   candidates,
   matchingId,
@@ -450,9 +451,9 @@ function MatchableList({
  * Assign to multiple — checkbox selection against a shared cap: once the
  * ticked total covers what's owing, an unticked row can't be added (an
  * already-ticked one can still be removed). Matches sole-webapp's own
- * `isDisabled = !isChecked && isLimitReached`.
+ * `isDisabled = !isChecked && isLimitReached`. Shared with the bill match dialog.
  */
-function SelectableList({
+export function SelectableList({
   loading,
   candidates,
   chosen,

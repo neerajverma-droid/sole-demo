@@ -38,17 +38,21 @@ import { Shimmer } from "@/components/ui/shimmer";
 import { Textarea } from "@/components/ui/textarea";
 import { EngagementLetter } from "@/components/proposals/client-portal/engagement-letter";
 import { SignatureDialog } from "@/components/proposals/client-portal/signature-dialog";
+import { PortalComments } from "@/components/proposals/client-portal/portal-comments";
 import {
   PREVIEW_TABS,
+  PreviewSectionNav,
   ProposalDocumentPages,
   SectionCard,
   type PortalActions,
 } from "@/components/proposals/proposal-document";
+import { PORTAL_REFRESH_MS } from "@/lib/proposal-comments";
 import { generateProposalPdf } from "@/lib/proposal-pdf";
 import {
   DECLINE_REASONS,
   PORTAL_MESSAGES,
   declineIssue,
+  fetchProposalSolePayLink,
   fetchProposalStripeCheckout,
   fetchPublicProposal,
   portalViewState,
@@ -96,6 +100,10 @@ export function ClientPortalScreen({
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     staleTime: Infinity,
+    // While the client can still answer, the business's edits (made after a
+    // comment) show up without a reload.
+    refetchInterval: (current) =>
+      portalViewState(current.state.data?.status) === "pending" ? PORTAL_REFRESH_MS : false,
   });
   const proposal = query.data;
 
@@ -107,9 +115,12 @@ export function ClientPortalScreen({
   const [finishing, setFinishing] = React.useState(false);
   const [downloading, setDownloading] = React.useState(false);
   const [payingStripe, setPayingStripe] = React.useState(false);
+  const [payingSolePay, setPayingSolePay] = React.useState(false);
   const [celebration, setCelebration] = React.useState(0);
   const pagesRef = React.useRef<HTMLDivElement>(null);
   const letterRef = React.useRef<HTMLDivElement>(null);
+  // The page on screen — where the client selects text to comment on.
+  const pageRef = React.useRef<HTMLDivElement>(null);
 
   const preview = React.useMemo(() => (proposal ? previewFromProposal(proposal) : null), [proposal]);
   const viewState = portalViewState(proposal?.status);
@@ -162,6 +173,17 @@ export function ClientPortalScreen({
     } catch (error) {
       setPayingStripe(false);
       toast.error(errorMessage(error, PORTAL_MESSAGES.stripeFailed));
+    }
+  };
+
+  // SolePay: the backend's link to pay this proposal's invoice, on the SolePay pages.
+  const paySolePay = async () => {
+    setPayingSolePay(true);
+    try {
+      window.location.href = await fetchProposalSolePayLink(token);
+    } catch (error) {
+      setPayingSolePay(false);
+      toast.error(errorMessage(error, PORTAL_MESSAGES.solePayFailed));
     }
   };
 
@@ -220,6 +242,8 @@ export function ClientPortalScreen({
     signedAt: proposal.accepted_at,
     onPayStripe: payStripe,
     payingStripe,
+    onPaySolePay: paySolePay,
+    payingSolePay,
   };
 
   if (signingView) {
@@ -291,47 +315,24 @@ export function ClientPortalScreen({
       </header>
 
       {/* Section navigator */}
-      <nav
-        className="shrink-0 overflow-x-auto border-b border-border bg-background px-4 py-3 md:px-6"
-        aria-label="Proposal sections"
-      >
-        <div className="mx-auto flex max-w-5xl items-center">
-          {PREVIEW_TABS.map((tab, at) => (
-            <button
-              key={tab}
-              type="button"
-              onClick={() => goTo(at)}
-              aria-current={at === index ? "step" : undefined}
-              className={cn(
-                "flex shrink-0 items-center text-sm",
-                at === index ? "text-foreground" : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <span className="flex items-center gap-2">
-                <span
-                  className={cn(
-                    "grid size-5 place-items-center rounded-full border text-[10px]",
-                    at === index ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background",
-                  )}
-                >
-                  {at + 1}
-                </span>
-                {tab}
-              </span>
-              {at !== PREVIEW_TABS.length - 1 && <ChevronRight className="mx-3 size-3.5 text-muted-foreground" />}
-            </button>
-          ))}
-        </div>
-      </nav>
+      <div className="shrink-0 border-b border-border bg-background px-4 py-3 md:px-6">
+        <PreviewSectionNav index={index} onSelect={goTo} className="mx-auto max-w-5xl" />
+      </div>
 
       {/* Section */}
       <main className="flex-1 bg-primary/10 p-4 sm:p-8">
-        <SectionCard
-          section={section}
-          preview={preview}
-          portal={portal}
-          onNavigate={(tab) => goTo(PREVIEW_TABS.indexOf(tab as (typeof PREVIEW_TABS)[number]))}
-        />
+        <div className="mx-auto flex max-w-6xl items-start gap-6">
+          <div ref={pageRef} className="min-w-0 flex-1">
+            <SectionCard
+              section={section}
+              preview={preview}
+              portal={portal}
+              onNavigate={(tab) => goTo(PREVIEW_TABS.indexOf(tab as (typeof PREVIEW_TABS)[number]))}
+            />
+          </div>
+          {/* Comments beside the page, Google Docs-style; read-only once answered. */}
+          <PortalComments token={token} tab={section} pageRef={pageRef} canComment={viewState === "pending"} />
+        </div>
       </main>
 
       {/* Response + navigation */}
@@ -339,27 +340,30 @@ export function ClientPortalScreen({
         <div className="mx-auto flex max-w-5xl flex-col gap-[15px]">
           {viewState !== "pending" && <ResponseSummary viewState={viewState} signedPdfUrl={proposal.signed_pdf_url} />}
 
-          <div className="flex items-center justify-between gap-[15px]">
-            <Button variant="outline" disabled={index === 0} onClick={() => goTo(index - 1)}>
-              <ChevronLeft />
-              Back
-            </Button>
-            <div className="flex items-center gap-2">
-              {viewState === "pending" && (
-                <>
-                  <Button
-                    variant="outline"
-                    className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                    onClick={() => setDeclineOpen(true)}
-                  >
-                    <X />
-                    Decline
-                  </Button>
-                  <Button onClick={() => setSigningView(true)}>Accept proposal</Button>
-                </>
-              )}
+          {/* Phones: Decline / Accept full-width on their own row, Back / Next
+              below. From sm: one row — Back, then the response, then Next. */}
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-[15px]">
+            {viewState === "pending" && (
+              <div className="grid grid-cols-2 gap-2 sm:order-2 sm:ml-auto sm:flex sm:items-center">
+                <Button
+                  variant="outline"
+                  className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  onClick={() => setDeclineOpen(true)}
+                >
+                  <X />
+                  Decline
+                </Button>
+                <Button onClick={() => setSigningView(true)}>Accept proposal</Button>
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-2 sm:contents">
+              <Button variant="outline" className="sm:order-1" disabled={index === 0} onClick={() => goTo(index - 1)}>
+                <ChevronLeft />
+                Back
+              </Button>
               <Button
                 variant="outline"
+                className={viewState === "pending" ? "sm:order-3" : "sm:order-3 sm:ml-auto"}
                 disabled={index === PREVIEW_TABS.length - 1}
                 onClick={() => goTo(index + 1)}
               >

@@ -14,8 +14,6 @@
  */
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
 import {
   BUDGET_LINE_STATUSES,
@@ -24,9 +22,7 @@ import {
   GOAL_TYPE_TO_API,
   PLAN_FUNDING_SOURCES,
   PLAN_TYPES,
-  budgetAmount,
   budgetPeriodFromApi,
-  goalTarget,
   goalTypeFromApi,
   type BankAccountBalance,
   type Budget,
@@ -46,6 +42,9 @@ import {
   type PlanType,
   type WalletMovement,
 } from "@/lib/planner";
+import { paginate, type PageInfo } from "@/lib/products";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
 
 type ApiEnvelope<T> = { success?: boolean; message?: string; data?: T };
 
@@ -121,6 +120,50 @@ function rows<T>(payload: unknown): T[] {
   const data = (payload as ApiEnvelope<unknown>)?.data;
   if (Array.isArray(data)) return data as T[];
   return [];
+}
+
+/* ------------------------------------------------------------------ *
+ * Pages of a list
+ * ------------------------------------------------------------------ */
+
+/** One page of a planner list, with the counters the pagination bar reads. */
+export type PlannerPage<T> = PageInfo & { rows: T[] };
+
+/**
+ * One page out of a list response.
+ *
+ * The API pages when asked, and says so in `meta` — the total across every
+ * page, which the rows alone can't. A response with no `meta` is a backend that
+ * predates paging and answered with the whole list, in which case this cuts the
+ * page out itself rather than showing every row as one giant page. Either way
+ * the caller gets the same shape.
+ */
+function toPage<T>(
+  payload: unknown,
+  all: T[],
+  page: number,
+  pageSize: number,
+): PlannerPage<T> {
+  const meta = (payload as { meta?: { total?: unknown } } | undefined)?.meta;
+
+  if (meta?.total === undefined || meta.total === null) {
+    return paginate(all, page, pageSize);
+  }
+
+  const total = num(meta.total);
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  // A page past the end — the last row on it was just deleted — reports the
+  // page it was asked for, so the screen can see it is past the end and step
+  // back; `from` and `to` are zero because nothing is shown.
+  const start = (page - 1) * pageSize;
+  return {
+    rows: all,
+    page,
+    pageCount,
+    total,
+    from: all.length === 0 ? 0 : start + 1,
+    to: all.length === 0 ? 0 : start + all.length,
+  };
 }
 
 /* ------------------------------------------------------------------ *
@@ -212,12 +255,31 @@ export async function fetchGoals(): Promise<Goal[]> {
   return rows<ApiPlannerGoal>(response.data).map(toGoal);
 }
 
+/** One page of goals, for the Goals tab's table. */
+export async function fetchGoalsPage(
+  page: number,
+  pageSize: number,
+): Promise<PlannerPage<Goal>> {
+  const response = await api.get<ApiEnvelope<ApiPlannerGoal[]>>(
+    apiRoutes.plannerGoal.list,
+    { params: { page, limit: pageSize } },
+  );
+  return toPage(
+    response.data,
+    rows<ApiPlannerGoal>(response.data).map(toGoal),
+    page,
+    pageSize,
+  );
+}
+
 export async function createGoal(draft: GoalDraft): Promise<Goal> {
   const response = await api.post<ApiEnvelope<ApiPlannerGoal>>(
     apiRoutes.plannerGoal.add,
     encryptedCreateBody(goalPayload(draft)),
   );
-  track(EVENTS.GOAL_CREATED, { amount: goalTarget(draft) });
+  // A 200 can still carry success: false; that isn't a goal created (the
+  // caller still gets the id-less goal it always did).
+  if (response.data?.success !== false) track(EVENTS.GOAL_CREATED);
   return toGoal(response.data?.data ?? {});
 }
 
@@ -231,6 +293,34 @@ export async function updateGoal(id: string, draft: GoalDraft): Promise<Goal> {
 
 export async function deleteGoal(id: string): Promise<void> {
   await api.delete(apiRoutes.plannerGoal.delete(id));
+}
+
+/**
+ * What a bulk delete did. An id the server didn't recognise as this
+ * business's — already gone, say — comes back in `notFoundIds` rather than
+ * failing the rest, so a stale selection still deletes what it can.
+ */
+export type BulkDeleteResult = { deletedIds: string[]; notFoundIds: string[] };
+
+function toBulkDeleteResult(response: {
+  data?: { data?: { deleted_ids?: unknown; not_found_ids?: unknown } };
+}): BulkDeleteResult {
+  const ids = (value: unknown): string[] =>
+    Array.isArray(value) ? value.map(String) : [];
+  const data = response.data?.data;
+  return { deletedIds: ids(data?.deleted_ids), notFoundIds: ids(data?.not_found_ids) };
+}
+
+/** The server takes numeric ids; the app holds them as strings. */
+const numericIds = (ids: string[]) => ids.map(Number);
+
+export async function bulkDeleteGoals(ids: string[]): Promise<BulkDeleteResult> {
+  return toBulkDeleteResult(
+    await api.post(
+      apiRoutes.plannerGoal.bulkDelete,
+      buildEncryptedRequestBody({ ids: numericIds(ids) }),
+    ),
+  );
 }
 
 /**
@@ -454,6 +544,24 @@ export async function fetchBudgets(): Promise<{
   };
 }
 
+/** One page of budgets, for the Budget tab's table. */
+export async function fetchBudgetsPage(
+  page: number,
+  pageSize: number,
+): Promise<PlannerPage<Budget>> {
+  const categoryNames = await fetchExpenseCategoryNames();
+  const response = await api.get<ApiEnvelope<ApiBudget[]>>(
+    apiRoutes.budget.list,
+    { params: { page, limit: pageSize } },
+  );
+  return toPage(
+    response.data,
+    rows<ApiBudget>(response.data).map((row) => toBudget(row, categoryNames)),
+    page,
+    pageSize,
+  );
+}
+
 export async function createBudget(
   draft: BudgetDraft,
   categoryIdsByName: Map<string, number>,
@@ -462,7 +570,6 @@ export async function createBudget(
     apiRoutes.budget.add,
     encryptedCreateBody(budgetPayload(draft, categoryIdsByName)),
   );
-  track(EVENTS.BUDGET_CREATED, { amount: budgetAmount(draft) });
 }
 
 export async function updateBudget(
@@ -478,6 +585,15 @@ export async function updateBudget(
 
 export async function deleteBudget(id: string): Promise<void> {
   await api.delete(apiRoutes.budget.delete + id);
+}
+
+export async function bulkDeleteBudgets(ids: string[]): Promise<BulkDeleteResult> {
+  return toBulkDeleteResult(
+    await api.post(
+      apiRoutes.budget.bulkDelete,
+      buildEncryptedRequestBody({ ids: numericIds(ids) }),
+    ),
+  );
 }
 
 /* ------------------------------------------------------------------ *
@@ -824,6 +940,23 @@ export async function fetchPlans(): Promise<ExpensePlan[]> {
   return rows<ApiExpensePlan>(response.data).map(toPlan);
 }
 
+/** One page of expense plans, for the Business planner tab's table. */
+export async function fetchPlansPage(
+  page: number,
+  pageSize: number,
+): Promise<PlannerPage<ExpensePlan>> {
+  const response = await api.get<ApiEnvelope<ApiExpensePlan[]>>(
+    apiRoutes.expensePlan.list,
+    { params: { page, limit: pageSize } },
+  );
+  return toPage(
+    response.data,
+    rows<ApiExpensePlan>(response.data).map(toPlan),
+    page,
+    pageSize,
+  );
+}
+
 /**
  * Saves a plan and its lines, in that order — a new plan has to exist before
  * there's anything to hang lines off. The lines call answers with the whole
@@ -859,6 +992,15 @@ export async function savePlan(
 
 export async function deletePlan(id: string): Promise<void> {
   await api.delete(apiRoutes.expensePlan.delete(id));
+}
+
+export async function bulkDeletePlans(ids: string[]): Promise<BulkDeleteResult> {
+  return toBulkDeleteResult(
+    await api.post(
+      apiRoutes.expensePlan.bulkDelete,
+      buildEncryptedRequestBody({ ids: numericIds(ids) }),
+    ),
+  );
 }
 
 /* ------------------------------------------------------------------ *
@@ -1122,7 +1264,8 @@ export async function fetchPlannerOverview(): Promise<PlannerOverviewData> {
       rows: (plans.plans ?? []).map((plan) => ({
         id: String(plan.id ?? ""),
         name: text(plan.name),
-        annualReturn: num(plan.annual_return ?? plan.expected_revenue),
+        // Never `expected_revenue`: that is income, and this is the net return.
+        annualReturn: num(plan.annual_return),
       })),
     },
   };
@@ -1152,7 +1295,13 @@ type ApiBankAccount = {
 export async function fetchPlannerBankAccounts(): Promise<BankAccountBalance[]> {
   const response = await api.get<
     ApiEnvelope<{ accounts?: ApiBankAccount[] }>
-  >(apiRoutes.bankAccounts.list);
+  >(apiRoutes.bankAccounts.list, {
+    // The bank feed hangs until its upstream's connect timeout when it's down,
+    // which holds one of the browser's few connections to the API the whole
+    // time and queues the planner's other requests behind it. Giving up sooner
+    // frees the slot; the Overview then says the balances are unavailable.
+    timeout: 10_000,
+  });
 
   return (response.data?.data?.accounts ?? []).map((account) => ({
     id: String(account.id ?? ""),

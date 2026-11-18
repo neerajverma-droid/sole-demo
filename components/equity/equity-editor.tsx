@@ -258,6 +258,7 @@ export function EquityEditor({
       icon={Paperclip}
       title="Supporting document"
       description="The transfer receipt, deposit slip or letter behind it. Optional."
+      tourId="equity-document"
     >
       <AttachmentUpload
         receipt={draft.attachment}
@@ -315,6 +316,7 @@ export function EquityEditor({
       <FormSection
         icon={FileText}
         title="Equity details"
+        tourId="equity-details"
         description="Which way the money went, what it's worth, and when."
         className="grid gap-4 sm:grid-cols-2"
       >
@@ -386,7 +388,10 @@ export function EquityEditor({
 
       {equityId && documentSection}
 
-      <div className="flex flex-wrap justify-end gap-2 border-t pt-4">
+      <div
+        className="flex flex-wrap justify-end gap-2 border-t pt-4"
+        data-usertour="equity-save-actions"
+      >
         <Button variant="ghost" asChild>
           <Link href={EQUITY_ROOT}>Cancel</Link>
         </Button>
@@ -398,7 +403,11 @@ export function EquityEditor({
               : `${issues.length} fields need attention`}
           </p>
         )}
-        <Button onClick={onSave} disabled={(hasTouched && issues.length > 0) || saving}>
+        <Button
+          onClick={onSave}
+          disabled={(hasTouched && issues.length > 0) || saving}
+          data-usertour="equity-save-button"
+        >
           {saving && <Loader2 className="animate-spin" />}
           {editing ? "Save changes" : "Save equity"}
         </Button>

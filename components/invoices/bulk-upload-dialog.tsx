@@ -20,7 +20,7 @@ import { useBulkImportCountry } from "@/hooks/use-bulk-import-country";
  * the rows go, what to refetch once they've gone, and the business's country
  * — its word for the tax and the currency a new client starts in.
  */
-export function InvoiceBulkUploadDialog() {
+export function InvoiceBulkUploadDialog({ page = false }: { page?: boolean } = {}) {
   const [open, setOpen] = useAtom(invoiceBulkOpenAtom);
   const queryClient = useQueryClient();
   const country = useBulkImportCountry();
@@ -37,9 +37,13 @@ export function InvoiceBulkUploadDialog() {
 
   return (
     <BulkImportDialog
+      page={page}
       spec={spec}
       open={open}
       onOpenChange={setOpen}
+      // Wide enough for the Review columns, and the summary stays one line.
+      contentClassName="sm:max-w-6xl"
+      compactIssues
       onImport={(rows) => importInvoices.mutateAsync(rows)}
     />
   );

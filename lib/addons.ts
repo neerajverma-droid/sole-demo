@@ -9,17 +9,32 @@
  * Copy lives with the add-on rather than in the marketplace component: the
  * marketplace is one layout rendering whichever add-on is selected, and copy
  * that sits in the layout is copy that has to be edited in a component.
+ *
+ * The copy here is the fallback. The plan row's `content` column (served by
+ * GET /subscription/plans) wins wherever it has a field — see
+ * `withCatalogueContent` — so a description can change without a deploy.
+ * Icons, routes and sidebar pages stay here: they're code, not copy.
  */
 
+import { invoiceMoney } from "@/lib/invoices";
+import type { BillingInterval, SubscriptionPlan } from "@/lib/subscription";
 import {
+  Banknote,
   Briefcase,
+  Calculator,
   CalendarDays,
-  LayoutGrid,
-  Link2,
   Clock,
+  Cog,
+  FileSignature,
+  FileSpreadsheet,
   Home,
   Landmark,
+  LayoutGrid,
+  LayoutTemplate,
+  Link2,
   Map,
+  Route,
+  Star,
   Users2,
   type LucideIcon,
 } from "lucide-react";
@@ -101,6 +116,17 @@ export type Addon = {
    */
   slug?: string;
   /**
+   * The key this add-on unlocks in the profile's `allowed_features`
+   * (sole-ocr `src/services/featureAccess.js`).
+   *
+   * A package can include an add-on outright — Bundle carries projects and
+   * time tracking, Advanced carries all of them — without its slug ever
+   * landing on `user_subscriptions.addons`. The slug alone left those cards
+   * locked and asking to be bought by someone whose plan already had them.
+   * Absent where the server gates nothing on it (payroll).
+   */
+  feature?: string;
+  /**
    * Promoted to the modal's featured row — one per category, at most.
    *
    * A flag on the add-on rather than a list in the component: which two are
@@ -144,6 +170,13 @@ export type Addon = {
   replaces?: string[];
   /** The subject of the video placeholder — "Watch: {this} in 90 seconds". */
   video: string;
+  /** The explainer itself, once there is one. Only ever from the catalogue. */
+  videoUrl?: string;
+  /**
+   * Industry ids this add-on is tailored to; absent or empty means every
+   * industry. Only ever from the catalogue.
+   */
+  industries?: string[];
   overview: string;
   whatItDoes: string;
   whyItHelps: string;
@@ -164,6 +197,7 @@ export type Addon = {
 const INVESTMENT_PROPERTY: Addon = {
   id: "investment",
   slug: "investment",
+  feature: "investment",
   name: "Investment property",
   subtext: "Track rent, expenses and depreciation per property",
   priceMonthly: 12,
@@ -204,6 +238,7 @@ export const ADDONS: Addon[] = [
   {
     id: "assets",
     slug: "assets-advanced",
+    feature: "assets-advanced",
     name: "Assets",
     subtext: "A register of what you own, and what it's worth now",
     priceMonthly: 8,
@@ -213,7 +248,7 @@ export const ADDONS: Addon[] = [
     // The paid tier of the Assets row that ships in MAIN, not a second
     // feature — same route, same icon, more of it. So the default row stands
     // down while this is on the plan.
-    replaces: ["asset-register"],
+    replaces: ["assets"],
     video: "the asset register",
     overview:
       "Everything the business owns in one register, with what it cost, what's still owed on it, and what it's worth after depreciation.",
@@ -238,6 +273,7 @@ export const ADDONS: Addon[] = [
   {
     id: "projects",
     slug: "project",
+    feature: "projects",
     featured: true,
     name: "Projects / milestones",
     subtext: "Group work into jobs and bill against milestones",
@@ -284,6 +320,7 @@ export const ADDONS: Addon[] = [
   {
     id: "scheduling",
     slug: "booking",
+    feature: "booking",
     name: "Scheduling",
     subtext: "A calendar and task list tied to your jobs",
     priceMonthly: 6,
@@ -337,6 +374,7 @@ export const ADDONS: Addon[] = [
   {
     id: "time-tracker",
     slug: "time",
+    feature: "time-tracking",
     name: "Time tracker",
     subtext: "Bill hours you'd otherwise round down",
     priceMonthly: 6,
@@ -367,12 +405,33 @@ export const ADDONS: Addon[] = [
   {
     id: "km-tracker",
     slug: "km",
+    feature: "km-tracker",
     name: "KM tracker",
     subtext: "Log trips and claim the cents-per-kilometre rate",
     priceMonthly: 5,
     group: "operations",
     icon: Map,
     href: "/km-tracker",
+    pages: [
+      {
+        id: "km-trips",
+        label: "All trips",
+        href: "/km-tracker",
+        icon: Route,
+      },
+      {
+        id: "km-reports",
+        label: "Reports",
+        href: "/km-tracker/reports",
+        icon: FileSpreadsheet,
+      },
+      {
+        id: "km-settings",
+        label: "Settings",
+        href: "/km-tracker/settings",
+        icon: Cog,
+      },
+    ],
     video: "kilometre logging",
     overview:
       "A trip log and vehicle register that work out your motor-vehicle claim at the ATO's rate.",
@@ -406,6 +465,25 @@ export const ADDONS: Addon[] = [
     group: "finance",
     icon: Users2,
     href: "/payroll",
+    pages: [
+      { id: "payroll-overview", label: "Overview", href: "/payroll" },
+      {
+        id: "payroll-employees",
+        label: "Employees",
+        href: "/payroll/employees",
+      },
+      {
+        id: "payroll-payruns",
+        label: "Pay runs",
+        href: "/payroll/payruns",
+      },
+      { id: "payroll-leave", label: "Leave", href: "/payroll/leave" },
+      {
+        id: "payroll-reports",
+        label: "Reports",
+        href: "/payroll/reports",
+      },
+    ],
     video: "payroll and Single Touch Payroll",
     overview:
       "Pay runs with PAYG, super and Single Touch Payroll reporting, for the point a sole trader takes on their first employee.",
@@ -428,11 +506,184 @@ export const ADDONS: Addon[] = [
       "Payslip delivery",
     ],
   },
+  {
+    id: "proposals",
+    feature: "proposals",
+    name: "Proposals",
+    subtext: "Create, send and track interactive client proposals",
+    priceMonthly: 8,
+    group: "operations",
+    icon: FileSignature,
+    href: "/proposals",
+    pages: [
+      { id: "proposals", label: "Proposals", href: "/proposals", icon: FileSignature },
+      { id: "proposal-templates", label: "Templates", href: "/proposals/templates", icon: LayoutTemplate },
+    ],
+    video: "proposals and contracts",
+    overview:
+      "A complete proposals suite to pitch, send and sign project proposals online without external tools.",
+    whatItDoes:
+      "Build proposals from templates, customize introduction blocks, add pricing tables, and send live interactive links.",
+    whyItHelps:
+      "Clients can review and sign proposals online immediately, speeding up turnaround times and conversion rates.",
+    howItWorks:
+      "Create a proposal, select your section blocks, email it to your client, and receive instant alerts upon approval.",
+    benefits: [
+      "Digital acceptance and electronic signatures",
+      "Customizable section templates",
+      "Real-time client view and acceptance notifications",
+    ],
+    included: [
+      "Interactive proposals",
+      "Section and full templates",
+      "Client activity audit log",
+    ],
+  },
+  {
+    id: "reputation",
+    feature: "reputation",
+    name: "Reputation",
+    subtext: "Collect client ratings, recover unhappy clients and win Google reviews",
+    priceMonthly: 6,
+    group: "operations",
+    icon: Star,
+    href: "/reputation",
+    video: "reputation management and reviews",
+    overview:
+      "Automated feedback requests and review collection that routes satisfied clients straight to Google Reviews.",
+    whatItDoes:
+      "Sends SMS or email reviews upon job completion, collects private feedback, and prompts 5-star clients for public reviews.",
+    whyItHelps:
+      "Builds local SEO rank and customer trust with continuous fresh 5-star Google reviews.",
+    howItWorks:
+      "Mark an invoice paid or job complete; Sole automatically sends a feedback prompt with smart Google routing.",
+    benefits: [
+      "Automated Google review requests",
+      "Private feedback recovery for unhappy clients",
+      "Reputation dashboard and rating analytics",
+    ],
+    included: [
+      "SMS and email review invites",
+      "Google Business Profile sync",
+      "Feedback sentiment metrics",
+    ],
+  },
+  {
+    id: "tax-estimator",
+    feature: "tax-estimator",
+    name: "Tax estimator",
+    subtext: "Estimate your quarterly and annual tax as you go",
+    priceMonthly: 6,
+    group: "finance",
+    icon: Calculator,
+    href: "/tax-estimator",
+    video: "tax forecasting and quarterly estimates",
+    overview:
+      "Live tax liability estimation calculated from your real reconciled income and expense transactions.",
+    whatItDoes:
+      "Applies Australian individual income tax brackets, Medicare levy, and suggests quarterly set-aside amounts.",
+    whyItHelps:
+      "Eliminates tax bill surprises at EOFY by letting you know exactly what to stash in your tax savings account.",
+    howItWorks:
+      "Sole aggregates your year-to-date taxable profit, calculates marginal brackets, and displays your forecast tax position.",
+    benefits: [
+      "Live tax bracket tracking",
+      "Quarterly PAYG instalment forecasts",
+      "Deduction impact simulator",
+    ],
+    included: [
+      "Income tax and Medicare estimator",
+      "Tax set-aside recommendations",
+      "End-of-year tax liability forecast",
+    ],
+  },
 ];
 
 export function addonById(id: string): Addon | undefined {
   return ADDONS.find((addon) => addon.id === id);
 }
+
+function isAddonGroup(value: string | undefined): value is AddonGroup {
+  return ADDON_GROUPS.some((group) => group.key === value);
+}
+
+/**
+ * The card with the catalogue's copy laid over it, field by field.
+ *
+ * A row is one interval of the add-on; both carry the same content, so the
+ * first with any is enough. A field the row doesn't have keeps the card's own,
+ * and a category the marketplace has no group for is ignored rather than
+ * leaving the add-on in no group at all.
+ */
+export function withCatalogueContent(
+  addon: Addon,
+  catalogue: SubscriptionPlan[] = [],
+): Addon {
+  const content = addon.slug
+    ? catalogue.find((plan) => plan.slug === addon.slug && plan.content)?.content
+    : null;
+  if (!content) return addon;
+
+  return {
+    ...addon,
+    group: isAddonGroup(content.category) ? content.category : addon.group,
+    subtext: content.subtext ?? addon.subtext,
+    video: content.videoTitle ?? addon.video,
+    videoUrl: content.videoUrl ?? addon.videoUrl,
+    industries: content.industries,
+    overview: content.overview ?? addon.overview,
+    whatItDoes: content.whatItDoes ?? addon.whatItDoes,
+    whyItHelps: content.whyItHelps ?? addon.whyItHelps,
+    howItWorks: content.howItWorks ?? addon.howItWorks,
+    benefits:
+      content.benefits?.length === 3
+        ? (content.benefits as [string, string, string])
+        : addon.benefits,
+    included: content.included ?? addon.included,
+  };
+}
+
+/**
+ * Whether an add-on is tagged for this industry. An untagged add-on suits every
+ * industry, which is exactly why it isn't "recommended" for any one of them.
+ */
+export function addonRecommendedFor(
+  addon: Addon,
+  industryId: string | null | undefined,
+): boolean {
+  return !!industryId && !!addon.industries?.includes(industryId);
+}
+
+/** What the browsing surfaces need beyond a search term. */
+export type AddonListOptions = {
+  /** The add-on rows from the price list, for their copy and category. */
+  catalogue?: SubscriptionPlan[];
+  /** The active business's industry id — tagged add-ons sort first. */
+  industryId?: string | null;
+};
+
+/**
+ * Bought as seats rather than switched on — payroll, today.
+ *
+ * `priceUnit` is the row's own evidence: a seat count is what a flat toggle
+ * can't carry. These are listed with everything else, but never offered a
+ * plain "Select". That used to happen, and pressing "Add to my plan" sent a
+ * bare `"payroll"` slug the backend strips before Stripe (`chargedAddons` in
+ * `lib/subscription.ts` does the same on the way out): the call succeeded and
+ * changed nothing. Their card sends people to the seat picker instead.
+ */
+export function addonSoldBySeat(addon: Addon): boolean {
+  return !!addon.priceUnit;
+}
+
+/**
+ * Add-ons the shop lists. Drops a card with no `slug` yet — copy written ahead
+ * of the price-list row that would let a purchase bill anything, the same
+ * "looks sellable, isn't" gap `lib/addon-entitlements.ts`'s
+ * `purchasableAddons` guards. Not imported from there: that module sits above
+ * this one, and reaching back down would run the dependency the wrong way.
+ */
+const SELLABLE_ADDONS = ADDONS.filter((addon) => addon.slug);
 
 /**
  * Whether an add-on answers a search term — name and subtext, which is all the
@@ -447,16 +698,32 @@ function matchesQuery(addon: Addon, needle: string): boolean {
   );
 }
 
+/**
+ * The sellable add-ons with the catalogue's copy applied, the ones tagged for
+ * this industry first and otherwise in catalogue order (`sort` is stable).
+ */
+function sellableAddons({ catalogue, industryId }: AddonListOptions): Addon[] {
+  const recommended = (addon: Addon) =>
+    addonRecommendedFor(addon, industryId) ? 0 : 1;
+  return SELLABLE_ADDONS.map((addon) => withCatalogueContent(addon, catalogue)).sort(
+    (a, b) => recommended(a) - recommended(b),
+  );
+}
+
 /** The catalogue as the rail shows it: grouped, in catalogue order. */
-export function addonsByGroup(query = ""): {
+export function addonsByGroup(
+  query = "",
+  options: AddonListOptions = {},
+): {
   group: (typeof ADDON_GROUPS)[number];
   addons: Addon[];
 }[] {
   const needle = query.trim().toLowerCase();
+  const sellable = sellableAddons(options);
 
   return ADDON_GROUPS.map((group) => ({
     group,
-    addons: ADDONS.filter(
+    addons: sellable.filter(
       (addon) => addon.group === group.key && matchesQuery(addon, needle),
     ),
   })).filter((entry) => entry.addons.length > 0);
@@ -479,7 +746,7 @@ export const ADDON_FILTERS: string[] = [
  * they only earn their space once there's a list long enough to get lost in.
  */
 export const ADDON_FILTERS_WORTHWHILE =
-  ADDON_GROUPS.length > 1 && ADDONS.length >= 6;
+  ADDON_GROUPS.length > 1 && SELLABLE_ADDONS.length >= 6;
 
 /**
  * The modal's two rows: what leads, and what follows.
@@ -495,8 +762,9 @@ export const ADDON_FILTERS_WORTHWHILE =
 export function addonLayout(
   filter: string,
   query = "",
+  options: AddonListOptions = {},
 ): { featured: Addon[]; compact: Addon[] } {
-  const matches = addonsForFilter(filter, query);
+  const matches = addonsForFilter(filter, query, options);
   const promoted = matches.filter((addon) => addon.featured);
 
   const featured = ADDON_GROUPS.flatMap((group) =>
@@ -509,11 +777,15 @@ export function addonLayout(
 }
 
 /** The catalogue as the grid shows it: one flat list, filtered by pill and term. */
-export function addonsForFilter(filter: string, query = ""): Addon[] {
+export function addonsForFilter(
+  filter: string,
+  query = "",
+  options: AddonListOptions = {},
+): Addon[] {
   const needle = query.trim().toLowerCase();
   const group = ADDON_GROUPS.find((entry) => entry.pill === filter)?.key;
 
-  return ADDONS.filter(
+  return sellableAddons(options).filter(
     (addon) => (!group || addon.group === group) && matchesQuery(addon, needle),
   );
 }
@@ -541,9 +813,43 @@ export function addedAddons(ids: string[]): Addon[] {
  * when there is no subscription to add it to.
  */
 
-/** "$12/month", the one place the price is formatted. */
-export function addonPrice(addon: Addon): string {
+/**
+ * "$3.99" — an add-on's price, to the cent.
+ *
+ * Prices arrive per month, and an annual plan's is the year divided by twelve,
+ * so the raw figure can run to a dozen decimals ($47.90 / 12).
+ */
+export function addonMoney(price: number): string {
+  return invoiceMoney(Math.round(price * 100) / 100);
+}
+
+/**
+ * "$4.99/month" or "$47.90/year", the one place the price is formatted with
+ * its period.
+ *
+ * Takes the price-list figure where the caller has one — as charged for
+ * `interval`, not divided out to a month; the card's own `priceMonthly` is
+ * only the fallback.
+ */
+export function addonPrice(
+  addon: Addon,
+  price = addon.priceMonthly,
+  interval: BillingInterval = "monthly",
+): string {
+  const period = interval === "annual" ? "year" : "month";
   return addon.priceUnit
-    ? `$${addon.priceMonthly}/${addon.priceUnit}/month`
-    : `$${addon.priceMonthly}/month`;
+    ? `${addonMoney(price)}/${addon.priceUnit}/${period}`
+    : `${addonMoney(price)}/${period}`;
+}
+
+/** The same, short, for a card or a rail row: "$4.99/mo", "$47.90/yr". */
+export function addonPriceShort(
+  addon: Addon,
+  price = addon.priceMonthly,
+  interval: BillingInterval = "monthly",
+): string {
+  const period = interval === "annual" ? "yr" : "mo";
+  return addon.priceUnit
+    ? `${addonMoney(price)}/${addon.priceUnit}/${period}`
+    : `${addonMoney(price)}/${period}`;
 }

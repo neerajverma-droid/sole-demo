@@ -62,19 +62,9 @@ const JOURNEY_PACKAGE: Record<JourneyId, string> = {
  */
 const ALL_INCLUSIVE_PACKAGE_ID = "advanced";
 
-/**
- * Packages that carry every add-on rather than charging for them.
- *
- * A set rather than a flag on the package, because it's a fact about the
- * catalogue's two top tiers and `PRICING_PACKAGES` is transcribed from the
- * design's own table — adding a field to it would be inventing data the
- * reference didn't have.
- */
-const ALL_INCLUSIVE = new Set([ALL_INCLUSIVE_PACKAGE_ID, "pro"]);
-
 /** Whether the add-ons come with the package instead of being billed beside it. */
 export function planIncludesAddons(packageId: string): boolean {
-  return ALL_INCLUSIVE.has(packageId);
+  return packageId === ALL_INCLUSIVE_PACKAGE_ID;
 }
 
 export function packagePrice(packageId: string): number {

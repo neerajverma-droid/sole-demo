@@ -88,6 +88,16 @@ describe("periodShape", () => {
     expect(span(lastFy.previous)).toEqual(["2024-07-01", "2025-06-30"]);
   });
 
+  it("never heads two different years with words that mean the same year", () => {
+    const thisFy = periodShape("This financial year", null, TODAY);
+    expect([thisFy.label, thisFy.previousHeaderLabel]).toEqual(["This FY", "Last FY"]);
+
+    // "Last FY" beside "Previous FY" read as one year shown twice.
+    const lastFy = periodShape("Last financial year", null, TODAY);
+    expect([lastFy.label, lastFy.previousHeaderLabel]).toEqual(["Last FY", "Year before"]);
+    expect([lastFy.scope, lastFy.previousScope]).toEqual(["2025-26", "2024-25"]);
+  });
+
   it("compares a custom range against the same number of days immediately before it", () => {
     const shape = periodShape("Custom range", { from: "2026-03-10", to: "2026-03-19" }, TODAY);
     expect(span(shape.current)).toEqual(["2026-03-10", "2026-03-19"]);

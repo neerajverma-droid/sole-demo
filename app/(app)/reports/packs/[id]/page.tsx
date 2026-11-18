@@ -1,6 +1,11 @@
+import type { Metadata } from "next";
 import { Suspense } from "react";
 
 import { EditPackScreen } from "@/components/reports/packs/pack-routes";
+
+export const metadata: Metadata = {
+  title: "Report pack · Sole",
+};
 
 export default async function ReportPackPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;

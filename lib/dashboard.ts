@@ -408,13 +408,21 @@ function formatTopMoverLabel(row: ApiTopMover): string {
   return "Uncategorised";
 }
 
+/**
+ * What the dashboard's period filter sends — `period` and the window's bounds,
+ * as sole-webapp's dashboard did. Absent, a mover reports the financial year to
+ * date.
+ */
+export type DashboardPeriodQuery = { period: "month" | "year"; start: string; end: string };
+
 async function fetchTopMovers(
   route: string,
   start: FiscalYearStart,
+  query?: DashboardPeriodQuery,
 ): Promise<TopMover[]> {
   const range = currentFinancialYearRange(start);
   const response = await api.get<ApiEnvelope<ApiTopMover[]>>(route, {
-    params: { period: "year", start: range.start, end: range.end },
+    params: query ?? { period: "year", start: range.start, end: range.end },
   });
   const rows = response.data?.data ?? [];
   return rows.map((row, index) => {
@@ -431,12 +439,14 @@ async function fetchTopMovers(
 
 export function fetchDashboardTopIncomes(
   start: FiscalYearStart = AU_FISCAL_YEAR_START,
+  query?: DashboardPeriodQuery,
 ): Promise<TopMover[]> {
-  return fetchTopMovers(apiRoutes.dashboard.topIncomes, start);
+  return fetchTopMovers(apiRoutes.dashboard.topIncomes, start, query);
 }
 
 export function fetchDashboardTopExpenses(
   start: FiscalYearStart = AU_FISCAL_YEAR_START,
+  query?: DashboardPeriodQuery,
 ): Promise<TopMover[]> {
-  return fetchTopMovers(apiRoutes.dashboard.topExpenses, start);
+  return fetchTopMovers(apiRoutes.dashboard.topExpenses, start, query);
 }

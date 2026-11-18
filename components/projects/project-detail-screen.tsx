@@ -129,7 +129,10 @@ export function ProjectDetailScreen({ projectId }: { projectId: string }) {
     <div className="space-y-[15px]">
       {back}
 
-      <div className="flex flex-wrap items-center justify-between gap-4">
+      <div
+        className="flex flex-wrap items-center justify-between gap-4"
+        data-usertour="project-header"
+      >
         <div className="flex min-w-0 items-center gap-3">
           <ProjectAvatar id={project.id} name={project.name} className="size-12 text-base" />
           <div className="min-w-0">
@@ -173,6 +176,7 @@ export function ProjectDetailScreen({ projectId }: { projectId: string }) {
       <div
         role="tablist"
         aria-label="Project sections"
+        data-usertour="project-tabs"
         className="flex gap-1 overflow-x-auto border-b border-border"
       >
         {TABS.map(({ value, label, icon: Icon }) => {
@@ -183,6 +187,7 @@ export function ProjectDetailScreen({ projectId }: { projectId: string }) {
               type="button"
               role="tab"
               aria-selected={active}
+              data-usertour={`project-tab-${value}`}
               onClick={() => setTab(value)}
               className={cn(
                 "-mb-px flex shrink-0 items-center gap-2 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors",

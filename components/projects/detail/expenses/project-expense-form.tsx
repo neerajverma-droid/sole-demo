@@ -7,7 +7,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
+import { PrefixInput } from "@/components/ui/prefix-input";
 import { Label } from "@/components/ui/label";
 import { Shimmer } from "@/components/ui/shimmer";
 import { Switch } from "@/components/ui/switch";
@@ -40,7 +40,6 @@ import { deleteSourceDocument, uploadSourceDocument } from "@/lib/file-upload";
 import { searchExpenseDescriptions } from "@/lib/invoice-item-search";
 import { invoiceMoney, toIsoDate } from "@/lib/invoices";
 import { PROJECT_HIDDEN_CATEGORY_ID } from "@/lib/project-expenses";
-import { cn } from "@/lib/utils";
 import { activeCurrencySymbol } from "@/lib/country-context";
 
 type PendingFile = { key: string; file: File; previewUrl: string };
@@ -448,20 +447,16 @@ function MoneyInput({
   invalid?: boolean;
 }) {
   return (
-    <div className="relative">
-      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-        {activeCurrencySymbol()}
-      </span>
-      <Input
-        value={value}
-        inputMode="decimal"
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder="0.00"
-        aria-invalid={invalid}
-        className={cn("pl-7 tabular", invalid && "border-destructive focus-visible:ring-destructive")}
-      />
-    </div>
+    <PrefixInput
+      prefix={activeCurrencySymbol()}
+      value={value}
+      inputMode="decimal"
+      disabled={disabled}
+      onChange={(event) => onChange(event.target.value)}
+      placeholder="0.00"
+      aria-invalid={invalid}
+      className="tabular"
+    />
   );
 }
 

@@ -39,6 +39,7 @@ export function StepTracker({
   onJump,
   label = "Setup progress",
   allowJumpAhead = false,
+  tourPrefix,
 }: {
   steps: readonly StepTrackerStep[];
   /** Index of the step being shown. */
@@ -56,7 +57,14 @@ export function StepTracker({
    * can't get to.
    */
   allowJumpAhead?: boolean;
+  /**
+   * Marks each step for a walkthrough: `data-usertour="<prefix>-step-<id>"`
+   * and `data-tour-state` — "done", "next" (the first not done) or "todo" — so
+   * a tour can point at the step to do next, up here where it can always be seen.
+   */
+  tourPrefix?: string;
 }) {
+  const nextId = steps.find((step) => !done.includes(step.id))?.id;
   return (
     <ol className="flex items-start" aria-label={label}>
       {steps.map((step, index) => {
@@ -97,6 +105,16 @@ export function StepTracker({
             <li
               className="flex w-[4.5rem] flex-col items-center gap-2 sm:w-28"
               aria-current={isCurrent ? "step" : undefined}
+              data-usertour={tourPrefix ? `${tourPrefix}-step-${step.id}` : undefined}
+              data-tour-state={
+                tourPrefix
+                  ? complete
+                    ? "done"
+                    : step.id === nextId
+                      ? "next"
+                      : "todo"
+                  : undefined
+              }
             >
               {/* Answered steps are a click away again. Everything behind you is
                   already reachable, so this is a shortcut rather than a new way

@@ -2,21 +2,11 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { useSetAtom } from "jotai";
 import { ArrowRight, Check, ChevronRight, Database } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { BulkUploadDialog } from "@/components/contacts/bulk-upload-dialog";
-import { InvoiceBulkUploadDialog } from "@/components/invoices/bulk-upload-dialog";
-import { ExpenseBulkUploadDialog } from "@/components/expenses/bulk-upload-dialog";
-import { AssetBulkUploadDialog } from "@/components/assets/asset-bulk-upload-dialog";
-import {
-  assetBulkOpenAtom,
-  bulkUploadOpenAtom,
-  expenseBulkOpenAtom,
-  invoiceBulkOpenAtom,
-} from "@/lib/atoms";
+import { BankOptionsDialog } from "@/components/migrations/bank-options-dialog";
 import {
   MIGRATION_STEPS,
   type MigrationDialogId,
@@ -43,16 +33,10 @@ import { useMigrationsStore } from "@/stores/migrations";
 export function MigrationsScreen() {
   const router = useRouter();
 
-  /**
-   * One setter per importer, keyed the way `MIGRATION_STEPS` names them, so
-   * adding a sixth step is a line in that list plus a line here rather than
-   * another branch in `open`.
-   */
+  const [bankOptionsOpen, setBankOptionsOpen] = React.useState(false);
+  /** Only the bank step asks a question first; the rest are pages. */
   const openDialog: Record<MigrationDialogId, (open: boolean) => void> = {
-    contacts: useSetAtom(bulkUploadOpenAtom),
-    invoices: useSetAtom(invoiceBulkOpenAtom),
-    expenses: useSetAtom(expenseBulkOpenAtom),
-    assets: useSetAtom(assetBulkOpenAtom),
+    bank: setBankOptionsOpen,
   };
 
   /*
@@ -119,7 +103,10 @@ export function MigrationsScreen() {
         </div>
       </div>
 
-      <Card>
+      {/* The tour's "five imports" step highlights the whole card, header
+          included, so its tooltip sits above the card (over the hero) instead
+          of covering the heading. */}
+      <Card data-usertour="migration-steps">
         <CardHeader className="flex-row items-start gap-3 space-y-0">
           {/* The one place the gradient is at full strength, so the card is
               tied to the hero above it by a mark rather than by a wash. */}
@@ -139,7 +126,7 @@ export function MigrationsScreen() {
           </div>
         </CardHeader>
 
-        <CardContent className="space-y-2" data-usertour="migration-steps">
+        <CardContent className="space-y-2">
           {MIGRATION_STEPS.map((step) => (
             <StepRow
               key={step.id}
@@ -158,18 +145,10 @@ export function MigrationsScreen() {
         The order is a recommendation, not a rule — start wherever your data is.
       </p>
 
-      {/*
-        The four importers, mounted here rather than linked to.
-
-        Each is a dialog driven by its own atom, so it opens wherever it's
-        mounted — which means a step runs in place instead of sending someone
-        to another screen and leaving them there afterwards. All four are the
-        same `BulkImportDialog`; only the spec differs.
-      */}
-      <BulkUploadDialog />
-      <InvoiceBulkUploadDialog />
-      <ExpenseBulkUploadDialog />
-      <AssetBulkUploadDialog />
+      <BankOptionsDialog
+        open={bankOptionsOpen}
+        onOpenChange={setBankOptionsOpen}
+      />
     </div>
   );
 }

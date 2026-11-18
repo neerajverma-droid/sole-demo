@@ -14,8 +14,6 @@
  */
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import type { BankFeedProvider } from "@/lib/country-context";
 import { currentUserId, useSessionStore } from "@/stores/session";
 
@@ -61,18 +59,6 @@ export async function startBankConnection(
   if (!authUrl || !authUrl.startsWith("https://")) {
     throw new Error("Couldn't start the bank connection. Try again.");
   }
-
-  /*
-   * Named `bank_account_connected` but fired when the hand-off starts, which
-   * is a deliberate compromise and worth being honest about: the connection
-   * itself completes on the provider's own site, and this app never sees that
-   * moment. The honest alternative — no event at all — would leave the single
-   * most important activation step in the product unmeasured.
-   *
-   * So read this as "reached the bank's screen". Whether they came back is
-   * answerable from whether any transaction ever arrived for them.
-   */
-  track(EVENTS.BANK_ACCOUNT_CONNECTED, { stage: "handoff_started", provider });
 
   return authUrl;
 }

@@ -1,8 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-import { REVENUE_GOAL } from "@/lib/dashboard-data";
-
 type DashboardState = {
   /**
    * Annual revenue target in whole dollars; 0 means no goal set.
@@ -23,7 +21,7 @@ type DashboardState = {
 export const useDashboardStore = create<DashboardState>()(
   persist(
     (set) => ({
-      goalTarget: REVENUE_GOAL.defaultTarget,
+      goalTarget: 0,
       setGoalTarget: (value) => set({ goalTarget: value }),
       resetGoalTarget: () => set({ goalTarget: 0 }),
     }),

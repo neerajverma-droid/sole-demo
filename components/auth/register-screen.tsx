@@ -24,14 +24,27 @@ import { PasswordStrengthMeter } from "@/components/auth/password-strength";
 import { SocialButtons } from "@/components/auth/social-buttons";
 import { useAuthEntry, withEmail } from "@/components/auth/use-auth-entry";
 import BrandSplashLoader from "@/components/layout/brand-splash-loader";
+import { rememberSocialStart, trackWithProfile } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
 import { authEmailAtom, authErrorAtom, authPendingAtom } from "@/lib/atoms";
 import { LOGIN_ROUTE } from "@/lib/api/session";
 import {
   emailError,
   meetsPasswordRules,
   signUpWithPassword,
-  trackSignupInitiated,
 } from "@/lib/auth";
+import { attributionSignupFields } from "@/lib/partner-attribution";
+import {
+  SignupCountryLine,
+  useSignupCountry,
+} from "@/components/auth/signup-country";
+import {
+  buildSpmReferralPayload,
+  captureSpmReferral,
+  clearSpmReferral,
+  signUpFromInvite,
+  type SpmReferral,
+} from "@/lib/spm-referral";
 
 /**
  * /register — a new account.
@@ -47,7 +60,10 @@ import {
  *
  * The URL can carry a coupon (?code=), a referral (?refer-code=) and an
  * accountant invite (?id=accountant&accountant_email=), as the old combined
- * screen accepted.
+ * screen accepted. It can also carry an SPM accountant's referral
+ * (?spm_accountant_id=&email=…, see lib/spm-referral): then the password path
+ * goes through the invite sign-up, which records the referral, and the code
+ * path carries it on the code.
  */
 export function RegisterScreen() {
   const router = useRouter();
@@ -96,13 +112,25 @@ export function RegisterScreen() {
     () => searchParams.get("accountant_email") ?? "",
   );
 
-  /** The funnel's first step, counted once per visit however many tries it takes. */
-  const initiated = React.useRef(false);
-  const markInitiated = () => {
-    if (initiated.current) return;
-    initiated.current = true;
-    trackSignupInitiated();
-  };
+  /*
+   * An SPM accountant's invite: off this URL, or kept from an earlier hop. Its
+   * email is the client's own address, and its coupon a prefill like any other.
+   * Read after mount, because it lives in localStorage.
+   */
+  const [spmReferral, setSpmReferral] = React.useState<SpmReferral | null>(
+    null,
+  );
+  React.useEffect(() => {
+    const invite = captureSpmReferral();
+    if (!invite) return;
+    setSpmReferral(invite);
+    setEmail(invite.email);
+    if (invite.coupon_code && !searchParams.get("code")) {
+      setCoupon(invite.coupon_code);
+      setShowCoupon(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* ---------------------------------------------------------------- *
    * Validation
@@ -131,14 +159,76 @@ export function RegisterScreen() {
         ? "Both passwords must match."
         : undefined;
 
+  const signupCountry = useSignupCountry(spmReferral?.country_iso2);
+
+
   const extras = () => ({
     coupon_code: coupon.trim() || undefined,
     ref_code: !coupon.trim() && referCode ? referCode : undefined,
+    // Saved by the proxy from a partner link (?ref=&partner=); the backend keeps it on new accounts only.
+    ...attributionSignupFields(),
+    // The country shown under the form (a guess from location unless changed).
+    country_iso2: signupCountry.iso2 ?? undefined,
     accountant_email: wantsAccountant
       ? accountantEmail.trim() || undefined
       : undefined,
     has_accountant_email: wantsAccountant ? 2 : 1,
+    spm_referral: buildSpmReferralPayload(spmReferral),
   });
+
+  /** An invite only ever applies to a brand-new account. */
+  const forgetInviteIfTaken = (taken: boolean) => {
+    if (!taken || !spmReferral) return;
+    clearSpmReferral();
+    setSpmReferral(null);
+  };
+
+  /**
+   * The password path for an invited client: the dedicated sign-up, which
+   * records the referral and, for a trusted invite, activates the account on
+   * the spot. Everything else the invite carried goes up with it and is saved
+   * by the backend; whatever is missing is asked for in onboarding.
+   */
+  const createInvitedAccount = async (invite: SpmReferral) => {
+    const [firstName, ...rest] = (invite.name || "").split(/\s+/);
+    const accountant =
+      (wantsAccountant && accountantEmail.trim()) || invite.accountant_email;
+    const result = await signUpFromInvite({
+      email,
+      password,
+      ...(firstName ? { first_name: firstName, last_name: rest.join(" ") } : {}),
+      coupon_code: coupon.trim() || undefined,
+      join_from: invite.switching_from || undefined,
+      accountant_email: accountant || undefined,
+      has_accountant_email: accountant ? 2 : 1,
+      business_email: invite.business_email || undefined,
+      business_name: invite.business_name || undefined,
+      abn: invite.abn || undefined,
+      // What is shown under the form: the person's pick, else the accountant's, else a location guess.
+      country_iso2: signupCountry.iso2 ?? (invite.country_iso2 || undefined),
+      industry_id: invite.industry_id || undefined,
+      spm_referral: buildSpmReferralPayload(invite),
+    });
+
+    if (!result.ok) {
+      setPending(false);
+      setError(result.message);
+      setExists(result.reason === "exists");
+      forgetInviteIfTaken(result.reason === "exists");
+      return;
+    }
+
+    trackWithProfile(EVENTS.SIGNUP_DETAILS_ENTERED, {
+      primary_email: email.trim(),
+      signup_method: "email",
+    });
+    if (result.status === "verify") {
+      router.push(withEmail("/auth/verify-email", email));
+      return;
+    }
+    // Left pending: the redirect is in flight.
+    await land(result.user);
+  };
 
   /* ---------------------------------------------------------------- *
    * Submitting
@@ -158,10 +248,14 @@ export function RegisterScreen() {
       return;
     }
 
-    markInitiated();
     setPending(true);
     setError(null);
     setExists(false);
+
+    if (spmReferral) {
+      await createInvitedAccount(spmReferral);
+      return;
+    }
 
     const result = await signUpWithPassword(email, password, extras());
     if (!result.ok) {
@@ -174,6 +268,10 @@ export function RegisterScreen() {
       return;
     }
 
+    trackWithProfile(EVENTS.SIGNUP_DETAILS_ENTERED, {
+      primary_email: email.trim(),
+      signup_method: "email",
+    });
     // Left pending: the redirect is in flight.
     await land(result.user);
   };
@@ -182,7 +280,6 @@ export function RegisterScreen() {
     setEmailEdited(true);
     if (requiredEmailIssue(email) || accountantIssue || pending) return;
 
-    markInitiated();
     setPending(true);
     setSendingCode(true);
     setError(null);
@@ -193,6 +290,12 @@ export function RegisterScreen() {
       ...extras(),
     });
     if (message) setError(message);
+    else {
+      trackWithProfile(EVENTS.SIGNUP_DETAILS_ENTERED, {
+        primary_email: email.trim(),
+        signup_method: "email",
+      });
+    }
     setSendingCode(false);
     setPending(false);
   };
@@ -216,10 +319,12 @@ export function RegisterScreen() {
       subtext={
         codeStep
           ? undefined
-          : "Set a password to get started, or we'll email you a code instead."
+          : spmReferral
+            ? "Your accountant invited you to Sole. Set a password to get started, or we'll email you a code instead."
+            : "Set a password to get started, or we'll email you a code instead."
       }
-      promoHeadline="Start your free trial — no card required."
-      promoSupporting="Thirty days of everything. Cancel whenever, keep your data either way."
+      promoHeadline="Your books, sorted from day one."
+      promoSupporting="Cancel whenever, keep your data either way."
       footer={
         <div className="space-y-3">
           <p>
@@ -336,6 +441,8 @@ export function RegisterScreen() {
               </Field>
             )}
 
+            <SignupCountryLine signupCountry={signupCountry} disabled={pending} />
+
             {showCoupon ? (
               <Field label="Referral or coupon code" htmlFor="coupon">
                 <div className="relative">
@@ -407,7 +514,10 @@ export function RegisterScreen() {
           </form>
 
           <AuthDivider />
-          <SocialButtons verb="Sign up" />
+          <SocialButtons
+            verb="Sign up"
+            onStart={(provider) => rememberSocialStart(provider, "register")}
+          />
         </>
       )}
     </AuthLayout>

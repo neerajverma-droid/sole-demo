@@ -22,15 +22,13 @@
  */
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import {
   audTotals,
   billableEntries,
   depositPayload,
   documentTotals,
   itemPayload,
-  money,
+  roundRate,
 } from "@/lib/invoice-submit";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
 import { activeBaseCurrency } from "@/lib/country-context";
@@ -79,7 +77,7 @@ export function buildQuotePayload(
   const baseCurrency = context.baseCurrency ?? activeBaseCurrency();
   const converting =
     !!draft.convertCurrency && !!draft.currency && draft.currency !== baseCurrency;
-  const rate = converting ? context.exchangeRate : null;
+  const rate = converting ? roundRate(context.exchangeRate) : null;
 
   const document = documentTotals({ ...draft, items }, gstPercent);
   const aud = audTotals(document, rate);
@@ -129,7 +127,7 @@ export function buildQuotePayload(
   };
 
   if (converting && rate) {
-    payload.exchange_rate = money(rate);
+    payload.exchange_rate = rate;
     payload.total_after_exchange = document.total;
     payload.is_exchange_rate_edited = draft.rateEdited ? 1 : 0;
   }
@@ -199,19 +197,6 @@ export async function saveQuoteApi(
   if (id == null) {
     throw new Error("The quote saved but the server returned no id.");
   }
-
-  // Same shape as the invoice save, deliberately: a quote and an invoice are
-  // the two halves of the same funnel, and a report comparing them should not
-  // have to reconcile two different property names for the same thing.
-  const common = {
-    amount: Number(payload.total) || 0,
-    currency: String(payload.currency_code ?? context.baseCurrency ?? activeBaseCurrency()),
-    line_count: Array.isArray(payload.item) ? payload.item.length : 0,
-    is_ndis: Boolean(draft.ndis),
-  };
-
-  if (!context.quoteId) track(EVENTS.QUOTE_CREATED, common);
-  if (mode === "send") track(EVENTS.QUOTE_SENT, common);
 
   return { id: String(id) };
 }

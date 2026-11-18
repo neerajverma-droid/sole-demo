@@ -1,5 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
+const trackMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/analytics", () => ({ track: trackMock }));
+
 import { decryptPayload } from "@/utils/encrypt";
 import apiRoutes from "@/config/api-routes";
 
@@ -926,5 +929,21 @@ describe("fetchExpenseAttachmentsZip", () => {
     await expect(fetchExpenseAttachmentsZip(["1"])).rejects.toThrow(
       "No receipts found for the selected expenses.",
     );
+  });
+});
+
+describe("createExpenseApi fires its Mixpanel event", () => {
+  it("fires after the server confirms", async () => {
+    trackMock.mockClear();
+    apiMock.post.mockResolvedValue({ data: { success: true, data: { id: 1 } } });
+    await createExpenseApi({ ...emptyExpenseDraft("2026-09-10"), description: "Coffee", amount: 45, categoryId: "12", category: "Meals" });
+    expect(trackMock).toHaveBeenCalledWith("expense_added", { source: "manual", expense_category: "Meals" });
+  });
+
+  it("stays silent when the server refuses", async () => {
+    trackMock.mockClear();
+    apiMock.post.mockResolvedValue({ data: { success: false, message: "no" } });
+    await expect(createExpenseApi({ ...emptyExpenseDraft("2026-09-10"), description: "Coffee", amount: 45, categoryId: "12" })).rejects.toThrow();
+    expect(trackMock).not.toHaveBeenCalled();
   });
 });

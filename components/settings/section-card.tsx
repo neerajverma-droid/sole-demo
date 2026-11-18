@@ -43,7 +43,10 @@ export function SectionCard({
   return (
     // Only one section shows at a time, so this is unique on the page.
     <Card data-usertour="settings-section">
-      <CardHeader className="flex-row flex-wrap items-start justify-between gap-3 space-y-0 p-[15px]">
+      <CardHeader
+        className="flex-row flex-wrap items-start justify-between gap-3 space-y-0 p-[15px]"
+        data-usertour="settings-section-header"
+      >
         <div className="space-y-1">
           <CardTitle className="text-base">{title}</CardTitle>
           <CardDescription>{description}</CardDescription>
@@ -53,6 +56,7 @@ export function SectionCard({
             size="sm"
             disabled={!dirty || saving}
             onClick={onSave}
+            data-usertour="settings-save"
             className="disabled:pointer-events-auto disabled:cursor-not-allowed"
           >
             {saving && <Loader2 className="size-4 animate-spin" aria-hidden />}

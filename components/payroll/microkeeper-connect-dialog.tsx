@@ -201,7 +201,10 @@ export function MicrokeeperConnectDialog({
             ) : credentialStep ? (
               <>
                 {!replaceKeys && <WizardStepper steps={STEPS} current={2} />}
-                <section className="space-y-4 rounded-lg border border-border bg-card p-5 shadow-sm">
+                <section
+                  className="space-y-4 rounded-lg border border-border bg-card p-5 shadow-sm"
+                  data-usertour="mk-step-enter"
+                >
                   <StepHeading
                     eyebrow={replaceKeys ? undefined : "Step 3 of 3"}
                     title="Enter your Microkeeper API keys"
@@ -270,7 +273,7 @@ export function MicrokeeperConnectDialog({
                   title="How to find your API keys"
                   description="Sign in to Microkeeper and follow these steps."
                 />
-                <ol className="space-y-3">
+                <ol className="space-y-3" data-usertour="mk-step-keys">
                   {KEY_STEPS.map((item, index) => (
                     <li
                       key={item.title}
@@ -296,7 +299,10 @@ export function MicrokeeperConnectDialog({
             ) : (
               <>
                 <WizardStepper steps={STEPS} current={0} />
-                <section className="space-y-4 rounded-lg border border-border bg-card px-6 py-8 text-center shadow-sm">
+                <section
+                  className="space-y-4 rounded-lg border border-border bg-card px-6 py-8 text-center shadow-sm"
+                  data-usertour="mk-step-account"
+                >
                   <span
                     className="mx-auto grid size-14 place-items-center rounded-2xl bg-primary/10 text-primary"
                     aria-hidden
@@ -362,7 +368,11 @@ export function MicrokeeperConnectDialog({
                   <ArrowLeft />
                   Back
                 </Button>
-                <Button disabled={saving} onClick={() => void connect()}>
+                <Button
+                  disabled={saving}
+                  onClick={() => void connect()}
+                  data-usertour="mk-connect-submit"
+                >
                   {saving ? <Loader2 className="animate-spin" /> : <Link2 />}
                   {saving ? "Connecting…" : "Connect Microkeeper"}
                 </Button>
@@ -379,7 +389,10 @@ export function MicrokeeperConnectDialog({
                     Cancel
                   </Button>
                 )}
-                <Button onClick={() => setStep(step + 1)}>
+                <Button
+                  onClick={() => setStep(step + 1)}
+                  data-usertour={step === 1 ? "mk-get-started" : "mk-enter-keys"}
+                >
                   {step === 1 ? "Get started" : "Enter API keys"}
                 </Button>
               </>

@@ -14,8 +14,6 @@
  */
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import type { ExpenseReceipt } from "@/lib/expenses";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
 import { formatInvoiceDate, invoiceMoney } from "@/lib/invoices";
@@ -445,7 +443,6 @@ export async function createLiabilityApi(
   if (!response.data?.success) {
     throw new Error(response.data?.message || "Failed to create liability.");
   }
-  track(EVENTS.LIABILITY_ADDED, { amount: draft.amount });
   const id = response.data.data?.id;
   return { id: id != null ? String(id) : "" };
 }

@@ -1,15 +1,24 @@
 "use client";
 
 import * as React from "react";
-import { Building2 } from "lucide-react";
+import { Building2, Pencil } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { FormSection } from "@/components/ui/form-section";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useActiveBusiness } from "@/hooks/use-active-business";
 import { useCountryContext } from "@/hooks/use-country-context";
 import { formatBusinessAddress } from "@/lib/businesses";
+import { invoiceEmailError } from "@/lib/invoices";
 import { businessIdentifiers } from "@/lib/country-context";
 import type { DocumentFields } from "@/lib/sales-settings";
 
@@ -32,6 +41,7 @@ export function SenderBlock({
   fields,
   email,
   onEmailChange,
+  compact = false,
 }: {
   fields?: Pick<
     DocumentFields,
@@ -43,6 +53,12 @@ export function SenderBlock({
    */
   email?: string;
   onEmailChange?: (value: string) => void;
+  /**
+   * One line — business name and email — with Edit opening a dialog for the
+   * email, instead of the address and business numbers with Edit inline.
+   * Opt-in, so the quote editor keeps the fuller block.
+   */
+  compact?: boolean;
 } = {}) {
   const { business, loading } = useActiveBusiness();
   const { country } = useCountryContext();
@@ -61,6 +77,117 @@ export function SenderBlock({
   const [editing, setEditing] = React.useState(false);
   // Held apart from the committed value so Cancel has something to discard.
   const [emailDraft, setEmailDraft] = React.useState(email ?? "");
+  const [emailError, setEmailError] = React.useState<string | undefined>();
+
+  /** Commits the typed address, unless it isn't one — then it stays open with the reason. */
+  const commitEmail = () => {
+    const trimmed = emailDraft.trim();
+    const error = invoiceEmailError(trimmed);
+    if (error) {
+      setEmailError(error);
+      return;
+    }
+    setEmailError(undefined);
+    onEmailChange?.(trimmed);
+    setEditing(false);
+  };
+
+  if (compact) {
+    return (
+      <FormSection
+        icon={Building2}
+        title="From"
+        action={
+          editable ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7"
+              onClick={() => {
+                // Seeded on open, so it always starts from what's shown.
+                setEmailDraft(email ?? "");
+                setEmailError(undefined);
+                setEditing(true);
+              }}
+            >
+              <Pencil />
+              Edit
+            </Button>
+          ) : undefined
+        }
+      >
+        {loading ? (
+          <Skeleton className="h-5 w-64" aria-hidden />
+        ) : (
+          <p className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-sm">
+            {business?.name && (
+              <span className="font-medium">{business.name}</span>
+            )}
+            {editable && (
+              <span className="min-w-0 truncate text-muted-foreground">
+                {email || "No email set"}
+              </span>
+            )}
+          </p>
+        )}
+
+        <Dialog
+          open={editing}
+          onOpenChange={(open) => {
+            if (!open) setEmailError(undefined);
+            setEditing(open);
+          }}
+        >
+          <DialogContent className="sm:max-w-md">
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                commitEmail();
+              }}
+              className="space-y-4"
+            >
+              <DialogHeader>
+                <DialogTitle>Business email</DialogTitle>
+                <DialogDescription>
+                  Invoices are sent from this address and copied to it. It only
+                  changes this invoice.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-1">
+                <Input
+                  type="email"
+                  value={emailDraft}
+                  onChange={(event) => {
+                    setEmailDraft(event.target.value);
+                    setEmailError(undefined);
+                  }}
+                  placeholder="you@yourbusiness.com"
+                  aria-label="Business email"
+                  aria-invalid={!!emailError}
+                  autoFocus
+                />
+                {emailError && (
+                  <p role="alert" className="text-xs text-destructive">
+                    {emailError}
+                  </p>
+                )}
+              </div>
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setEditing(false)}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit">Save</Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </FormSection>
+    );
+  }
 
   return (
     <FormSection
@@ -75,10 +202,7 @@ export function SenderBlock({
                 size="sm"
                 variant="ghost"
                 className="h-7"
-                onClick={() => {
-                  onEmailChange?.(emailDraft.trim());
-                  setEditing(false);
-                }}
+                onClick={commitEmail}
               >
                 Save
               </Button>
@@ -86,7 +210,10 @@ export function SenderBlock({
                 size="sm"
                 variant="ghost"
                 className="h-7 text-muted-foreground"
-                onClick={() => setEditing(false)}
+                onClick={() => {
+                  setEmailError(undefined);
+                  setEditing(false);
+                }}
               >
                 Cancel
               </Button>
@@ -99,9 +226,11 @@ export function SenderBlock({
               onClick={() => {
                 // Seeded on open, so it always starts from what's shown.
                 setEmailDraft(email ?? "");
+                setEmailError(undefined);
                 setEditing(true);
               }}
             >
+              <Pencil />
               Edit
             </Button>
           )
@@ -125,25 +254,36 @@ export function SenderBlock({
 
             {editable ? (
               editing ? (
-                <Input
-                  type="email"
-                  value={emailDraft}
-                  onChange={(event) => setEmailDraft(event.target.value)}
-                  placeholder="you@yourbusiness.com"
-                  aria-label="Invoice email"
-                  autoFocus
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      onEmailChange?.(emailDraft.trim());
-                      setEditing(false);
-                    }
-                    if (event.key === "Escape") {
-                      event.preventDefault();
-                      setEditing(false);
-                    }
-                  }}
-                />
+                <div className="space-y-1">
+                  <Input
+                    type="email"
+                    value={emailDraft}
+                    onChange={(event) => {
+                      setEmailDraft(event.target.value);
+                      setEmailError(undefined);
+                    }}
+                    placeholder="you@yourbusiness.com"
+                    aria-label="Invoice email"
+                    aria-invalid={!!emailError}
+                    autoFocus
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        commitEmail();
+                      }
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        setEmailError(undefined);
+                        setEditing(false);
+                      }
+                    }}
+                  />
+                  {emailError && (
+                    <p role="alert" className="text-xs text-destructive">
+                      {emailError}
+                    </p>
+                  )}
+                </div>
               ) : (
                 <p>{email || "No email set"}</p>
               )

@@ -110,7 +110,10 @@ export function TaxSection() {
       saving={saving}
       onSave={() => void onSave()}
     >
-      <div className="flex items-center justify-between gap-[15px] rounded-md border p-[15px]">
+      <div
+        className="flex items-center justify-between gap-[15px] rounded-md border p-[15px]"
+        data-usertour="settings-tax-toggle"
+      >
         <div className="space-y-0.5">
           <p className="text-sm font-medium">Registered for {tax}</p>
           <p className="text-xs text-muted-foreground">

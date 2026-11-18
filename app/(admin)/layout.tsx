@@ -20,7 +20,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         <AdminSidebar />
         <div className="flex min-w-0 flex-1 flex-col">
           <AdminTopBar />
-          <main className="w-full flex-1 bg-muted/30 p-4 md:p-7">
+          {/* Bottom padding keeps a table's pager clear of the fixed scroll-to-top button. */}
+          <main className="w-full flex-1 bg-muted/30 p-4 pb-24 md:p-7 md:pb-24">
             <div className="animate-rise">{children}</div>
           </main>
         </div>

@@ -36,6 +36,7 @@
 
 import { ADDONS, addonById, type Addon } from "@/lib/addons";
 import {
+  type BillingInterval,
   type SubscriptionInfo,
   type SubscriptionPlan,
 } from "@/lib/subscription";
@@ -159,6 +160,41 @@ export function addonMonthlyPrice(
     : addon.priceMonthly;
 }
 
+/** What an add-on bills, and how often: its price-list row as the API sends it. */
+export type AddonBilledPrice = { amount: number; interval: BillingInterval };
+
+/**
+ * An add-on's price as charged at `interval` — $47.90 a year, not the $3.99 a
+ * month that divides out to. The per-month figure on its own read as a price
+ * the API never sent, so the cards quote the charge and its period instead.
+ *
+ * Falls back to the monthly row when the plan's interval has none, and to the
+ * card's own figure when the price list has never heard of the slug.
+ */
+export function addonBilledPrice(
+  addon: Addon,
+  catalogue: SubscriptionPlan[] = [],
+  interval: string | null = "monthly",
+): AddonBilledPrice {
+  // A seat's price, from the card: seats bill on their own interval, and the
+  // price list's annual row for the slug isn't what one costs.
+  if (addon.priceUnit) return { amount: addon.priceMonthly, interval: "monthly" };
+
+  const wanted: BillingInterval = interval === "annual" ? "annual" : "monthly";
+  const rows = addon.slug
+    ? catalogue.filter((plan) => plan.slug === addon.slug)
+    : [];
+  const row =
+    rows.find((plan) => plan.interval === wanted) ??
+    rows.find((plan) => plan.interval === "monthly");
+
+  if (!row) return { amount: addon.priceMonthly, interval: "monthly" };
+  return {
+    amount: row.price,
+    interval: row.interval === "annual" ? "annual" : "monthly",
+  };
+}
+
 /**
  * The same, for a slug that may have no card.
  *
@@ -190,15 +226,14 @@ export function monthlyPriceForSlug(
  * Add-ons a package already covers, which the shop has to stop charging for.
  *
  * The allowance is positional on the server — the first N slugs of the stored
- * array are free on `bundle` (3), `advanced` (6) and `pro` (unlimited), by
- * array order rather than by which add-on it is. This mirrors that rather than
+ * array are free on `bundle` (3) and `advanced` (unlimited), by array order
+ * rather than by which add-on it is. This mirrors that rather than
  * inventing a nicer rule, because a total that disagrees with the invoice is
  * worse than a total that is hard to explain.
  */
 export const INCLUDED_ADDON_COUNT: Record<string, number> = {
   bundle: 3,
-  advanced: 6,
-  pro: Number.POSITIVE_INFINITY,
+  advanced: Number.POSITIVE_INFINITY,
 };
 
 export function includedAddonCount(planSlug: string): number {

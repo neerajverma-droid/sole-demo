@@ -3,11 +3,11 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useAtom } from "jotai";
-import { Trash2 } from "lucide-react";
+import { CalendarDays, ListChecks, StickyNote, Target } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { FormSection } from "@/components/ui/form-section";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -25,11 +25,12 @@ import { MoneyInput } from "@/components/planner/money-input";
 import {
   PLANNER_ROOT,
   PlannerDetailHeader,
+  PlannerFormFooter,
   PlannerNotFound,
+  useFieldTouch,
   usePlannerSection,
 } from "@/components/planner/planner-detail";
 import { DeleteBudgetDialog } from "@/components/planner/planner-dialogs";
-import { StepNumber } from "@/components/planner/step-number";
 import { deleteBudgetIdAtom } from "@/lib/atoms";
 import { invoiceMoney, parseIsoDate, toIsoDate } from "@/lib/invoices";
 import {
@@ -95,7 +96,7 @@ export function BudgetDetail({
   const [draft, setDraft] = React.useState<BudgetDraft>(() =>
     editing ? draftFromBudget(editing) : emptyBudgetDraft(today),
   );
-  const [edited, setEdited] = React.useState(false);
+  const fields = useFieldTouch();
 
   // Seed the form again the first time the budget arrives — see GoalDetail for
   // why: this page often mounts before its list has loaded.
@@ -104,11 +105,10 @@ export function BudgetDetail({
     if (!editing || seededId.current === editing.id) return;
     seededId.current = editing.id;
     setDraft(draftFromBudget(editing));
-    setEdited(false);
-  }, [editing]);
+    fields.reset();
+  }, [editing, fields.reset]);
 
   const patch = (values: Partial<BudgetDraft>) => {
-    setEdited(true);
     setDraft((current) => ({ ...current, ...values }));
   };
 
@@ -136,8 +136,8 @@ export function BudgetDetail({
     });
 
   const issues = budgetIssues(draft);
-  const issueFor = (key: string) =>
-    edited ? issues.find((issue) => issue.key === key)?.message : undefined;
+  // Shown once a field has been left, or everything once Save is pressed.
+  const issueFor = (key: string) => fields.visible(issues, key);
 
   const amount = budgetAmount(draft);
   const threshold = Number(draft.alertThreshold);
@@ -148,7 +148,7 @@ export function BudgetDetail({
       : "The share of the amount at which Sole flags the budget.";
 
   const onSave = async () => {
-    setEdited(true);
+    fields.submit();
     if (issues.length > 0) return;
 
     try {
@@ -188,7 +188,7 @@ export function BudgetDetail({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-[15px]">
       <PlannerDetailHeader
         backHref={PLANNER_ROOT}
         backLabel="Budget"
@@ -199,16 +199,15 @@ export function BudgetDetail({
         ]}
       />
 
-      <div className="space-y-4">
+      <div className="space-y-[15px]">
         {/* Step 1 --------------------------------------------------------- */}
-        <Card data-usertour="budget-target">
-          <CardHeader className="pb-4">
-            <CardTitle className="flex items-center gap-2.5 text-base">
-              <StepNumber n={1} />
-              Set the target
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
+        <div data-usertour="budget-target">
+          <FormSection
+            icon={Target}
+            title="Set the target"
+            description="How much this envelope allows, and when Sole should warn you."
+            className="space-y-4"
+          >
             <Field
               label="Budget name"
               htmlFor="budget-name"
@@ -219,6 +218,7 @@ export function BudgetDetail({
                 id="budget-name"
                 value={draft.name}
                 onChange={(event) => patch({ name: event.target.value })}
+                onBlur={() => fields.touch("name")}
                 placeholder="Software & subscriptions"
                 aria-invalid={!!issueFor("name")}
               />
@@ -229,6 +229,7 @@ export function BudgetDetail({
                 <MoneyInput
                   value={draft.amount}
                   onChange={(value) => patch({ amount: value })}
+                  onBlur={() => fields.touch("amount")}
                   label="Budget amount"
                   invalid={!!issueFor("amount")}
                 />
@@ -243,23 +244,23 @@ export function BudgetDetail({
                 <PercentInput
                   value={draft.alertThreshold}
                   onChange={(value) => patch({ alertThreshold: value })}
+                  onBlur={() => fields.touch("alertThreshold")}
                   label="Alert threshold"
                   invalid={!!issueFor("alertThreshold")}
                 />
               </Field>
             </div>
-          </CardContent>
-        </Card>
+          </FormSection>
+        </div>
 
         {/* Step 2 --------------------------------------------------------- */}
-        <Card data-usertour="budget-timeline">
-          <CardHeader className="pb-4">
-            <CardTitle className="flex items-center gap-2.5 text-base">
-              <StepNumber n={2} />
-              Timeline
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
+        <div data-usertour="budget-timeline">
+          <FormSection
+            icon={CalendarDays}
+            title="Timeline"
+            description="The window the budget's spend is read from."
+            className="space-y-4"
+          >
             <Field
               label="Period"
               hint={
@@ -294,6 +295,8 @@ export function BudgetDetail({
                 <DatePicker
                   value={draft.startDate}
                   onChange={setStartDate}
+                  onClose={() => fields.touch("startDate")}
+                  invalid={!!issueFor("startDate")}
                   label="Start date"
                 />
               </Field>
@@ -307,33 +310,35 @@ export function BudgetDetail({
                 <DatePicker
                   value={draft.endDate}
                   onChange={(iso) => patch({ endDate: iso })}
+                  onClose={() => fields.touch("endDate")}
+                  invalid={!!issueFor("endDate")}
                   fromDate={parseIsoDate(draft.startDate)}
                   label="End date"
                 />
               </Field>
             </div>
-          </CardContent>
-        </Card>
+          </FormSection>
+        </div>
 
         {/* Step 3 --------------------------------------------------------- */}
-        <Card data-usertour="budget-categories">
-          <CardHeader className="pb-4">
-            <CardTitle className="flex items-center gap-2.5 text-base">
-              <StepNumber n={3} />
-              Assign categories
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
+        <div data-usertour="budget-categories">
+          <FormSection
+            icon={ListChecks}
+            title="Assign categories"
+            description="Which expenses count against this budget."
+            className="space-y-4"
+          >
             <Field
               label="Expense categories"
               required
-              hint="Spend against this budget is read from your expenses in these categories."
+              hint="Choose the categories for this budget. Once it's saved, link the expenses that count towards it."
               error={issueFor("categories")}
             >
               <CategoryChecklist
                 options={categoryOptions}
                 selected={draft.categories}
                 onChange={(categories) => patch({ categories })}
+                onTouched={() => fields.touch("categories")}
                 invalid={!!issueFor("categories")}
                 placeholder={
                   categoriesQuery.isLoading
@@ -342,33 +347,25 @@ export function BudgetDetail({
                 }
               />
             </Field>
-          </CardContent>
-        </Card>
+          </FormSection>
+        </div>
 
         {/* Step 4 --------------------------------------------------------- */}
-        <Card>
-          <CardHeader className="pb-4">
-            <CardTitle className="flex items-center gap-2.5 text-base">
-              <StepNumber n={4} />
-              Notes
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Field
-              label="Notes"
-              htmlFor="budget-notes"
-              hint="Optional. Only you see this."
-            >
-              <Textarea
-                id="budget-notes"
-                rows={4}
-                value={draft.notes}
-                onChange={(event) => patch({ notes: event.target.value })}
-                placeholder="What this envelope is meant to cover, and what it isn't."
-              />
-            </Field>
-          </CardContent>
-        </Card>
+        <FormSection icon={StickyNote} title="Notes">
+          <Field
+            label="Notes"
+            htmlFor="budget-notes"
+            hint="Optional. Only you see this."
+          >
+            <Textarea
+              id="budget-notes"
+              rows={4}
+              value={draft.notes}
+              onChange={(event) => patch({ notes: event.target.value })}
+              placeholder="What this envelope is meant to cover, and what it isn't."
+            />
+          </Field>
+        </FormSection>
 
         {/* Which expenses count against this budget.
             Only for a budget that exists — there is nothing to link an expense
@@ -382,37 +379,15 @@ export function BudgetDetail({
         )}
       </div>
 
-      {/* Footer. The only place the budget is saved from, so it isn't offered
-          twice in the header row. */}
-      <div
-        className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4"
-        data-usertour="budget-save"
-      >
-        <Button
-          variant="ghost"
-          className="text-destructive hover:text-destructive"
-          disabled={!editing}
-          onClick={() => editing && setDeleteId(editing.id)}
-        >
-          <Trash2 />
-          Delete
-        </Button>
-        <div className="flex flex-wrap items-center gap-3">
-          <Button variant="outline" onClick={() => router.push(PLANNER_ROOT)}>
-            Cancel
-          </Button>
-          <Button
-            onClick={onSave}
-            disabled={(edited && issues.length > 0) || saveBudget.isPending}
-          >
-            {saveBudget.isPending
-              ? "Saving..."
-              : editing
-                ? "Save changes"
-                : "Create budget"}
-          </Button>
-        </div>
-      </div>
+      {/* Save, like every other form, lives bottom right. */}
+      <PlannerFormFooter
+        onCancel={() => router.push(PLANNER_ROOT)}
+        onSave={onSave}
+        saving={saveBudget.isPending}
+        saveLabel={editing ? "Update budget" : "Save budget"}
+        onDelete={editing ? () => setDeleteId(editing.id) : undefined}
+        saveTourId="budget-save"
+      />
 
       {/* Mounted here rather than on the list: confirming has to leave the
           page, which the list's copy can't do. */}
@@ -432,11 +407,13 @@ export function BudgetDetail({
 function PercentInput({
   value,
   onChange,
+  onBlur,
   label,
   invalid,
 }: {
   value: string;
   onChange: (value: string) => void;
+  onBlur?: () => void;
   label: string;
   invalid?: boolean;
 }) {
@@ -450,6 +427,7 @@ function PercentInput({
         inputMode="numeric"
         value={value}
         onChange={(event) => onChange(event.target.value)}
+        onBlur={onBlur}
         aria-label={label}
         aria-invalid={!!invalid}
       />

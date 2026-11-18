@@ -31,7 +31,7 @@ import type { AuthUser } from "@/lib/api/types";
  * status changes, adding a country, rollback) to anyone who is not a super
  * admin, whatever grants they hold.
  */
-export const PLATFORM_FEATURE_KEYS = ["dashboard", "tenants", "users", "country_config"] as const;
+export const PLATFORM_FEATURE_KEYS = ["dashboard", "tenants", "users", "country_config", "partners", "resources"] as const;
 
 /**
  * The Command Centre dashboards, in the order the hub and the sidebar list
@@ -179,7 +179,10 @@ export const ADMIN_ROUTE_RULES: { prefix: string; gate: AdminGate }[] = [
   { prefix: `${ADMIN_BASE}/users`, gate: { feature: "users" } },
   { prefix: `${ADMIN_BASE}/countries`, gate: { feature: "country_config" } },
   { prefix: `${ADMIN_BASE}/chart-of-accounts`, gate: { feature: "country_config" } },
+  { prefix: `${ADMIN_BASE}/partners`, gate: { feature: "partners" } },
+  { prefix: `${ADMIN_BASE}/resources`, gate: { feature: "resources" } },
   { prefix: `${ADMIN_BASE}/access`, gate: { superAdminOnly: true } },
+  { prefix: `${ADMIN_BASE}/addons`, gate: { superAdminOnly: true } },
   {
     prefix: `${ADMIN_BASE}/command-centre`,
     gate: { anyOf: COMMAND_CENTRE_FEATURE_KEYS },
@@ -199,6 +202,8 @@ const LANDING_ORDER = [
   `${ADMIN_BASE}/tenants`,
   `${ADMIN_BASE}/users`,
   `${ADMIN_BASE}/countries`,
+  `${ADMIN_BASE}/partners`,
+  `${ADMIN_BASE}/resources`,
   `${ADMIN_BASE}/command-centre`,
 ];
 

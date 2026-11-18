@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import { useAtom, useSetAtom } from "jotai";
 import { Eye, Search, SearchX, Undo2 } from "lucide-react";
 
@@ -10,7 +9,6 @@ import { Button } from "@/components/ui/button";
 import {
   Empty,
   EmptyActions,
-  EmptyCue,
   EmptyDescription,
   EmptyMedia,
   EmptyTitle,
@@ -59,6 +57,10 @@ import {
 import { useContactsStore } from "@/stores/contacts";
 
 const DEFAULT_PAGE_SIZE = 25;
+
+/** A client refund is raised from the bank line it settles, not from here. */
+const HOW_TO_REFUND =
+  "To create one, go to Transactions, open Unmatched, click the debit (money out) amount of the transaction, choose Match, and create the client refund from there.";
 
 export function RefundsTable({
   refunds,
@@ -111,23 +113,19 @@ export function RefundsTable({
 
   if (isEmpty) {
     return (
-      <Empty>
+      // No filters render here, so this is what the list tour waits for.
+      <Empty data-usertour="refund-empty">
         <EmptyMedia>
           <Undo2 aria-hidden />
         </EmptyMedia>
         <div className="space-y-1">
-          <EmptyTitle>No refunds yet</EmptyTitle>
-          <EmptyDescription>
-            Issue a refund or credit note when a client returns goods,
-            overpays, or you adjust their bill.
+          <EmptyTitle>You don&apos;t have any client refunds yet</EmptyTitle>
+          {/* What the tour's last step points at: the card is too tall for a
+              tooltip anchored to it to stay on screen. */}
+          <EmptyDescription data-usertour="refund-empty-howto">
+            {HOW_TO_REFUND}
           </EmptyDescription>
         </div>
-        <EmptyCue label="Start here" />
-        <EmptyActions>
-          <Button size="sm" asChild data-usertour="refund-issue">
-            <Link href="/sales/client-refunds/new">Issue client refund</Link>
-          </Button>
-        </EmptyActions>
       </Empty>
     );
   }
@@ -234,26 +232,23 @@ export function RefundsTable({
           </EmptyMedia>
           <div className="space-y-1">
             <EmptyTitle>
-              {narrowed ? "No refunds match your filters" : "No refunds yet"}
+              {narrowed
+                ? "No refunds match your filters"
+                : "You don't have any client refunds yet"}
             </EmptyTitle>
             <EmptyDescription>
               {narrowed
                 ? "Try a different search, or clear the filters to see everything."
-                : "Issue a refund or credit note when a client returns goods, overpays, or you adjust their bill."}
+                : HOW_TO_REFUND}
             </EmptyDescription>
           </div>
-          {!narrowed && <EmptyCue label="Start here" />}
-          <EmptyActions>
-            {narrowed ? (
+          {narrowed && (
+            <EmptyActions>
               <Button variant="outline" size="sm" onClick={clearFilters}>
                 Clear filters
               </Button>
-            ) : (
-              <Button size="sm" asChild data-usertour="refund-issue">
-                <Link href="/sales/client-refunds/new">Issue client refund</Link>
-              </Button>
-            )}
-          </EmptyActions>
+            </EmptyActions>
+          )}
         </Empty>
       ) : (
         <>

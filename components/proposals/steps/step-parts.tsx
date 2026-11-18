@@ -17,8 +17,8 @@ export function StepHeader({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-start justify-between gap-4">
-      <div className="space-y-1">
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+      <div className="min-w-0 space-y-1">
         <h2 className="text-base font-semibold">{title}</h2>
         <p className="text-sm text-muted-foreground">{description}</p>
       </div>
@@ -54,7 +54,7 @@ export function StepFooter({
       <Button type="button" disabled={saving || disabled} onClick={onSave}>
         {saving && <Loader2 className="animate-spin" aria-hidden />}
         {saving ? "Saving..." : nextLabel}
-        {!saving && nextLabel !== "Save" && <ChevronRight />}
+        {!saving && !nextLabel.startsWith("Save") && <ChevronRight />}
       </Button>
     </div>
   );

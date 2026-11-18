@@ -55,12 +55,15 @@ export function ProjectClientSelect({
   onChange,
   invalid,
   disabled,
+  askPhone = true,
 }: {
   id?: string;
   value: ProjectClient | null;
   onChange: (client: ProjectClient | null) => void;
   invalid?: boolean;
   disabled?: boolean;
+  /** Whether "Add new client" asks for a phone number (Time Tracker's doesn't). */
+  askPhone?: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
@@ -205,6 +208,7 @@ export function ProjectClientSelect({
       <NewClientDialog
         open={creating}
         onOpenChange={setCreating}
+        showPhone={askPhone}
         initialName={query.trim()}
         onCreated={async (contact) => {
           // The new client's contact row only exists server-side, so fetch the

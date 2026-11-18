@@ -1,4 +1,10 @@
+import type { Metadata } from "next";
+
 import { CardPaymentScreen } from "@/components/payments/public-pay/card-payment-screen";
+
+export const metadata: Metadata = {
+  title: "Pay invoice · Sole",
+};
 
 export default async function CardPaymentPage({
   searchParams,

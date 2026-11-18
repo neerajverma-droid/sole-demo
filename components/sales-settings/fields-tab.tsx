@@ -66,6 +66,7 @@ export function FieldsTab({
     () => shownFields({ businessId: countryLabel(country, "business_id", "ABN"), tax: taxWord(country) }),
     [country],
   );
+  const tax = taxWord(country);
   const isInvoice = kind === "Invoice";
   const fields = isInvoice ? values.invoiceFields : values.quoteFields;
   const notes = isInvoice ? values.invoiceNotes : values.quoteNotes;
@@ -97,6 +98,7 @@ export function FieldsTab({
         <SalesSection
           icon={ListChecks}
           title={`${kind} Field Settings`}
+          tourId="sales-fields"
           description={`Choose what prints on a ${kind.toLowerCase()}. Switching one off removes it from the document — it doesn't stop you recording it.`}
         >
           {groups.map((group) => (
@@ -111,7 +113,19 @@ export function FieldsTab({
                       key={field.key}
                       className="flex cursor-pointer items-center justify-between gap-4 p-3"
                     >
-                      <span className="text-sm">{field.label}</span>
+                      <span className="min-w-0">
+                        <span className="text-sm">{field.label}</span>
+                        {/* The GST switch is the one people read as "turn GST
+                            off", so it says what it really does. */}
+                        {field.key === "gst" && (
+                          <span className="mt-0.5 block text-xs text-muted-foreground">
+                            Only hides the {tax} column on line items. The {tax}{" "}
+                            total still shows — to remove {tax} completely, turn
+                            off your {tax} in Tax settings or create the{" "}
+                            {kind.toLowerCase()} with no {tax}.
+                          </span>
+                        )}
+                      </span>
                       <Switch
                         checked={fields[field.key]}
                         onCheckedChange={(on) => setField(field.key, on)}
@@ -128,6 +142,7 @@ export function FieldsTab({
         <SalesSection
           icon={StickyNote}
           title={`Custom ${kind} Notes`}
+          tourId="sales-notes"
           description={`Printed at the foot of every ${kind.toLowerCase()}, and prefilled into the notes field of a new one so you can change it per document.`}
         >
           <Field label={`${kind} notes`}>
@@ -154,6 +169,7 @@ export function FieldsTab({
           <SalesSection
             icon={CheckCircle2}
             title="Quote Acceptance Flow"
+            tourId="sales-acceptance"
             description="What happens the moment a client accepts."
           >
             <Field

@@ -6,8 +6,14 @@ import usertour from "usertour.js";
 
 import { useSession } from "@/components/auth/session-provider";
 import { mountTourCardMotion } from "@/components/usertour/tour-card-motion";
-import { mountTourSpotlight } from "@/components/usertour/tour-spotlight";
+import {
+  mountTourSpotlight,
+  setTourTarget,
+} from "@/components/usertour/tour-spotlight";
+import { getAccessToken, getRefreshToken } from "@/lib/api/session";
+import { endDashboardDemo } from "@/lib/dashboard-demo";
 import { useOnboardingSurveySessionStore } from "@/stores/onboarding-survey";
+import { sessionUserId, useSessionStore } from "@/stores/session";
 
 const USERTOUR_TOKEN = process.env.NEXT_PUBLIC_USERTOUR_TOKEN;
 
@@ -44,6 +50,12 @@ let settling: ResizeObserver | null = null;
  * the target is placed again if it changes size while the step settles.
  */
 function scrollTourTarget(el: Element) {
+  // The spotlight rings this element itself, not the box the SDK measured —
+  // or, inside a `data-tour-scroll` block, the whole block: the step points at
+  // a small header so the card can sit beside it, and the ring covers the
+  // card the header belongs to.
+  setTourTarget(el.closest("[data-tour-scroll]") ?? el);
+  revealSideways(el);
   settling?.disconnect();
   placeTourTarget(el);
 
@@ -69,6 +81,23 @@ function scrollTourTarget(el: Element) {
  * a card's height clear above it, and left alone if it's already there.
  */
 function placeTourTarget(el: Element) {
+  const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ? "auto"
+    : "smooth";
+
+  // Inside a dialog or drawer the page is locked and only the panel scrolls,
+  // so moving the window would do nothing. Steps there sit beside the panel
+  // rather than above their target, so the panel is scrolled to bring it in.
+  //
+  // This has to come before the pinned check below: a dialog is itself
+  // `position: fixed`, so everything inside one counted as pinned and this
+  // branch was never reached — a step on a field further down a long form
+  // (the Create property modal's purchase details) stayed out of view.
+  if (el.closest('[role="dialog"]')) {
+    scrollWithinDialog(el, behavior);
+    return;
+  }
+
   // A sticky or fixed bar, like the editors' save actions, is on screen
   // wherever the page is scrolled. Scrolling the window for it only moved
   // the page under it, so the card landed beside some unrelated section.
@@ -76,17 +105,6 @@ function placeTourTarget(el: Element) {
 
   const rect = el.getBoundingClientRect();
   const viewport = window.innerHeight;
-  const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    ? "auto"
-    : "smooth";
-
-  // Inside a dialog or drawer the page is locked and only the panel scrolls,
-  // so moving the window would do nothing. Steps there sit beside the panel
-  // rather than above their target, so it only has to come into view.
-  if (el.closest('[role="dialog"]')) {
-    el.scrollIntoView({ block: "nearest", behavior });
-    return;
-  }
 
   const roomAbove = rect.top >= TOUR_CARD_ROOM;
   const fullyVisible = rect.top >= 0 && rect.bottom <= viewport - 16;
@@ -113,6 +131,91 @@ function placeTourTarget(el: Element) {
   }
 
   window.scrollTo({ top: parkAt, behavior });
+}
+
+/**
+ * Scrolls a dialog's own scrolling body so a step's target is in view.
+ *
+ * A target already fully on screen is left alone. Otherwise it is centred in
+ * the body, with room above and below for the ring, or — when it is taller
+ * than the body, like a block of several fields — lined up with the top so
+ * its first field is what the card is beside. The footer, outside the body,
+ * needs nothing.
+ */
+function scrollWithinDialog(el: Element, behavior: ScrollBehavior) {
+  const dialog = el.closest('[role="dialog"]');
+  let body: Element | null = null;
+  for (
+    let node = el.parentElement;
+    node && node !== dialog;
+    node = node.parentElement
+  ) {
+    const { overflowY } = getComputedStyle(node);
+    if (
+      (overflowY === "auto" || overflowY === "scroll") &&
+      node.scrollHeight > node.clientHeight
+    ) {
+      body = node;
+      break;
+    }
+  }
+
+  // No scrolling body inside: some dialogs (the km-tracker vehicle form)
+  // scroll as a whole, so the dialog itself is the scroller.
+  if (!body && dialog && dialog.scrollHeight > dialog.clientHeight) {
+    body = dialog;
+  }
+
+  if (!body) {
+    el.scrollIntoView({ block: "nearest", behavior });
+    return;
+  }
+
+  // A target inside a `data-tour-scroll="start"` block always lines that
+  // block up with the top of the body, even if the target is already visible.
+  // For a step that points at a small header on top of a long section, so the
+  // section reads from its start rather than wherever the body was left.
+  const lineUp = el.closest('[data-tour-scroll="start"]');
+  if (lineUp && body.contains(lineUp)) {
+    lineUp.scrollIntoView({ block: "start", behavior });
+    return;
+  }
+
+  const box = el.getBoundingClientRect();
+  const frame = body.getBoundingClientRect();
+  const inView = box.top >= frame.top && box.bottom <= frame.bottom;
+  if (inView) return;
+
+  el.scrollIntoView({
+    block: box.height > body.clientHeight ? "start" : "center",
+    behavior,
+  });
+}
+
+/**
+ * Slides a target that sits in a sideways-scrolling row into view — a tab like
+ * "CGT" at the end of the property tabs, which a narrower window clips. Moves
+ * only that row, instantly (so the target's box is settled when the card is
+ * placed), and only when the target is actually cut off.
+ */
+function revealSideways(el: Element) {
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    const { overflowX } = getComputedStyle(node);
+    if (
+      (overflowX === "auto" || overflowX === "scroll") &&
+      node.scrollWidth > node.clientWidth
+    ) {
+      const box = el.getBoundingClientRect();
+      const frame = node.getBoundingClientRect();
+      if (box.left < frame.left || box.right > frame.right) {
+        node.scrollTo({
+          left: node.scrollLeft + (box.left - frame.left) - (frame.width - box.width) / 2,
+          behavior: "auto",
+        });
+      }
+      return;
+    }
+  }
 }
 
 /** Whether the target, or anything it sits in, is stuck to the viewport. */
@@ -142,6 +245,8 @@ function tourNavigate(push: (href: string) => void, url: string) {
 declare global {
   interface Window {
     USERTOURJS_ENV_VARS?: Record<string, string>;
+    /** Set once `usertour.init()` has run, so a re-run of the effect can't start a second SDK. */
+    __usertourInitialised?: boolean;
   }
 }
 
@@ -168,6 +273,8 @@ export function UsertourBootstrap() {
   );
   /** The userId `identify()` last succeeded for — `updateUser()` needs one. */
   const [identifiedAs, setIdentifiedAs] = React.useState<string | null>(null);
+  /** Who was signed in last time, from the persisted session store. */
+  const cachedUserId = useSessionStore((state) => sessionUserId(state.user));
 
   /*
    * `user_id`, not `id`. The profile endpoint returns `user_id` / `full_name`
@@ -183,6 +290,16 @@ export function UsertourBootstrap() {
 
   React.useEffect(() => {
     if (!USERTOUR_TOKEN) return;
+    /*
+     * Once per page load, whatever re-runs this effect. Strict Mode (on in
+     * `next.config`) runs every effect twice in development, and each
+     * `init()` starts its own SDK — two of them start the same tour a few
+     * hundred milliseconds apart, so every tour appeared twice at once and
+     * had to be dismissed twice. Kept on `window` rather than in the module so
+     * a hot reload of this file doesn't forget it has already started.
+     */
+    if (window.__usertourInitialised) return;
+    window.__usertourInitialised = true;
     if (USERTOUR_WS_URI) {
       window.USERTOURJS_ENV_VARS = {
         ...window.USERTOURJS_ENV_VARS,
@@ -199,6 +316,26 @@ export function UsertourBootstrap() {
     return () => usertour.setCustomNavigate(null);
   }, [router]);
 
+  /*
+   * What the dashboard tour calls when it ends, to swap the dashboard's sample
+   * figures for the account's own: a "Run JavaScript" action on the tour's
+   * last step (and its skip/dismiss, where it has one) with
+   *
+   *     window.soleEndDashboardDemo()
+   *
+   * Registered here rather than on the dashboard because this is mounted on
+   * every page, so the call works wherever the tour happens to end.
+   */
+  React.useEffect(() => {
+    // Wrapped so whatever a tour action passes along can't be taken for the
+    // user id: the call is always for whoever is signed in.
+    const end = () => endDashboardDemo();
+    window.soleEndDashboardDemo = end;
+    return () => {
+      if (window.soleEndDashboardDemo === end) delete window.soleEndDashboardDemo;
+    };
+  }, []);
+
   // Its own effect so it gets a cleanup: unlike init(), it adds an element
   // and observers that a remount (or Strict Mode's double effect) would
   // otherwise duplicate.
@@ -212,6 +349,27 @@ export function UsertourBootstrap() {
     if (!USERTOUR_TOKEN) return;
     return mountTourCardMotion();
   }, []);
+
+  /*
+   * Identifies straight away as whoever was signed in last, rather than after
+   * /auth/profile answers. Nothing can start until the SDK knows the user, so
+   * waiting for the profile held every tour back by that whole round trip —
+   * seconds, on a slow backend — even on screens whose tour needs no data.
+   *
+   * Only while the session is still "loading", and only with a token to
+   * resume. The effect below then confirms it: the same id again is just an
+   * attributes refresh in the SDK, and a different one (or no session at all)
+   * switches or resets it as before.
+   */
+  React.useEffect(() => {
+    if (!USERTOUR_TOKEN || status !== "loading" || cachedUserId == null) return;
+    if (!getAccessToken() && !getRefreshToken()) return;
+    void usertour
+      .identify(cachedUserId)
+      .then(() => setIdentifiedAs(cachedUserId))
+      // Swallowed for the reason given below; the confirming identify logs.
+      .catch(() => {});
+  }, [status, cachedUserId]);
 
   React.useEffect(() => {
     if (!USERTOUR_TOKEN) return;

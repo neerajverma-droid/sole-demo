@@ -20,6 +20,7 @@ import { money } from "@/lib/dashboard-data";
 import { cn } from "@/lib/utils";
 import { accountBank, useAccountsStore } from "@/stores/accounts";
 import { useDashboardBankAccountsQuery } from "@/hooks/use-dashboard-query";
+import { useDashboardAccounts } from "@/hooks/use-dashboard-source";
 
 /** Long enough to read as work being done, short enough not to be a wait. */
 const SYNC_MS = 900;
@@ -36,15 +37,15 @@ const SYNC_MS = 900;
 export function ConnectedAccountsCard() {
   const { isLoading } = useDashboardBankAccountsQuery();
   const setConnectOpen = useSetAtom(connectBankIntroOpenAtom);
-  const accounts = useAccountsStore((state) => state.accounts);
+  const accounts = useDashboardAccounts();
   const lastSynced = useAccountsStore((state) => state.lastSynced);
   const sync = useAccountsStore((state) => state.sync);
 
   const openConnect = () => setConnectOpen(true);
 
   return (
-    <Card className="flex h-full flex-col">
-      <CardHeader className="flex-row items-center justify-between space-y-0 pb-4">
+    <Card className="flex h-full flex-col" data-usertour="dashboard-connected-accounts">
+      <CardHeader className="flex-row items-center justify-between space-y-0">
         <CardTitle className="text-base">Connected accounts</CardTitle>
         {/* A button, not a link dressed as one: this opens a dialog in place,
             and Button carries the hover fill and focus ring with it. */}
@@ -54,7 +55,7 @@ export function ConnectedAccountsCard() {
         </Button>
       </CardHeader>
 
-      <CardContent className="flex-1 pb-5">
+      <CardContent className="flex-1">
         {isLoading ? (
           <div className="space-y-2.5 py-1">
             <Shimmer className="h-14 w-full" />
@@ -155,7 +156,7 @@ function SyncFooter({
   );
 
   const className =
-    "mt-auto flex w-full items-center gap-2 border-t bg-muted/40 px-6 py-4 text-left text-xs text-muted-foreground";
+    "mt-auto flex w-full items-center gap-2 border-t bg-muted/40 px-4 py-3 text-left text-xs text-muted-foreground";
 
   if (!hasAccounts) {
     return (

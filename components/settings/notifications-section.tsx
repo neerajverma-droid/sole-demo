@@ -94,7 +94,7 @@ export function NotificationsSection() {
       saving={saving}
       onSave={onSave}
     >
-      <ul className="divide-y rounded-md border">
+      <ul className="divide-y rounded-md border" data-usertour="settings-notifications-list">
         {TOGGLES.map((toggle) => (
           <li
             key={toggle.key}

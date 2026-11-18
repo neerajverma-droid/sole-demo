@@ -16,7 +16,8 @@ import {
 import { SidebarPicker } from "@/components/onboarding/survey/sidebar-picker";
 import { Button } from "@/components/ui/button";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
+import { track, trackWithProfile } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
 import { pinnedNavIdsAtom } from "@/lib/atoms";
 import type { FirstAction } from "@/lib/onboarding-survey/first-actions";
 import industryLine from "@/lib/onboarding-survey/industry-lines";
@@ -51,7 +52,9 @@ import {
 } from "@/stores/onboarding-survey";
 import { useActiveBusiness } from "@/hooks/use-active-business";
 import { useActiveBusinessIndustry } from "@/hooks/use-active-business-industry";
+import { useCountryContext } from "@/hooks/use-country-context";
 import { useIndustriesQuery } from "@/hooks/use-industries-query";
+import { industriesForCountry } from "@/lib/industries";
 import { useSidebarPinsLoaded } from "@/hooks/use-sidebar-sync";
 import { useQueryClient } from "@tanstack/react-query";
 import api from "@/utils/axiosInstance";
@@ -204,8 +207,13 @@ export function OnboardingSurveyPopup() {
   const { business: activeBusinessRecord, settled: businessSettled } =
     useActiveBusiness();
   const storedIndustry = useActiveBusinessIndustry();
-  const { data: industries = [], isPending: industriesPending } =
+  const { data: industriesRaw = [], isPending: industriesPending } =
     useIndustriesQuery();
+  const { country } = useCountryContext();
+  // NDIS is Australia's own scheme — dropped from the chips here the same way
+  // it's dropped from the Settings and add-business pickers, so a business
+  // whose country doesn't offer it is never asked to self-identify as one.
+  const industries = industriesForCountry(industriesRaw, country);
   /** An empty `pinnedNavIdsAtom` means nothing until the server's copy lands. */
   const pinsLoaded = useSidebarPinsLoaded();
   const queryClient = useQueryClient();
@@ -363,7 +371,7 @@ export function OnboardingSurveyPopup() {
     setStepIndex(0);
     setLine(INTRO_LINES[wanted[0]]);
     setOpen(true);
-    track("onboarding_survey_shown", { steps: wanted.join(",") });
+    track(EVENTS.ONBD_SURVEY_SHOWN);
 
     // Seen counts from the moment it opens, not when it's finished — closing
     // it is an answer too. Fire-and-forget like every save here; a failure
@@ -450,7 +458,6 @@ export function OnboardingSurveyPopup() {
           setStepIndex(0);
           setLine(INTRO_LINES.referral);
           setOpen(true);
-          track("onboarding_referral_prompt_shown");
         }, remaining);
       });
 
@@ -531,13 +538,12 @@ export function OnboardingSurveyPopup() {
    * achieved.
    */
   const dismiss = React.useCallback(() => {
-    track("onboarding_survey_dismissed", {
-      step: step ?? "",
-      step_index: stepIndex,
-    });
-    if (!isReferralRun) markSurveyDoneThisSession();
+    if (!isReferralRun) {
+      track(EVENTS.ONBD_SURVEY_CLOSED);
+      markSurveyDoneThisSession();
+    }
     setOpen(false);
-  }, [isReferralRun, markSurveyDoneThisSession, step, stepIndex]);
+  }, [isReferralRun, markSurveyDoneThisSession]);
 
   const advance = React.useCallback(
     (reaction: string, context: { industryName?: string } = {}) => {
@@ -545,7 +551,6 @@ export function OnboardingSurveyPopup() {
       const nextStep = stepsRef.current[next];
 
       if (!nextStep) {
-        track("onboarding_survey_completed", { last_step: step ?? "" });
         finish();
         return;
       }
@@ -599,7 +604,7 @@ export function OnboardingSurveyPopup() {
         warn("no industry id for this answer", name);
       }
 
-      track("onboarding_survey_industry_selected", { industry: name });
+      trackWithProfile(EVENTS.ONBD_INDUSTRY_SELECTED, { industry: name });
       advance(industryLine(name), { industryName: name });
     },
     [advance, industries, queryClient],
@@ -615,6 +620,7 @@ export function OnboardingSurveyPopup() {
     (option: { id: string; label: string }) => {
       setJoinFromSelected(option.id);
       setJoinFrom(option.label);
+      trackWithProfile(EVENTS.ONBD_BEFORE_SOLE, { prior_tool: option.label });
       dispatchSave(joinFromSaveRequest(option.label)).catch((error) =>
         warn("could not save what they switched from", error),
       );
@@ -666,8 +672,8 @@ export function OnboardingSurveyPopup() {
       dispatchSave(sidebarPinsSaveRequest(pinIds)).catch((error) =>
         warn("could not pin the shortcuts", error),
       );
+      track(EVENTS.ONBD_WIDGETS_ADDED, { widgets: pinIds.join(",") });
     }
-    track("onboarding_survey_pins_saved", { pinned: pinIds.length });
     advance(
       pinIds.length > 0
         ? `Done — ${pinIds.length} shortcut${pinIds.length === 1 ? "" : "s"} up top.`
@@ -677,9 +683,8 @@ export function OnboardingSurveyPopup() {
 
   const chooseAction = React.useCallback(
     (action: FirstAction | null) => {
-      track("onboarding_survey_completed", {
-        last_step: "first_action",
-        action: action?.key ?? "later",
+      track(EVENTS.ONBD_FIRST_JOB_OPTION_SELECTED, {
+        option: action?.key ?? "later",
       });
       finish(action?.href);
     },
@@ -745,7 +750,10 @@ export function OnboardingSurveyPopup() {
     <DialogPrimitive.Root
       open={open}
       onOpenChange={(next) => {
-        if (!next) dismiss();
+        // The industry step has no escape hatch — it's what every other
+        // screen in the product needs to know which invoice types and
+        // templates to offer, so Escape doesn't skip it either.
+        if (!next && step !== "industry") dismiss();
       }}
     >
       <DialogPrimitive.Portal>
@@ -758,6 +766,9 @@ export function OnboardingSurveyPopup() {
           // above instead, which is what lets those close it.
           onPointerDownOutside={(event) => event.preventDefault()}
           onInteractOutside={(event) => event.preventDefault()}
+          onEscapeKeyDown={(event) => {
+            if (step === "industry") event.preventDefault();
+          }}
           aria-describedby={undefined}
           className={cn(
             "fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100dvh-32px)] w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-lg data-[state=open]:animate-pop data-[state=closed]:animate-unpop",
@@ -781,15 +792,17 @@ export function OnboardingSurveyPopup() {
                 <Sparkles className="h-5 w-5" />
                 {EYEBROWS[step]}
               </span>
-              <button
-                type="button"
-                onClick={dismiss}
-                aria-label="Close and ask me later"
-                title="Close and ask me later"
-                className="btn-soft-close-inverse -mr-2 size-7 shrink-0"
-              >
-                <X className="h-4 w-4" />
-              </button>
+              {step !== "industry" && (
+                <button
+                  type="button"
+                  onClick={dismiss}
+                  aria-label="Close and ask me later"
+                  title="Close and ask me later"
+                  className="btn-soft-close-inverse -mr-2 size-7 shrink-0"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
             </div>
           </div>
 

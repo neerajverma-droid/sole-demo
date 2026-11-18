@@ -90,23 +90,17 @@ export function ProfitLossBar({
         />
       </div>
 
-      <dl className="mt-4 grid gap-3 sm:grid-cols-3">
-        <Segment
-          swatch="bg-muted-foreground/30"
-          label="Income"
-          value={income.amount}
-          share="100% of income"
-        />
+      {/* A key to the two segments, in shares only: the amounts themselves are
+          the cards above, and the whole track is the income. */}
+      <dl className="mt-4 flex flex-wrap gap-x-6 gap-y-2">
         <Segment
           swatch="bg-chart-out"
           label="Expenses"
-          value={expenses.amount}
           share={`${reportPercent(split.expenseShare)} of income`}
         />
         <Segment
           swatch="bg-chart-in"
           label={split.loss ? "Net loss" : "Net profit"}
-          value={netProfit.amount}
           share={
             split.loss
               ? "Costs exceeded income"
@@ -121,27 +115,22 @@ export function ProfitLossBar({
 function Segment({
   swatch,
   label,
-  value,
   share,
 }: {
   swatch: string;
   label: string;
-  value: number;
   share: string;
 }) {
   return (
-    <div className="min-w-0">
-      <dt className="flex items-center gap-2 text-xs text-muted-foreground">
+    <div className="flex min-w-0 items-center gap-2 text-xs">
+      <dt className="flex items-center gap-2 text-muted-foreground">
         <span
           className={cn("size-2 shrink-0 rounded-full", swatch)}
           aria-hidden
         />
         <span className="truncate">{label}</span>
       </dt>
-      <dd className="mt-1 pl-4">
-        <p className="text-sm font-medium tabular">{reportMoney(value)}</p>
-        <p className="text-xs text-muted-foreground tabular">{share}</p>
-      </dd>
+      <dd className="font-medium tabular">{share}</dd>
     </div>
   );
 }

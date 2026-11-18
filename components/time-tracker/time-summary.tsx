@@ -124,7 +124,11 @@ function TrackedTimeCard() {
   const loading = query.isLoading || query.isPlaceholderData;
 
   return (
-    <section aria-label="Time tracked" className="rounded-lg border border-border bg-card p-4 shadow-sm md:p-5">
+    <section
+      aria-label="Time tracked"
+      data-usertour="time-chart"
+      className="rounded-lg border border-border bg-card p-4 shadow-sm md:p-5"
+    >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Segmented
           label="Show"
@@ -206,7 +210,6 @@ function TrackedTimeCard() {
               </BarChart>
             </ChartContainer>
           )}
-          <p className="mt-2 text-xs text-muted-foreground">Counts completed timer sessions.</p>
         </>
       )}
     </section>
@@ -229,7 +232,11 @@ function BreakdownCard() {
   const loading = query.isLoading || query.isPlaceholderData;
 
   return (
-    <section aria-label={`Time by ${group}`} className="rounded-lg border border-border bg-card p-4 shadow-sm md:p-5">
+    <section
+      aria-label={`Time by ${group}`}
+      data-usertour="time-breakdown"
+      className="rounded-lg border border-border bg-card p-4 shadow-sm md:p-5"
+    >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Segmented
           label="Group by"

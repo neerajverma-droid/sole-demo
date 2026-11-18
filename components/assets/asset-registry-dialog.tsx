@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { apiErrorMessage } from "@/lib/api-error";
 import { assetRegistryOpenAtom } from "@/lib/atoms";
 import { registryMatch } from "@/lib/assets";
 import {
@@ -137,8 +138,8 @@ function RegistrySection({
       await onAdd(name);
       toast.success(`${name} added`);
       return true;
-    } catch {
-      toast.error(`Couldn't add ${name}`);
+    } catch (error) {
+      toast.error(apiErrorMessage(error, `Couldn't add ${name}`));
       return false;
     }
   };

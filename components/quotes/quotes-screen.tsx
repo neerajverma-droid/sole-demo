@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useAtom, useAtomValue } from "jotai";
+import { useAtom } from "jotai";
 import { FileCheck2, Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -14,22 +14,21 @@ import { QuoteHistoryDialog } from "@/components/quotes/quote-history-dialog";
 import { InvoiceQuickEditDialog } from "@/components/invoices/invoice-quick-edit-dialog";
 import { QuotesSummary } from "@/components/quotes/quotes-summary";
 import { QuotesTable } from "@/components/quotes/quotes-table";
+import { useQuoteSummaryStatsQuery } from "@/hooks/use-quote-summary-stats-query";
 import { useQuotesQuery } from "@/hooks/use-quotes-query";
-import { quotesFilterAtom, quotesQueryAtom } from "@/lib/atoms";
-import { useAreaFilter } from "@/components/documents/area-filter";
+import { quotesFilterAtom } from "@/lib/atoms";
 import { QUOTE_STATUSES } from "@/lib/quotes";
 import { useCreateIntent } from "@/lib/use-create-intent";
-import { useQuotesStore } from "@/stores/quotes";
 
 export function QuotesScreen() {
   const router = useRouter();
-  const query = useQuotesQuery();
-  const quotes = useQuotesStore((state) => state.quotes);
-  const hydrated = useQuotesStore((state) => state.hydrated);
+  // Still loaded here for the screens that read the shared quote store (the
+  // sidebar's Quick actions count, the invoice editor's source quote). The
+  // summary card no longer reads it — its figures come from the server's stats.
+  useQuotesQuery();
+  const statsQuery = useQuoteSummaryStatsQuery();
   const createIntent = useCreateIntent();
-  const [filter, setFilter] = useAtom(quotesFilterAtom);
-  const search = useAtomValue(quotesQueryAtom);
-  const area = useAreaFilter();
+  const [, setFilter] = useAtom(quotesFilterAtom);
 
   // Deep link from Geographic insights' "Follow up quotes", which asks for the
   // open ones. Mirrors the same param on Invoices.
@@ -42,18 +41,7 @@ export function QuotesScreen() {
     if (match) setFilter(match);
   }, [statusParam, setFilter]);
 
-  const loading = !hydrated && query.isLoading;
-  /*
-   * The account genuinely has no quotes — loaded, not errored, and not
-   * narrowed by a tab, search or area link — so the summary goes and the
-   * table is left showing only its own empty state.
-   */
-  const hasNoQuotes =
-    query.isSuccess &&
-    query.data.length === 0 &&
-    filter === "All" &&
-    !search.trim() &&
-    !area;
+  const loading = statsQuery.isLoading;
 
   // Deep-linked from a "New quote" entry point: go straight to the chooser,
   // matching the reference, which sets view: 'picker' on ?new=1.
@@ -76,10 +64,9 @@ export function QuotesScreen() {
         </Button>
       </PageHeader>
 
-      {/* Zeros are worth reading once there's something to count; with no
-          quotes at all, the table's own empty state and its nudge towards
-          New quote are all there is to say. */}
-      {!hasNoQuotes && <QuotesSummary quotes={quotes} loading={loading} />}
+      {/* Stays for an account with no quotes yet too, as on Invoices: the
+          same screen it will have later, zeroes and all. */}
+      <QuotesSummary stats={statsQuery.data} loading={loading} />
       <QuotesTable />
 
       {/* View opens the real PDF, as it does in the reference — the document

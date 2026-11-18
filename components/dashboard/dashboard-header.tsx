@@ -4,6 +4,8 @@ import * as React from "react";
 import Link from "next/link";
 import { useAtom, useAtomValue } from "jotai";
 import {
+  Check,
+  ChevronDown,
   FileCheck2,
   FileText,
   LayoutDashboard,
@@ -19,29 +21,30 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { InfoTip } from "@/components/ui/info-tip";
 import { Shimmer } from "@/components/ui/shimmer";
 import { accountStageAtom, authNameAtom } from "@/lib/atoms";
 import { money } from "@/lib/dashboard-data";
-import {
-  currentFinancialYear,
-  financialYearRevenue,
-  toIsoDate,
-} from "@/lib/invoices";
+import { DASHBOARD_PERIODS, dashboardPeriodLabel } from "@/lib/dashboard-period";
+import { financialYearRevenue, toIsoDate } from "@/lib/invoices";
 import { keyActions } from "@/lib/key-actions";
 import { useDashboardGstQuery } from "@/hooks/use-dashboard-query";
-import { useFiscalYearStart } from "@/hooks/use-fiscal-year-start";
+import { useDashboardPeriod } from "@/hooks/use-dashboard-period";
 import {
   isOnboardingStepDone,
   visibleOnboardingSteps,
   useOnboardingStore,
 } from "@/stores/onboarding";
 import { useAccountsStore } from "@/stores/accounts";
-import { useExpensesStore } from "@/stores/expenses";
-import { useQuotesStore } from "@/stores/quotes";
 import { useTransactionsStore } from "@/stores/transactions";
 import { titleCaseName } from "@/lib/onboarding";
 import { useInvoicesStore } from "@/stores/invoices";
 import { useBusinessDetails } from "@/hooks/use-business-settings";
+import {
+  useDashboardExpenses,
+  useDashboardInvoices,
+  useDashboardQuotes,
+} from "@/hooks/use-dashboard-source";
 
 /** Deep-link intents — the target screen opens its create UI on mount. */
 const CREATE_ITEMS = [
@@ -54,12 +57,12 @@ const CREATE_ITEMS = [
 export function DashboardHeader() {
   const [stage] = useAtom(accountStageAtom);
   const greeting = useGreeting();
-  const invoices = useInvoicesStore((state) => state.invoices);
-  const invoicesHydrated = useInvoicesStore((state) => state.hydrated);
-  const expenses = useExpensesStore((state) => state.expenses);
-  const expensesHydrated = useExpensesStore((state) => state.hydrated);
-  const quotes = useQuotesStore((state) => state.quotes);
-  const quotesHydrated = useQuotesStore((state) => state.hydrated);
+  const { invoices, hydrated: invoicesHydrated } = useDashboardInvoices();
+  const { expenses, hydrated: expensesHydrated } = useDashboardExpenses();
+  const { quotes, hydrated: quotesHydrated } = useDashboardQuotes();
+  // The setup checklist is about the account's own progress, so it reads the
+  // real list even while the figures above are the sample's.
+  const ownInvoiceCount = useInvoicesStore((state) => state.invoices.length);
   const accounts = useAccountsStore((state) => state.accounts);
   const transactions = useTransactionsStore((state) => state.transactions);
   const done = useOnboardingStore((state) => state.done);
@@ -90,14 +93,10 @@ export function DashboardHeader() {
     titleCaseName(accountName.trim().split(/\s+/)[0] ?? "")
     : "";
 
-  // The same figure the revenue goal card reports, from the same call — this
-  // line used to quote the frozen sample total, which put a different "billed
-  // this year" in the greeting than in the card an inch below it.
-  const fiscalYearStart = useFiscalYearStart();
-  const billed = financialYearRevenue(
-    invoices,
-    currentFinancialYear(new Date(), fiscalYearStart),
-  ).amount;
+  // Billed over the period the dropdown picks — the same window, through the
+  // same helper, as the snapshot strip below, so the two can't disagree.
+  const { period, setPeriod, window: periodWindow } = useDashboardPeriod();
+  const billed = financialYearRevenue(invoices, periodWindow).amount;
 
   // Same call the Attention card makes, so the two never disagree about how
   // many things there are to do.
@@ -111,7 +110,7 @@ export function DashboardHeader() {
 
   // Same list and rules the Attention card's "Finish setting up" uses.
   const steps = visibleOnboardingSteps(
-    invoices.length > 0 || transactions.length > 0,
+    ownInvoiceCount > 0 || transactions.length > 0,
   );
   const doneCount = steps.filter((step) =>
     isOnboardingStepDone(done, step.key, accounts.length),
@@ -119,7 +118,7 @@ export function DashboardHeader() {
 
   const subline =
     stage === "active"
-      ? `You've billed ${money(billed)} this year — ${attentionCount} ${attentionCount === 1 ? "thing needs" : "things need"
+      ? `You've billed ${money(billed)} ${periodWindow.phrase} — ${attentionCount} ${attentionCount === 1 ? "thing needs" : "things need"
       } your attention.`
       : `Let's finish setting up — you're ${doneCount} of ${steps.length} steps in.`;
 
@@ -144,11 +143,37 @@ export function DashboardHeader() {
         </div>
       </div>
 
-      {/* The page-level period tabs are gone: the only card that read them was
-          the profit pair, and the period that matters now belongs to the cash
-          flow card, which carries its own selector next to the chart it
-          changes. */}
       <div className="flex items-center gap-3">
+        <InfoTip text="All figures on this dashboard are calculated using matched transactions only." />
+
+        {/* sole-webapp's period filter: what the period-based figures on the
+            page report over. The cash flow card keeps its own range selector,
+            beside the chart it changes. */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="outline"
+              aria-label={`Dashboard period: ${dashboardPeriodLabel(period)}`}
+              data-usertour="dashboard-period"
+            >
+              {dashboardPeriodLabel(period)}
+              <ChevronDown className="text-muted-foreground" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-44">
+            {DASHBOARD_PERIODS.map((option) => (
+              <DropdownMenuItem
+                key={option.value}
+                onSelect={() => setPeriod(option.value)}
+                className="justify-between"
+              >
+                {option.label}
+                {option.value === period ? <Check className="size-4 text-primary" aria-hidden /> : null}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+
         {/* No page guide here. The dashboard has its own header rather than the
             shared PageHeader, so this is the one screen that has to opt out
             explicitly — every other page still gets the button from

@@ -4,6 +4,7 @@
 import { useEffect, useState } from 'react'
 
 // Third-party Imports
+import { usePathname } from 'next/navigation'
 import { ArrowUpIcon } from 'lucide-react'
 
 // Component Imports
@@ -12,7 +13,14 @@ import { Button } from '@/components/ui/button'
 // Util Imports
 import { cn } from '@/lib/utils'
 
+// No scroll-to-top button on the invoice and quote create pages (chooser and forms),
+// nor the KM trip editor: its pinned Cancel / Save bar sits where the button would.
+const HIDDEN_PATHS = /^\/(invoices|quotes)\/new(\/|$)|^\/km-tracker\/(new|[^/]+\/edit)(\/|$)/
+
 const ScrollToTop = () => {
+  // Hooks
+  const pathname = usePathname()
+
   // States
   const [showScrollButton, setShowScrollButton] = useState(false)
 
@@ -36,6 +44,8 @@ const ScrollToTop = () => {
       window.removeEventListener('scroll', handleScroll)
     }
   }, [])
+
+  if (HIDDEN_PATHS.test(pathname ?? '')) return null
 
   return (
     <Button

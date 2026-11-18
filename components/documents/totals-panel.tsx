@@ -1,6 +1,6 @@
 "use client";
 
-import { Input } from "@/components/ui/input";
+import { PrefixInput } from "@/components/ui/prefix-input";
 import { cn } from "@/lib/utils";
 import {
   GST_PERCENT,
@@ -74,16 +74,12 @@ export function TotalsPanel({
         {onExtraDiscountChange && (
           <div className="flex items-center justify-between gap-4">
             <dt className="text-sm text-muted-foreground">Extra discount</dt>
-            <dd className="relative w-28">
-              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-                {currencySymbol(currency)}
-              </span>
-              <Input
-                // A longer prefix (NZ$, US$) needs more room than a bare $.
-                className={cn(
-                  "h-9 text-right tabular",
-                  currencySymbol(currency).length > 1 ? "pl-11" : "pl-7",
-                )}
+            <dd className="w-28">
+              {/* A longer prefix (NZ$, US$) pushes the value along rather than
+                  running into it. */}
+              <PrefixInput
+                prefix={currencySymbol(currency)}
+                className="text-right tabular"
                 inputMode="decimal"
                 value={extraDiscount}
                 onChange={(event) => onExtraDiscountChange(event.target.value)}

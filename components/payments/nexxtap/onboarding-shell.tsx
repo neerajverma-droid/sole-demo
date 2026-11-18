@@ -164,7 +164,7 @@ export function NexxtapOnboardingShell({
         </div>
       </div>
 
-      <div className="space-y-4">
+      <div className="space-y-4" data-usertour="nexttap-steps">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-xs font-medium text-muted-foreground tabular">
             {done.length} of {NEXXTAP_STEPS.length} done
@@ -187,6 +187,7 @@ export function NexxtapOnboardingShell({
           onJump={(index) => router.push(NEXXTAP_STEPS[index].href)}
           label="NextTap onboarding progress"
           allowJumpAhead
+          tourPrefix="nexttap"
         />
       </div>
 
@@ -221,7 +222,10 @@ export function NexxtapStepFooter({
   saveDisabled?: boolean;
 }) {
   return (
-    <div className="sticky bottom-0 -mx-4 flex flex-wrap items-center justify-end gap-2 border-t border-border bg-background/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
+    <div
+      className="sticky bottom-0 -mx-4 flex flex-wrap items-center justify-end gap-2 border-t border-border bg-background/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6"
+      data-usertour="nexttap-step-footer"
+    >
       <Button variant="outline" asChild>
         <Link href={NEXXTAP_OVERVIEW_HREF}>Cancel</Link>
       </Button>

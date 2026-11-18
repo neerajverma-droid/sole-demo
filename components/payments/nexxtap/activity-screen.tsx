@@ -67,6 +67,7 @@ export function NexxtapActivityScreen() {
         <FormSection
           icon={CreditCard}
           title="Business activity"
+          tourId="nexttap-activity"
           description="What NextTap needs to know about how the business trades."
           headerClassName={NEXXTAP_SECTION_HEADER}
           className="space-y-4 p-4 sm:p-6"
@@ -159,6 +160,7 @@ export function NexxtapActivityScreen() {
         <FormSection
           icon={Percent}
           title="Payment mix"
+          tourId="nexttap-payment-mix"
           description="How the takings split between in person and online. The two have to add up to 100%."
           headerClassName={NEXXTAP_SECTION_HEADER}
           className="space-y-4 p-4 sm:p-6"

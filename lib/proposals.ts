@@ -20,15 +20,17 @@ import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
  * Steps
  * ------------------------------------------------------------------ */
 
+// In the order of the preview's tabs (Cover, Introduction, Services, Pricing,
+// Terms, Thank You, Email); Add. Docs. has no tab and sits after Services.
 export const PROPOSAL_STEPS = [
   "General",
-  "Services",
-  "Payments",
   "Introduction",
+  "Services",
   "Add. Docs.",
+  "Payments",
   "Terms & Sign",
-  "Notification",
   "Thank You",
+  "Notification",
 ] as const;
 
 export type ProposalStep = (typeof PROPOSAL_STEPS)[number];
@@ -62,19 +64,7 @@ export function nextStep(step: ProposalStep): ProposalStep | null {
 export const PROPOSAL_STAGES: {
   name: string;
   steps: ProposalStep[];
-}[] = [
-  { name: "Agreement", steps: ["General", "Services", "Payments"] },
-  {
-    name: "Proposal",
-    steps: [
-      "Introduction",
-      "Add. Docs.",
-      "Terms & Sign",
-      "Notification",
-      "Thank You",
-    ],
-  },
-];
+}[] = [{ name: "Proposal", steps: [...PROPOSAL_STEPS] }];
 
 /* ------------------------------------------------------------------ *
  * Status and payment methods
@@ -103,9 +93,12 @@ export function proposalStatusLabel(status: ProposalStatus): string {
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
+// SolePay can only charge an invoice, so the backend raises one when the
+// client accepts and they pay it through SolePay (sole-ocr proposalSolePay.js).
 export const PAYMENT_METHODS = [
-  { value: "manual", label: "Manual payment", requiresStripe: false },
-  { value: "stripe", label: "Stripe", requiresStripe: true },
+  { value: "manual", label: "Manual payment", requiresStripe: false, requiresSolePay: false },
+  { value: "stripe", label: "Stripe", requiresStripe: true, requiresSolePay: false },
+  { value: "solepay", label: "SolePay", requiresStripe: false, requiresSolePay: true },
 ] as const;
 
 export const DEFAULT_PAYMENT_METHOD = "manual";
@@ -115,9 +108,9 @@ export function paymentMethodLabel(value: string | null | undefined): string {
   return PAYMENT_METHODS.find((method) => method.value === value)?.label ?? value;
 }
 
-/** A removed method (sole-webapp's old "sole_pay") falls back to the default. */
+/** sole-webapp's "sole_pay" is today's "solepay"; anything unknown falls back to the default. */
 export function normalisePaymentMethod(value: unknown): string {
-  const method = String(value ?? "");
+  const method = String(value ?? "") === "sole_pay" ? "solepay" : String(value ?? "");
   return PAYMENT_METHODS.some((entry) => entry.value === method)
     ? method
     : DEFAULT_PAYMENT_METHOD;
@@ -250,12 +243,34 @@ export type ThankYouData = {
   button_url: string;
 };
 
+/** A file sent with a proposal email — uploaded first, then listed on the template or the proposal. */
+export type EmailFile = { name: string; url: string; size?: number | null; content_type?: string | null };
+
 export type NotificationData = {
   send_notification: boolean;
   message_from: string;
+  /** The email's subject line; merge {{tags}} are filled in when it's sent. */
+  subject: string;
   email_body: string;
   cc_emails: string[];
+  /** Files sent with the email (from its template, or added here). */
+  attachments?: EmailFile[];
 };
+
+/** A saved list of files, keeping only entries that are files. */
+export const emailFiles = (value: unknown): EmailFile[] =>
+  Array.isArray(value)
+    ? value
+        .filter((file): file is EmailFile => Boolean(file && typeof file.url === "string" && typeof file.name === "string"))
+        .map((file) => ({
+          name: file.name,
+          url: file.url,
+          size: file.size == null ? null : Number(file.size),
+          content_type: file.content_type ?? null,
+        }))
+    : [];
+
+export const DEFAULT_EMAIL_SUBJECT = "Your proposal from {{firm_name}}";
 
 export const DEFAULT_SIGNATURE: IntroSignature = {
   showing: true,
@@ -287,8 +302,10 @@ export const DEFAULT_EMAIL_BODY =
 export const defaultNotification = (): NotificationData => ({
   send_notification: true,
   message_from: "",
+  subject: DEFAULT_EMAIL_SUBJECT,
   email_body: DEFAULT_EMAIL_BODY,
   cc_emails: [],
+  attachments: [],
 });
 
 export const newBlockId = () => Math.random().toString(36).slice(2);
@@ -663,6 +680,7 @@ export function builderStateFromProposal(raw: ApiProposal): BuilderState {
       cc_emails: Array.isArray(raw.notification_data?.cc_emails)
         ? raw.notification_data.cc_emails
         : [],
+      attachments: emailFiles(raw.notification_data?.attachments),
     },
     currentStep: stepFromKey(raw.current_step) ?? "General",
   };
@@ -674,6 +692,9 @@ export type StepProgress = {
   isRequired: boolean;
   summary: string | null;
 };
+
+/** Steps a proposal can be sent without, matching the backend's is_required. */
+export const OPTIONAL_STEPS: readonly ProposalStep[] = ["Add. Docs."];
 
 export function stepProgress(raw: ApiProposal | null): StepProgress[] {
   const byStep = new Map<ProposalStep, ApiStep>();
@@ -690,7 +711,8 @@ export function stepProgress(raw: ApiProposal | null): StepProgress[] {
     return {
       step,
       status,
-      isRequired: saved?.is_required == null ? true : truthy(saved.is_required),
+      // Before the server has said (a new proposal), only Add. Docs. is optional.
+      isRequired: saved?.is_required == null ? !OPTIONAL_STEPS.includes(step) : truthy(saved.is_required),
       summary: saved?.summary ?? null,
     };
   });
@@ -765,6 +787,25 @@ export function computeLine(service: ServiceLine) {
   const gstAmount = round2(netAmount * (gstPercent / 100));
   const amount = round2(netAmount + gstAmount);
   return { subtotal, discountAmount, netAmount, gstAmount, amount };
+}
+
+/**
+ * A product picked from the line's lookup, applied the way the invoice
+ * applies one: its name and price, a quantity of 1 if none was set, and its
+ * own GST setting (left as it is when the product doesn't say).
+ */
+export function servicePatchFromSuggestion(
+  suggestion: { name: string; price: string; gst?: boolean },
+  line: ServiceLine,
+  taxPercent: number,
+): Partial<ServiceLine> {
+  const quantity = num(line.quantity);
+  return {
+    description: suggestion.name,
+    price: suggestion.price ? nonNegative(suggestion.price) : line.price,
+    quantity: quantity > 0 ? line.quantity : 1,
+    ...(suggestion.gst === undefined ? {} : { gst_percent: suggestion.gst ? taxPercent : 0 }),
+  };
 }
 
 /** A line with its derived amounts brought up to date. */
@@ -986,11 +1027,16 @@ export const MERGE_TAG_GROUPS: {
       { label: "Firm Phone", key: "firm_phone" },
     ],
   },
+  {
+    label: "Proposal",
+    tags: [{ label: "Proposal Name", key: "proposal_name" }],
+  },
 ];
 
 export function mergeValues(
   client: ClientSnapshot | null,
   firm: { name: string; email: string; phone: string },
+  proposal: { name?: string } = {},
 ): MergeValues {
   return {
     contact_addressee: client?.name || "",
@@ -1007,10 +1053,30 @@ export function mergeValues(
     firm_name: firm.name,
     firm_email: firm.email,
     firm_phone: firm.phone,
+    proposal_name: proposal.name || "",
   };
 }
 
 /** Known `{{tags}}` are replaced; unknown or empty ones are left intact. */
+/**
+ * What every merge field reads as in a template preview — a template belongs
+ * to no client or proposal, so its preview reads like a real one with sample
+ * data instead of showing {{tags}}. Only previews use these; a proposal fills
+ * its fields from its own client and firm.
+ */
+export const SAMPLE_MERGE_VALUES: MergeValues = {
+  contact_addressee: "Alex Taylor",
+  contact_email: "alex.taylor@example.com",
+  contact_phone_number: "0400 123 456",
+  client_address: "12 Sample Street, Sydney NSW 2000",
+  client_business_structure: "Business",
+  client_company_number: "12 345 678 901",
+  firm_name: "Your Firm Pty Ltd",
+  firm_email: "hello@yourfirm.com.au",
+  firm_phone: "02 9000 0000",
+  proposal_name: "Sample Proposal",
+};
+
 export function renderMergeTags(html: string, values: MergeValues): string {
   if (!html) return "";
   return html.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (match, key: string) => {
@@ -1084,6 +1150,11 @@ export type PreviewData = {
   notification: NotificationData;
   client: ClientSnapshot | null;
   exchange: { is_multicurrency: boolean; exchange_rate: number | null };
+  /** The email preview's header and sign-off; absent where unknown (templates). */
+  proposalNumber?: string | null;
+  sender?: { name: string; email: string } | null;
+  /** Which proposal email the Email preview shows — the reminder reads differently. */
+  emailKind?: "proposal" | "reminder";
 };
 
 export function previewFromProposal(raw: ApiProposal): PreviewData {
@@ -1091,6 +1162,7 @@ export function previewFromProposal(raw: ApiProposal): PreviewData {
   const payment = mapPayment(raw.payment_data);
   const bank = raw.business?.bank;
   return {
+    proposalNumber: raw.proposal_number ?? null,
     general: { ...state.general, issued_at: raw.sent_at || raw.created_at },
     business: {
       name: raw.business?.name || "",
@@ -1232,7 +1304,7 @@ export function generalStepSave(
       ? "Client and proposal details saved"
       : "Proposal saved without client",
     data: generalPayload(general, client).general_data,
-    next_step: PROPOSAL_STEP_KEYS.Services,
+    next_step: PROPOSAL_STEP_KEYS.Introduction,
   };
 }
 
@@ -1254,7 +1326,7 @@ export function servicesStepSave(
   return {
     status: "completed",
     summary: `${services.length} service${services.length === 1 ? "" : "s"} added`,
-    next_step: PROPOSAL_STEP_KEYS.Payments,
+    next_step: PROPOSAL_STEP_KEYS["Add. Docs."],
     // Prices are in the client's currency; the rate (1 AUD = rate <currency>)
     // converts the totals back to AUD.
     data: {
@@ -1277,7 +1349,7 @@ export function paymentStepSave(payment: PaymentData): StepSave {
       ? `Payment required via ${paymentMethodLabel(payment.pay_method)}`
       : "Payment not required",
     data: payment,
-    next_step: PROPOSAL_STEP_KEYS.Introduction,
+    next_step: PROPOSAL_STEP_KEYS["Terms & Sign"],
   };
 }
 
@@ -1290,7 +1362,7 @@ export function introductionStepSave(intro: IntroductionData): StepSave {
       blocks: blocksForSave(intro.blocks),
       signature: intro.signature,
     },
-    next_step: PROPOSAL_STEP_KEYS["Add. Docs."],
+    next_step: PROPOSAL_STEP_KEYS.Services,
   };
 }
 
@@ -1310,7 +1382,7 @@ export function documentsStepSave(documents: ProposalDocument[]): StepSave {
       : "No additional documents",
     data: { documents: rows },
     documents: rows,
-    next_step: PROPOSAL_STEP_KEYS["Terms & Sign"],
+    next_step: PROPOSAL_STEP_KEYS.Payments,
   };
 }
 
@@ -1321,7 +1393,7 @@ export function termsStepSave(terms: TermsData): StepSave {
       ? "Terms saved with signature required"
       : "Terms saved without signature requirement",
     data: { ...terms, title: terms.title.trim(), body: terms.body.trim() },
-    next_step: PROPOSAL_STEP_KEYS.Notification,
+    next_step: PROPOSAL_STEP_KEYS["Thank You"],
   };
 }
 
@@ -1338,12 +1410,13 @@ export function notificationStepSave(notification: NotificationData): StepSave {
         recipients: notification.cc_emails || [],
         content: {
           message_from: notification.message_from,
+          subject: notification.subject,
           email_body: notification.email_body,
+          attachments: notification.attachments ?? [],
         },
         status: "draft",
       },
     ],
-    next_step: PROPOSAL_STEP_KEYS["Thank You"],
   };
 }
 
@@ -1352,6 +1425,7 @@ export function thankYouStepSave(data: ThankYouData): StepSave {
     status: "completed",
     summary: "Thank-you screen saved",
     data: { ...data, title: data.title.trim(), message: data.message.trim() },
+    next_step: PROPOSAL_STEP_KEYS.Notification,
   };
 }
 
@@ -1418,6 +1492,124 @@ export const SEND_MESSAGES: Record<SendOutcome, { warning: boolean; message: str
 };
 
 /** Sends (or re-sends) the proposal — a fresh client link each time. */
+/* ------------------------------------------------------------------ *
+ * Reminders — POST /proposal/:id/remind
+ * ------------------------------------------------------------------ */
+
+/** A reminder only makes sense while the client still has to answer. */
+export const REMINDABLE_STATUSES: readonly ProposalStatus[] = ["sent", "viewed"];
+export const canSendReminder = (status: ProposalStatus) => REMINDABLE_STATUSES.includes(status);
+
+/** Why a reminder can't go yet, or null when it can — shown on the disabled action. */
+export function reminderBlockedReason(status: ProposalStatus): string | null {
+  if (canSendReminder(status)) return null;
+  switch (status) {
+    case "draft":
+      return "Send the proposal first — reminders are for proposals your client has received.";
+    case "accepted":
+      return "Your client has already accepted this proposal.";
+    case "rejected":
+      return "Your client has declined this proposal.";
+    case "expired":
+      return "This proposal has expired.";
+    default:
+      return "Reminders are only for proposals your client hasn't answered yet.";
+  }
+}
+
+export type ReminderDraft = {
+  /** The email template it started from, for the activity log. */
+  templateId: string | null;
+  subject: string;
+  email_body: string;
+  cc_emails: string[];
+  attachments: EmailFile[];
+};
+
+export const emptyReminderDraft = (): ReminderDraft => ({
+  templateId: null,
+  subject: "",
+  email_body: "",
+  cc_emails: [],
+  attachments: [],
+});
+
+/**
+ * The reminder's text when there's no Reminder email template to start
+ * from (the system ones are seeded by migration 0164). Merge fields are
+ * filled in when it's sent; the email adds its own button below.
+ */
+export const DEFAULT_REMINDER_SUBJECT = "Reminder: your proposal from {{firm_name}}";
+export const DEFAULT_REMINDER_BODY =
+  "<p>Hi {{contact_addressee}},</p>" +
+  "<p>I hope you're well. Just a quick reminder that your proposal, <strong>{{proposal_name}}</strong>, is ready and waiting for you.</p>" +
+  "<p>It sets out the services we'll provide, the fees and our terms — it only takes a few minutes to review, and you can accept and sign it online.</p>" +
+  "<p>If you have any questions or would like anything changed, just reply to this email and we'll be happy to help.</p>" +
+  "<p>Kind regards,<br>{{firm_name}}</p>";
+
+/** A reminder with the built-in text, for when no Reminder template exists. */
+export const defaultReminderDraft = (): ReminderDraft => ({
+  ...emptyReminderDraft(),
+  subject: DEFAULT_REMINDER_SUBJECT,
+  email_body: DEFAULT_REMINDER_BODY,
+});
+
+/** The reminder's text and files, from an email template. CCs stay as they were. */
+export const reminderFromTemplate = (draft: ReminderDraft, template: ProposalTemplate): ReminderDraft => ({
+  ...draft,
+  templateId: template.id,
+  subject: template.subject,
+  email_body: template.html,
+  attachments: template.attachments,
+});
+
+/** Sole's "Friendly Reminder" first, else any system reminder, else one of yours. */
+export function defaultReminderTemplate(templates: readonly ProposalTemplate[]): ProposalTemplate | null {
+  const reminders = templates.filter((template) => template.emailCategory === "PROPOSAL_REMINDER");
+  const system = reminders.filter((template) => template.isSystem);
+  return system.find((template) => template.name === "Friendly Reminder") ?? system[0] ?? reminders[0] ?? null;
+}
+
+/** The dropdown: reminder emails first (yours, then Sole's), then every other email template. */
+export function reminderTemplateGroups(templates: readonly ProposalTemplate[]) {
+  const reminder = templates.filter((template) => template.emailCategory === "PROPOSAL_REMINDER");
+  const other = templates.filter((template) => template.emailCategory !== "PROPOSAL_REMINDER");
+  const option = (template: ProposalTemplate) => ({
+    id: template.id,
+    label: template.isSystem ? `${template.name} · System` : template.name,
+  });
+  return [
+    { label: "My reminder templates", options: reminder.filter((t) => !t.isSystem).map(option) },
+    { label: "System reminder templates", options: reminder.filter((t) => t.isSystem).map(option) },
+    { label: "Other email templates", options: other.map(option) },
+  ].filter((group) => group.options.length > 0);
+}
+
+export function reminderIssues(draft: ReminderDraft): { subject?: string; email_body?: string; cc?: string } {
+  const issues: { subject?: string; email_body?: string; cc?: string } = {};
+  const subject = draft.subject.trim();
+  if (!subject) issues.subject = "Subject is required.";
+  else if (subject.length > 255) issues.subject = "Subject can be at most 255 characters.";
+  if (isBlankHtml(draft.email_body)) issues.email_body = "Message is required.";
+  const badCc = draft.cc_emails.find((email) => !EMAIL_PATTERN.test(email));
+  if (badCc) issues.cc = `“${badCc}” is not a valid email address.`;
+  return issues;
+}
+
+export async function sendProposalReminderApi(id: string, draft: ReminderDraft): Promise<{ clientEmail: string | null }> {
+  const response = await api.post<{ success: boolean; data?: { client_email?: string | null } }>(
+    apiRoutes.proposal.remind(id),
+    encrypted({
+      template_id: draft.templateId ?? "",
+      subject: draft.subject.trim(),
+      email_body: draft.email_body,
+      cc_emails: draft.cc_emails,
+      attachments: draft.attachments,
+    }),
+  );
+  return { clientEmail: response.data?.data?.client_email ?? null };
+}
+
 export async function sendProposalApi(id: string): Promise<SendResult> {
   const response = await api.post<{
     success: boolean;
@@ -1452,38 +1644,132 @@ export type TemplateSnapshot = {
   notification?: Partial<NotificationData>;
 };
 
+/** The kinds of template the backend keeps, as the templates page tabs them. */
+export const TEMPLATE_KINDS = [
+  { type: "PROPOSAL", label: "Proposal" },
+  { type: "INTRODUCTION", label: "Introduction" },
+  { type: "TERMS", label: "Terms & Sign" },
+  { type: "THANK_YOU", label: "Thank You" },
+  { type: "EMAIL", label: "Email" },
+] as const;
+
+export type TemplateKind = (typeof TEMPLATE_KINDS)[number]["type"];
+
+/** The proposal emails an email template can be written for. */
+export const EMAIL_CATEGORIES = [
+  { value: "PROPOSAL_SENT", label: "Proposal sent", description: "Sent with the proposal for the client to review and sign." },
+  { value: "PROPOSAL_REMINDER", label: "Reminder", description: "A nudge while the proposal is waiting for the client." },
+  { value: "PROPOSAL_THANK_YOU", label: "Thank you", description: "Sent once the client accepts the proposal." },
+] as const;
+
+export type EmailCategory = (typeof EMAIL_CATEGORIES)[number]["value"];
+
+export const emailCategoryLabel = (category: string | null | undefined) =>
+  EMAIL_CATEGORIES.find((entry) => entry.value === category)?.label ?? "";
+
 export type ProposalTemplate = {
   id: string;
+  type: TemplateKind;
   name: string;
   description: string;
   /** Shipped by Sole for everyone (no owner), rather than saved by this user. */
   isSystem: boolean;
   serviceCount: number;
   snapshot: TemplateSnapshot;
+  /** The content of a section template (introduction, terms, thank you). */
+  html: string;
+  /** Its structured content, where the kind has one (introduction blocks, thank-you fields). */
+  content: unknown;
+  updatedAt: string | null;
+  /** A list row's line of plain text (the description, else the start of the content). */
+  summary: string;
+  /** Email templates: the subject line ({{tags}} allowed) and which proposal email it's for. */
+  subject: string;
+  emailCategory: EmailCategory | null;
+  /** Email templates: the files sent with it (full template), and how many (list rows too). */
+  attachments: EmailFile[];
+  attachmentCount: number;
+  /**
+   * Whether this carries the full content (from GET /templates/:id) or is a
+   * list row — which has the card's fields and a plain-text summary only.
+   */
+  full: boolean;
 };
 
-export async function fetchProposalTemplates(): Promise<ProposalTemplate[]> {
-  const response = await api.get<{
-    success: boolean;
-    data?: Array<{
-      id: string | number;
-      user_id?: string | number | null;
-      template_name?: string | null;
-      description?: string | null;
-      snapshot_data?: TemplateSnapshot | null;
-    }>;
-  }>(apiRoutes.proposal.templates, { params: { template_type: "PROPOSAL" } });
-  return (response.data?.data ?? []).map((template) => {
-    const snapshot = template.snapshot_data ?? {};
-    return {
-      id: String(template.id),
-      name: template.template_name || "Untitled template",
-      description: template.description || "",
-      isSystem: template.user_id == null,
-      serviceCount: Array.isArray(snapshot.services) ? snapshot.services.length : 0,
-      snapshot,
-    };
+export type ApiTemplate = {
+  id: string | number;
+  user_id?: string | number | null;
+  template_type?: string | null;
+  template_name?: string | null;
+  description?: string | null;
+  html_content?: string | null;
+  lexical_content?: unknown;
+  snapshot_data?: TemplateSnapshot | null;
+  updated_at?: string | null;
+  /** The list sends these instead of the content: the service count and a plain-text line. */
+  services_count?: number | string | null;
+  summary?: string | null;
+  subject?: string | null;
+  email_category?: string | null;
+  attachments?: unknown;
+  attachments_count?: number | string | null;
+};
+
+export function mapTemplate(raw: ApiTemplate, type: TemplateKind): ProposalTemplate {
+  const snapshot = raw.snapshot_data ?? {};
+  // A list row carries only what its card shows; GET /templates/:id has the rest.
+  const full = raw.snapshot_data !== undefined || raw.html_content !== undefined || raw.lexical_content !== undefined;
+  return {
+    id: String(raw.id),
+    type,
+    name: raw.template_name || "Untitled template",
+    description: raw.description || "",
+    isSystem: raw.user_id == null,
+    serviceCount:
+      raw.services_count != null
+        ? num(raw.services_count)
+        : Array.isArray(snapshot.services)
+          ? snapshot.services.length
+          : 0,
+    snapshot,
+    html: raw.html_content ?? "",
+    summary: raw.summary ?? "",
+    subject: raw.subject ?? "",
+    emailCategory: (EMAIL_CATEGORIES.find((entry) => entry.value === raw.email_category)?.value ?? null) as EmailCategory | null,
+    attachments: emailFiles(raw.attachments),
+    attachmentCount: raw.attachments_count != null ? num(raw.attachments_count) : emailFiles(raw.attachments).length,
+    content: raw.lexical_content ?? null,
+    updatedAt: raw.updated_at ?? null,
+    full,
+  };
+}
+
+/** One kind of template — yours and the system ones together. */
+export async function fetchTemplatesOfType(type: TemplateKind): Promise<ProposalTemplate[]> {
+  const response = await api.get<{ success: boolean; data?: ApiTemplate[] }>(apiRoutes.proposal.templates, {
+    params: { template_type: type },
   });
+  return (response.data?.data ?? []).map((template) => mapTemplate(template, type));
+}
+
+/** Whole-proposal templates — what New proposal starts from. */
+export function fetchProposalTemplates(): Promise<ProposalTemplate[]> {
+  return fetchTemplatesOfType("PROPOSAL");
+}
+
+/** A card's one line: the description, else the start of the content. */
+export function templateSummary(template: ProposalTemplate, max = 120): string {
+  if (template.description.trim()) return template.description.trim();
+  // A list row brings its line ready-made, as plain text.
+  if (template.summary) return template.summary;
+  const text = template.html
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "";
+  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
 }
 
 /** Search across a template's name and description. */
@@ -1498,19 +1784,10 @@ export function filterProposalTemplates(
   );
 }
 
-/**
- * A template exactly as a client would see the proposal made from it — run
- * through the same mapping as a real proposal, with the firm's own details
- * and its merge fields filled in. There's no client yet, so client fields
- * stay as their tags and the cover reads "Your client".
- */
-export function previewFromTemplate(
-  template: ProposalTemplate,
-  business: PreviewData["business"],
-  firm: { name: string; email: string; phone: string },
-): PreviewData {
+/** A proposal template read as a client-free proposal, for the builder and the preview. */
+export function templateAsProposal(template: ProposalTemplate): ApiProposal {
   const { snapshot } = template;
-  const preview = previewFromProposal({
+  return {
     id: template.id,
     title: snapshot.general?.proposal_name || template.name,
     currency_code: snapshot.general?.currency_code || "AUD",
@@ -1522,9 +1799,18 @@ export function previewFromTemplate(
     terms_data: snapshot.terms ?? null,
     thank_you_data: snapshot.thank_you ?? null,
     notification_data: snapshot.notification ?? null,
-  } as ApiProposal);
-  const values = mergeValues(null, firm);
-  const resolve = (html: string) => renderMergeTags(html, values);
+  } as ApiProposal;
+}
+
+/**
+ * A template exactly as a client would see the proposal made from it — run
+ * through the same mapping as a real proposal, with the business's own cover
+ * and bank details. Merge fields read as sample data (SAMPLE_MERGE_VALUES);
+ * there's no client yet, so the cover reads "Your client".
+ */
+export function previewFromTemplate(template: ProposalTemplate, business: PreviewData["business"]): PreviewData {
+  const preview = previewFromProposal(templateAsProposal(template));
+  const resolve = (html: string) => renderMergeTags(html, SAMPLE_MERGE_VALUES);
   return {
     ...preview,
     business,
@@ -1535,7 +1821,12 @@ export function previewFromTemplate(
       ),
     },
     terms: { ...preview.terms, body: resolve(preview.terms.body) },
-    notification: { ...preview.notification, email_body: resolve(preview.notification.email_body) },
+    thankYou: { ...preview.thankYou, title: resolve(preview.thankYou.title), message: resolve(preview.thankYou.message) },
+    notification: {
+      ...preview.notification,
+      subject: resolve(preview.notification.subject ?? ""),
+      email_body: resolve(preview.notification.email_body),
+    },
   };
 }
 
@@ -1549,10 +1840,30 @@ export async function createProposalFromTemplateApi(templateId: string): Promise
   return String(id);
 }
 
+type TemplateSource = Omit<BuilderState, "client" | "customRate" | "currentStep">;
+
+/** What a whole-proposal template stores: the builder's state, minus the client. */
+export function proposalTemplateSnapshot(state: TemplateSource): TemplateSnapshot {
+  return {
+    // A template is client-free — the next proposal picks its own.
+    general: { ...state.general, client_id: "", contact_id: "" },
+    services: state.services,
+    payment: state.payment,
+    introduction: {
+      ...state.introduction,
+      blocks: blocksForSave(state.introduction.blocks),
+    },
+    documents: state.documents,
+    terms: state.terms,
+    thank_you: state.thankYou,
+    notification: state.notification,
+  };
+}
+
 export async function saveProposalTemplateApi(
   name: string,
   description: string,
-  state: Omit<BuilderState, "client" | "customRate" | "currentStep">,
+  state: TemplateSource,
 ): Promise<void> {
   await api.post(
     apiRoutes.proposal.templates,
@@ -1560,20 +1871,24 @@ export async function saveProposalTemplateApi(
       template_type: "PROPOSAL",
       template_name: name.trim(),
       description: description.trim() || null,
-      snapshot_data: {
-        // A template is client-free — the next proposal picks its own.
-        general: { ...state.general, client_id: "", contact_id: "" },
-        services: state.services,
-        payment: state.payment,
-        introduction: {
-          ...state.introduction,
-          blocks: blocksForSave(state.introduction.blocks),
-        },
-        documents: state.documents,
-        terms: state.terms,
-        thank_you: state.thankYou,
-        notification: state.notification,
-      },
+      snapshot_data: proposalTemplateSnapshot(state),
+    }),
+  );
+}
+
+/** One of your own proposal templates, saved back over itself (`PUT /proposal/templates/:id`). */
+export async function updateProposalTemplateApi(
+  id: string,
+  name: string,
+  description: string,
+  state: TemplateSource,
+): Promise<void> {
+  await api.put(
+    apiRoutes.proposal.template(id),
+    encrypted({
+      template_name: name.trim(),
+      description: description.trim() || null,
+      snapshot_data: proposalTemplateSnapshot(state),
     }),
   );
 }

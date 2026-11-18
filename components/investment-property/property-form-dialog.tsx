@@ -150,75 +150,90 @@ function PropertyFormFields({
   const invalid = (key: keyof PropertyDraft) =>
     cn(issueFor(key) && "border-destructive focus-visible:ring-destructive");
 
+  /*
+   * `data-usertour` anchors for the "Create property" tour. Create only: the
+   * Edit dialog is this same form, and the tour is about adding a property.
+   */
+  const tour = (id: string) => (propertyId ? undefined : id);
+
   return (
     <>
       <div className="max-h-[60vh] space-y-4 overflow-y-auto px-1 py-1">
-        <Field label="Property name" htmlFor="property-name" required error={issueFor("name")}>
-          <Input
-            id="property-name"
-            value={draft.name}
-            onChange={(event) => patch({ name: event.target.value })}
-            placeholder="e.g. Hawthorn Investment Unit"
-            aria-invalid={!!issueFor("name")}
-            className={invalid("name")}
-            maxLength={255}
-          />
-        </Field>
+        <div className="space-y-4" data-usertour={tour("property-form-basics")}>
+          <Field label="Property name" htmlFor="property-name" required error={issueFor("name")}>
+            <Input
+              id="property-name"
+              value={draft.name}
+              onChange={(event) => patch({ name: event.target.value })}
+              placeholder="e.g. Hawthorn Investment Unit"
+              aria-invalid={!!issueFor("name")}
+              className={invalid("name")}
+              maxLength={255}
+            />
+          </Field>
 
-        <Field label="Property type" required error={issueFor("type")}>
-          <Select
-            value={draft.type}
-            onValueChange={(value) => patch({ type: value as PropertyDraft["type"] })}
-          >
-            <SelectTrigger
-              aria-label="Property type"
-              aria-invalid={!!issueFor("type")}
-              className={invalid("type")}
+          <Field label="Property type" required error={issueFor("type")}>
+            <Select
+              value={draft.type}
+              onValueChange={(value) => patch({ type: value as PropertyDraft["type"] })}
             >
-              <SelectValue placeholder="Select property type" />
-            </SelectTrigger>
-            <SelectContent>
-              {PROPERTY_TYPES.map((type) => (
-                <SelectItem key={type.value} value={type.value}>
-                  {type.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
+              <SelectTrigger
+                aria-label="Property type"
+                aria-invalid={!!issueFor("type")}
+                className={invalid("type")}
+              >
+                <SelectValue placeholder="Select property type" />
+              </SelectTrigger>
+              <SelectContent>
+                {PROPERTY_TYPES.map((type) => (
+                  <SelectItem key={type.value} value={type.value}>
+                    {type.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        </div>
 
-        <Field label="Ownership entity" required>
-          <OptionCards
-            name="Ownership entity"
-            value={draft.ownershipEntity}
-            options={OWNERSHIP_ENTITIES}
-            onChange={(ownershipEntity) => patch({ ownershipEntity })}
-            columns="sm:grid-cols-2"
-          />
-        </Field>
+        <div className="space-y-4" data-usertour={tour("property-form-ownership")}>
+          <Field label="Ownership entity" required>
+            <OptionCards
+              name="Ownership entity"
+              value={draft.ownershipEntity}
+              options={OWNERSHIP_ENTITIES}
+              onChange={(ownershipEntity) => patch({ ownershipEntity })}
+              columns="sm:grid-cols-2"
+            />
+          </Field>
 
-        <Field label="Property tax treatment" required>
-          <OptionCards
-            name="Property tax treatment"
-            value={draft.taxTreatment}
-            options={TAX_TREATMENTS}
-            onChange={(taxTreatment) => patch({ taxTreatment })}
-            columns="sm:grid-cols-3"
-          />
-        </Field>
+          <Field label="Property tax treatment" required>
+            <OptionCards
+              name="Property tax treatment"
+              value={draft.taxTreatment}
+              options={TAX_TREATMENTS}
+              onChange={(taxTreatment) => patch({ taxTreatment })}
+              columns="sm:grid-cols-3"
+            />
+          </Field>
+        </div>
 
-        <Field label="Address" htmlFor="property-address" error={issueFor("address")}>
-          <AddressAutocomplete
-            id="property-address"
-            value={draft.address}
-            onChange={(address) => patch({ address })}
-            onSelect={() => undefined}
-            placeholder="Start typing an address"
-            ariaInvalid={!!issueFor("address")}
-          />
-        </Field>
+        <div data-usertour={tour("property-form-address")}>
+          <Field label="Address" htmlFor="property-address" error={issueFor("address")}>
+            <AddressAutocomplete
+              id="property-address"
+              value={draft.address}
+              onChange={(address) => patch({ address })}
+              onSelect={() => undefined}
+              placeholder="Start typing an address"
+              ariaInvalid={!!issueFor("address")}
+            />
+          </Field>
+        </div>
 
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div
+          className="grid gap-4 sm:grid-cols-2"
+          data-usertour={tour("property-form-purchase")}
+        >
           <Field label="Purchase date" required error={issueFor("purchaseDate")}>
             <DatePicker
               label="Purchase date"
@@ -276,20 +291,22 @@ function PropertyFormFields({
               placeholder="0.00"
             />
           </Field>
-          <Field
-            label="Current estimated value"
-            htmlFor="property-value"
-            error={issueFor("currentValue")}
-          >
-            <PropertyMoneyInput
-              id="property-value"
+          <div data-usertour={tour("property-form-value")}>
+            <Field
               label="Current estimated value"
-              value={draft.currentValue}
-              onChange={(currentValue) => patch({ currentValue })}
-              invalid={!!issueFor("currentValue")}
-              placeholder="0.00"
-            />
-          </Field>
+              htmlFor="property-value"
+              error={issueFor("currentValue")}
+            >
+              <PropertyMoneyInput
+                id="property-value"
+                label="Current estimated value"
+                value={draft.currentValue}
+                onChange={(currentValue) => patch({ currentValue })}
+                invalid={!!issueFor("currentValue")}
+                placeholder="0.00"
+              />
+            </Field>
+          </div>
         </div>
 
         <Field label="Notes" htmlFor="property-notes">
@@ -307,7 +324,7 @@ function PropertyFormFields({
         <Button variant="outline" onClick={onClose} disabled={saving}>
           Cancel
         </Button>
-        <Button onClick={onSave} disabled={saving}>
+        <Button onClick={onSave} disabled={saving} data-usertour={tour("property-form-submit")}>
           {saving && <Loader2 className="animate-spin" />}
           {propertyId ? "Save changes" : "Create property"}
         </Button>

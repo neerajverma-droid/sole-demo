@@ -5,6 +5,7 @@ import * as SheetPrimitive from "@radix-ui/react-dialog"
 import { cva, type VariantProps } from "class-variance-authority"
 import { X } from "lucide-react"
 
+import { keepOpenForTour } from "@/components/usertour/keep-open-for-tour"
 import { cn } from "@/lib/utils"
 
 const Sheet = SheetPrimitive.Root
@@ -62,12 +63,18 @@ interface SheetContentProps
 const SheetContent = React.forwardRef<
   React.ElementRef<typeof SheetPrimitive.Content>,
   SheetContentProps
->(({ side = "right", className, children, ...props }, ref) => (
+>(({ side = "right", className, children, onInteractOutside, ...props }, ref) => (
   <SheetPortal>
     <SheetOverlay />
     <SheetPrimitive.Content
       ref={ref}
       className={cn(sheetVariants({ side }), className)}
+      // A tour's dimming curtain lives outside the sheet; a press on it must
+      // not read as a click away.
+      onInteractOutside={(event) => {
+        keepOpenForTour(event)
+        onInteractOutside?.(event)
+      }}
       {...props}
     >
       <SheetPrimitive.Close className="btn-soft-close absolute right-3.5 top-3.5 size-7">

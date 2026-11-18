@@ -11,12 +11,11 @@ import {
   Check,
   Copy,
   CreditCard,
+  DollarSign,
   Download,
-  Eye,
   FileText,
   History,
   Link2,
-  MailX,
   MoreHorizontal,
   Paperclip,
   Pencil,
@@ -27,8 +26,8 @@ import {
   Send,
   Star,
   Trash2,
+  Loader2,
   Undo2,
-  Unlink,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -52,6 +51,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { MenuAction } from "@/components/ui/menu-action";
+import { useAccess } from "@/hooks/use-access";
 import {
   HUG_COLUMN,
   Table,
@@ -71,6 +71,12 @@ import {
 import { NumberedPagination } from "@/components/ui/numbered-pagination";
 import { Shimmer } from "@/components/ui/shimmer";
 import { Highlight } from "@/components/contacts/highlight";
+import {
+  ROW_ICON_CLASS,
+  RowIconAction,
+  SentMark,
+  openRowOnClick,
+} from "@/components/documents/row-actions";
 import { SendSurveyDialog } from "@/components/reputation/send-survey-dialog";
 import {
   EMPTY_INVOICE_FILTERS,
@@ -95,15 +101,16 @@ import {
   invoicesPageSizeAtom,
   invoicesQueryAtom,
   invoicesTabAtom,
+  listedInvoicesAtom,
   matchInvoiceIdAtom,
   stopRecurringInvoiceIdAtom,
-  unmatchInvoiceIdAtom,
+  unmatchInvoiceAtom,
   viewInvoiceIdAtom,
 } from "@/lib/atoms";
 import type { PageInfo } from "@/lib/products";
 import {
   INVOICE_TABS,
-  OUTSTANDING_STATUSES,
+  invoiceAwaitingPayment,
   dueDateClass,
   fetchInvoicePdfBlob,
   fetchInvoiceStatusCounts,
@@ -114,10 +121,13 @@ import {
   invoiceDepositAmount,
   invoiceDocumentAmount,
   invoiceDocumentOutstanding,
+  invoiceEditBlock,
   invoiceOutstanding,
+  invoiceUndoAction,
   isForeignCurrency,
-  markInvoiceSentApi,
+  formatRecipientList,
   savePdfBlob,
+  sendInvoiceToClientApi,
   sendInvoicePaidReceiptApi,
   sendInvoiceReminderApi,
   statusVariant,
@@ -126,8 +136,6 @@ import {
   type InvoiceListFilters,
   type InvoiceTab,
 } from "@/lib/invoices";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { linkedTransaction, type Transaction } from "@/lib/transactions";
 import { creditNoteFor, formatRefundAmount, type Refund } from "@/lib/refunds";
 import {
@@ -141,7 +149,6 @@ import { useRefundsStore } from "@/stores/refunds";
 import { useTransactionsStore } from "@/stores/transactions";
 
 export function InvoicesTable() {
-  const { country } = useCountryContext();
   const router = useRouter();
   const contacts = useContactsStore((state) => state.contacts);
   const area = useAreaFilter();
@@ -149,7 +156,7 @@ export function InvoicesTable() {
   const [query, setQuery] = useAtom(invoicesQueryAtom);
   const setDeleteIds = useSetAtom(deleteInvoiceIdsAtom);
   const setMatchId = useSetAtom(matchInvoiceIdAtom);
-  const setUnmatchId = useSetAtom(unmatchInvoiceIdAtom);
+  const setUnmatchInvoice = useSetAtom(unmatchInvoiceAtom);
   const refunds = useRefundsStore((state) => state.refunds);
   const transactions = useTransactionsStore((state) => state.transactions);
   const queryClient = useQueryClient();
@@ -157,9 +164,16 @@ export function InvoicesTable() {
   const refreshInvoices = () =>
     queryClient.invalidateQueries({ queryKey: ["invoices"] });
 
+  /** The invoice whose cash payment is being undone, so its row can say so. */
+  const [undoingId, setUndoingId] = React.useState<string | null>(null);
+
   const undoPaidWithCash = async (invoice: Invoice) => {
+    if (undoingId) return;
+    setUndoingId(invoice.id);
     try {
       await undoInvoicePaidWithCashApi(invoice.id);
+      // Held until the list has been fetched again, so the row's spinner stops
+      // when the row itself changes rather than when the request returns.
       await refreshInvoices();
       toast.success(`${invoice.number} marked as unpaid`);
     } catch (error) {
@@ -168,6 +182,8 @@ export function InvoicesTable() {
           ? error.message
           : `Couldn't undo the payment on ${invoice.number}.`,
       );
+    } finally {
+      setUndoingId(null);
     }
   };
 
@@ -201,27 +217,36 @@ export function InvoicesTable() {
     );
   };
 
-  const markSent = async (invoice: Invoice) => {
-    try {
-      await markInvoiceSentApi(invoice.id);
-      // The other way an invoice becomes sent — the editor's "send" mode is
-      // the first. Both carry the value, so the two routes add up rather than
-      // being two different numbers.
-      track(EVENTS.INVOICE_SENT, {
-        amount: invoiceAmount(invoice),
-        // `amount` is in the books' currency, so that is the currency to report it in.
-        currency: invoice.baseCurrency ?? country.currency,
-        source: "list_action",
-      });
-      await refreshInvoices();
-      toast.success(`${invoice.number} marked as sent`);
-    } catch (error) {
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : `Couldn't mark ${invoice.number} as sent.`,
-      );
-    }
+  /** The invoice being emailed to its client, so a second click can't send it twice. */
+  const [sendingId, setSendingId] = React.useState<string | null>(null);
+
+  /*
+   * Emails the invoice — most often one finalised with Save & print and never
+   * sent — and names every address it went to, so the user knows exactly who
+   * has it rather than reading a bare "sent".
+   */
+  const sendToClient = (invoice: Invoice) => {
+    if (sendingId) return;
+    setSendingId(invoice.id);
+    toast.promise(
+      sendInvoiceToClientApi(invoice.id)
+        .then(async (recipients) => {
+          await refreshInvoices();
+          return recipients;
+        })
+        .finally(() => setSendingId(null)),
+      {
+        loading: `Sending ${invoice.number}…`,
+        success: (recipients) =>
+          recipients.length > 0
+            ? `${invoice.number} sent to ${formatRecipientList(recipients)}`
+            : `${invoice.number} sent to ${clientName(invoice)}`,
+        error: (error) =>
+          error instanceof Error
+            ? error.message
+            : `Couldn't send ${invoice.number}.`,
+      },
+    );
   };
 
   /*
@@ -231,10 +256,17 @@ export function InvoicesTable() {
    */
   const [selected, setSelected] = React.useState<string[]>([]);
   const setViewId = useSetAtom(viewInvoiceIdAtom);
+  const setListedInvoices = useSetAtom(listedInvoicesAtom);
   const setAttachId = useSetAtom(attachInvoiceIdAtom);
   const setHistoryId = useSetAtom(historyInvoiceIdAtom);
   const setCashPaymentId = useSetAtom(cashPaymentInvoiceIdAtom);
   const setStopRecurringId = useSetAtom(stopRecurringInvoiceIdAtom);
+  // A login-as session is limited to what its grant names, and bank matching is
+  // a plan feature — the old list hid or blocked both before the click.
+  const access = useAccess();
+  const canEdit = access.can("invoice", "edit");
+  const canDelete = access.can("invoice", "delete");
+  const matchingIncluded = access.hasFeature("transactions");
 
   const [npsInvoice, setNpsInvoice] = React.useState<Invoice | null>(null);
   const surveysQuery = useReputationSurveysQuery(!!npsInvoice);
@@ -254,6 +286,12 @@ export function InvoicesTable() {
   };
   const clientEmail = (invoice: Invoice) =>
     (invoice.clientId ? contactsById.get(invoice.clientId)?.email : undefined) ?? "";
+  // Only when the contact is actually loaded and has no address — a contact
+  // that isn't in the store yet (or was deleted) is left to the server to judge.
+  const missingClientEmail = (invoice: Invoice) => {
+    const contact = invoice.clientId ? contactsById.get(invoice.clientId) : undefined;
+    return !!contact && !contact.email?.trim();
+  };
 
   /*
    * The row search box types faster than anyone wants a request fired, so the
@@ -300,6 +338,11 @@ export function InvoicesTable() {
     placeholderData: keepPreviousData,
   });
 
+  // The row dialogs look invoices up here — see listedInvoicesAtom.
+  React.useEffect(() => {
+    setListedInvoices(pageQuery.data?.invoices ?? []);
+  }, [pageQuery.data, setListedInvoices]);
+
   const rows = pageQuery.data?.invoices ?? [];
   const total = pageQuery.data?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
@@ -319,7 +362,46 @@ export function InvoicesTable() {
    * without this, that stale page would flash on screen under the filter
    * that just replaced it instead of a shimmer saying a fresh page is coming.
    */
-  const rowsLoading = pageQuery.isLoading || pageQuery.isPlaceholderData;
+  /*
+   * Also true while the same page is fetched again — after an undo, a payment,
+   * an edit. The rows used to stay on screen through that with nothing to say
+   * the list was working, so a refetch now gets the same shimmer as any other
+   * load. Nothing refetches on its own (window focus is off app-wide), so this
+   * only shows when something actually changed.
+   */
+  const rowsLoading =
+    pageQuery.isLoading || pageQuery.isPlaceholderData || pageQuery.isFetching;
+
+  /*
+   * Keep the reader at the pager. They are at the bottom of the list when they
+   * press Next or Previous, and the new page is a different height — the
+   * skeleton, then the rows — so a scroll position left alone ends up at the
+   * top of the list whenever the next page is taller than the last. After a
+   * page change the pager is brought back to the bottom of the screen, once
+   * for the skeleton and once more when the rows have landed.
+   */
+  const pagerRef = React.useRef<HTMLDivElement>(null);
+  const stayAtPager = React.useRef(false);
+  const changePage = (next: number) => {
+    stayAtPager.current = true;
+    setPage(next);
+  };
+  React.useLayoutEffect(() => {
+    if (!stayAtPager.current) return;
+    pagerRef.current?.scrollIntoView({ block: "end" });
+    if (!rowsLoading) stayAtPager.current = false;
+  }, [page, pageSize, rowsLoading]);
+
+  /*
+   * As many shimmer rows as the page will have, not a fixed handful: the
+   * skeleton stands in for the rows, so a shorter stand-in shortens the page
+   * under a reader who has scrolled down to the pager, and the scroll position
+   * is clamped to it. The last page is shorter than the rest, so it says so.
+   */
+  const skeletonRows =
+    total > 0
+      ? Math.max(1, Math.min(pageSize, total - (page - 1) * pageSize))
+      : pageSize;
 
   const previousFilterKey = React.useRef(filterKey);
   React.useEffect(() => {
@@ -356,29 +438,11 @@ export function InvoicesTable() {
   };
 
   /*
-   * No invoices at all — rather than a tab, search or filter that matched
-   * nothing — so the tabs, search and pager have nothing to act on: just the
-   * empty state, same as the rules table. Both search values count, so a
-   * search still settling never collapses the toolbar mid-keystroke, and an
-   * errored fetch never lands here.
+   * No invoices at all keeps the tabs and search above it: the empty state
+   * takes the table's place below rather than the whole section's, so a new
+   * account sees the same screen it will once it has invoices — zero counts
+   * and all — with "No invoices yet" where the rows will go.
    */
-  const searching = !!query.trim() || !!debouncedQuery.trim();
-  if (
-    !rowsLoading &&
-    !pageQuery.isError &&
-    !filtered &&
-    !searching &&
-    total === 0
-  ) {
-    return (
-      <EmptyState
-        searching={false}
-        filtered={false}
-        tab={tab}
-        onClear={clearFilters}
-      />
-    );
-  }
 
   return (
     <div className="space-y-[15px]">
@@ -393,8 +457,13 @@ export function InvoicesTable() {
         {/* Six tabs with counts run to about 600px. On a phone they scroll
             sideways inside the row rather than pushing past the screen edge,
             which also kept the tour's spotlight half off-screen. */}
+        {/* `data-usertour-loading` lets the list tour start the moment the
+            first page lands, rather than waiting on the summary's slower
+            full-book fetch. While it's set the account may still turn out
+            to be empty, and this strip with it. */}
         <Tabs
           data-usertour="invoice-status-tabs"
+          data-usertour-loading={rowsLoading || undefined}
           className="max-w-full overflow-x-auto"
           value={tab}
           onValueChange={(value) => setTab(value as InvoiceTab)}
@@ -490,7 +559,7 @@ export function InvoicesTable() {
       )}
 
       {rowsLoading ? (
-        <InvoicesTableSkeleton />
+        <InvoicesTableSkeleton rows={skeletonRows} />
       ) : rows.length === 0 ? (
         <EmptyState
           searching={!!query.trim()}
@@ -526,18 +595,24 @@ export function InvoicesTable() {
                     />
                   </TableHead>
                   {/* Invoice stays left (it's what's being scanned for), Actions
-                      stays right (it's reached for), and everything between
-                      reads as a centered column of its own. */}
-                  <TableHead>Invoice</TableHead>
-                  <TableHead className={cn(HUG_COLUMN, "text-center")}>
+                      is right-aligned over its icons, and everything between reads as
+                      a centered column of its own. */}
+                  <TableHead className="w-[15rem]">Invoice</TableHead>
+                  <TableHead className={"whitespace-nowrap text-center"}>
                     Due
                   </TableHead>
-                  <TableHead className={cn(HUG_COLUMN, "text-center")}>
+                  <TableHead className={"whitespace-nowrap text-center"}>
                     Deposit
                   </TableHead>
                   <TableHead className="text-center">Amount</TableHead>
                   <TableHead className="text-center">Status</TableHead>
-                  <TableHead className={cn(HUG_COLUMN, "text-center")}>
+                  <TableHead className={"whitespace-nowrap text-center"}>
+                    Sent
+                  </TableHead>
+                  <TableHead
+                    className={"whitespace-nowrap text-center"}
+                    data-usertour="invoice-match-header"
+                  >
                     Match
                   </TableHead>
                   <TableHead className={cn(HUG_COLUMN, "text-right")}>
@@ -564,10 +639,12 @@ export function InvoicesTable() {
                     suggestions={invoice.possibleMatch}
                     creditNote={creditNoteFor(invoice.id, refunds)}
                     onMatch={() => setMatchId(invoice.id)}
-                    onUnmatch={() => setUnmatchId(invoice.id)}
+                    onUnmatch={() => setUnmatchInvoice(invoice)}
                     onMarkPaid={() => setCashPaymentId(invoice.id)}
                     onUndoPaid={() => undoPaidWithCash(invoice)}
-                    onMarkSent={() => markSent(invoice)}
+                    onSendToClient={() => sendToClient(invoice)}
+                    sending={sendingId === invoice.id}
+                    missingClientEmail={missingClientEmail(invoice)}
                     onView={() => setViewId(invoice.id)}
                     onHistory={() => setHistoryId(invoice.id)}
                     onPrint={() => downloadPdf(invoice)}
@@ -591,23 +668,30 @@ export function InvoicesTable() {
                     onDelete={() => setDeleteIds([invoice.id])}
                     onSendNps={() => setNpsInvoice(invoice)}
                     npsCompleted={isReferenceNpsCompleted(completedNpsQuery.data, invoice.id, invoice.number)}
+                    canEdit={canEdit}
+                    canDelete={canDelete}
+                    matchingIncluded={matchingIncluded}
+                    undoing={undoingId === invoice.id}
                   />
                 ))}
               </TableBody>
             </Table>
           </div>
 
-          <NumberedPagination
-            page={pageInfo}
-            pageSize={pageSize}
-            onPageChange={setPage}
-            onPageSizeChange={(next) => {
-              setPageSize(next as typeof pageSize);
-              setPage(1);
-            }}
-            itemLabel="invoice"
-            navLabel="Invoices pages"
-          />
+          <div ref={pagerRef}>
+            <NumberedPagination
+              page={pageInfo}
+              pageSize={pageSize}
+              onPageChange={changePage}
+              onPageSizeChange={(next) => {
+                setPageSize(next as typeof pageSize);
+                changePage(1);
+              }}
+              itemLabel="invoice"
+              navLabel="Invoices pages"
+              keepScrollPosition
+            />
+          </div>
         </>
       )}
 
@@ -638,11 +722,85 @@ export function InvoicesTable() {
 }
 
 /**
+ * The row's Undo, on a paid or partially paid invoice.
+ *
+ * Offered even where it can't act — a payment settled online, say, has no
+ * record here to take back — but disabled with the reason, the same rule the
+ * action menu follows, so the row doesn't change shape between invoices.
+ */
+function UndoPaymentButton({
+  action,
+  onUndo,
+  loading,
+}: {
+  action: "cash" | "match" | null;
+  onUndo: () => void;
+  /** An undo is in flight — the button says so and can't be pressed again. */
+  loading: boolean;
+}) {
+  const label = loading
+    ? "Undoing…"
+    : action === "match"
+      ? "Undo bank match"
+      : "Undo paid with cash";
+  const button = (
+    <Button
+      variant="ghost"
+      size="icon"
+      className={ROW_ICON_CLASS}
+      disabled={!action || loading}
+      onClick={onUndo}
+      aria-label={label}
+    >
+      {loading ? <Loader2 className="animate-spin" aria-hidden /> : <Undo2 />}
+    </Button>
+  );
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {/* The wrapper takes the hover: a disabled button fires no events. */}
+        {action ? button : <span>{button}</span>}
+      </TooltipTrigger>
+      <TooltipContent className="max-w-56">
+        {action
+          ? label
+          : "This payment wasn't recorded by a cash entry or a bank match, so there is nothing to undo here."}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** Sent or not, with the reason on hover. */
+function SentCell({ invoice }: { invoice: Invoice }) {
+  /*
+   * Only an invoice made in Sole is expected to have been sent from it. A
+   * bulk-uploaded one is history brought in from elsewhere, so it gets no
+   * nudge to send it.
+   */
+  const flagUnsent =
+    !invoice.sentAt && invoice.status !== "Draft" && !invoice.bulkUpload;
+  return (
+    <SentMark
+      sent={!!invoice.sentAt}
+      summary={sentSummary(invoice)}
+      hint={
+        flagUnsent
+          ? "Use Send to client in the row menu to email it."
+          : undefined
+      }
+    />
+  );
+}
+
+/** Why a row action is disabled for a login-as session whose grant lacks `edit`. */
+const NO_EDIT_ACCESS = "Your access doesn't include editing invoices";
+
+/**
  * One invoice, as few marks on the page as the row can be read with.
  *
- * The columns it used to have — issued date, client, balance due, sent, match
- * and credit note, each with its own header — asked you to read thirteen cells
- * to learn six things. What's left is the six: which invoice and whose, when
+ * The columns it used to have — issued date, client, balance due, match and
+ * credit note, each with its own header — asked you to read thirteen cells to
+ * learn six things. What's left is the essentials: which invoice and whose, when
  * it's due, what it's worth, where it stands, and what you can do about it.
  * Everything folded away is still on the row, attached to the figure it
  * qualifies rather than parked in a column of its own.
@@ -660,7 +818,9 @@ function InvoiceRow({
   onUnmatch,
   onMarkPaid,
   onUndoPaid,
-  onMarkSent,
+  onSendToClient,
+  sending,
+  missingClientEmail,
   onView,
   onHistory,
   onPrint,
@@ -671,6 +831,10 @@ function InvoiceRow({
   onStopRecurring,
   onSendNps,
   npsCompleted,
+  canEdit,
+  canDelete,
+  matchingIncluded,
+  undoing,
 }: {
   invoice: Invoice;
   client: string;
@@ -687,7 +851,12 @@ function InvoiceRow({
   onMarkPaid: () => void;
   /** Reverses a cash payment — only ever offered on one settled that way. */
   onUndoPaid: () => void;
-  onMarkSent: () => void;
+  /** Emails the invoice to its client and marks it sent. */
+  onSendToClient: () => void;
+  /** True while this row's invoice is being emailed. */
+  sending: boolean;
+  /** True when the client's contact is on file with no email to send to. */
+  missingClientEmail: boolean;
   onView: () => void;
   onHistory: () => void;
   onPrint: () => void;
@@ -699,6 +868,13 @@ function InvoiceRow({
   onSendNps: () => void;
   /** Whether an NPS response is already in for this invoice. */
   npsCompleted: boolean;
+  /** Whether the session's grant allows editing / deleting invoices. */
+  canEdit: boolean;
+  canDelete: boolean;
+  /** Whether the plan includes bank matching (the `transactions` feature). */
+  matchingIncluded: boolean;
+  /** True while this row's cash payment is being undone. */
+  undoing: boolean;
 }) {
   /**
    * Two totals, not one: the books' own figure in AUD, and what the client
@@ -718,6 +894,12 @@ function InvoiceRow({
   const baseCurrency = invoice.baseCurrency ?? country.currency;
   const foreign = isForeignCurrency(invoice.currency, baseCurrency);
   const draft = invoice.status === "Draft";
+  const description = (invoice.description ?? "").trim();
+  /** Paid or part paid — where Undo replaces Mark as paid. */
+  const settled =
+    invoice.status === "Paid" || invoice.status === "Partially paid";
+  /** What Undo would do on this row: undo a cash payment, undo a match, or nothing. */
+  const undoAction = invoiceUndoAction(invoice);
   /**
    * The balance only earns a line where it says something the amount doesn't.
    * Unpaid, the two are the same number twice; settled, the Paid pill has
@@ -734,8 +916,31 @@ function InvoiceRow({
       ? "Send the invoice before reminding the client"
       : undefined;
 
+  // Paid or part paid: the thing to do is take a payment back, not record
+  // another — Undo stands where Mark as paid would be. Otherwise the same rule
+  // as the Match column: not on a draft or a settled invoice. Saved but unsent
+  // (Save & Print) still qualifies.
+  const primaryAction = !canEdit ? null : settled ? (
+    <UndoPaymentButton
+      action={undoAction}
+      loading={undoing}
+      onUndo={undoAction === "cash" ? onUndoPaid : onUnmatch}
+    />
+  ) : !paid && invoiceAwaitingPayment(invoice, suggestions) ? (
+    <RowIconAction
+      icon={<DollarSign />}
+      label="Mark this invoice as paid with cash"
+      onClick={onMarkPaid}
+    />
+  ) : null;
+
   return (
-    <TableRow data-state={selected ? "selected" : undefined}>
+    <TableRow
+      data-state={selected ? "selected" : undefined}
+      data-usertour="invoice-row"
+      className="cursor-pointer"
+      onClick={(event) => openRowOnClick(event, onView)}
+    >
       <TableCell>
         <Checkbox
           checked={selected}
@@ -745,7 +950,7 @@ function InvoiceRow({
       </TableCell>
       {/* Number and client in one cell: they're one answer to "which invoice",
           and the search matches on both, so Highlight still lands. */}
-      <TableCell>
+      <TableCell data-usertour="invoice-number">
         <p className="flex items-center gap-1.5 font-medium tabular">
           <Highlight text={invoice.number} query={query} />
           {/* Same marker sole-webapp puts on the number: this one raises
@@ -760,22 +965,57 @@ function InvoiceRow({
               Recurring
             </Badge>
           )}
+          {/* Hidden stand-in the onboarding tour switches on (globals.css) to
+              show what the badge above looks like, on an invoice that isn't
+              recurring. */}
+          {!invoice.isRecurring && (
+            <Badge
+              variant="outline"
+              className="tour-demo-recurring hidden gap-1 border-primary/30 bg-primary/[0.06] px-1.5 py-0 text-[10px] font-semibold uppercase tracking-wide text-primary"
+              aria-hidden
+            >
+              <Repeat className="size-3" aria-hidden />
+              Recurring
+            </Badge>
+          )}
         </p>
-        <p className="max-w-[24ch] truncate text-xs text-muted-foreground">
-          <Highlight text={client} query={query} />
-        </p>
+        {/* Client, then the description after a dash. The description is cut
+            to what fits and the whole of it is on hover. */}
+        <div className="flex max-w-[30ch] items-baseline text-xs text-muted-foreground">
+          <span className="max-w-[16ch] shrink-0 truncate">
+            <Highlight text={client} query={query} />
+          </span>
+          {description && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                {/* Focusable, so the full text is reachable without a mouse. */}
+                <span
+                  tabIndex={0}
+                  className="flex min-w-0 items-baseline outline-none focus-visible:underline"
+                >
+                  <span className="shrink-0 px-1" aria-hidden>
+                    -
+                  </span>
+                  <span className="min-w-0 truncate">{description}</span>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-[20rem] whitespace-pre-line break-words">
+                {description}
+              </TooltipContent>
+            </Tooltip>
+          )}
+        </div>
       </TableCell>
       {/* The Due column keeps status colour; other dates stay muted. */}
       <TableCell
         className={cn(
-          HUG_COLUMN,
-          "text-center tabular",
+          "whitespace-nowrap text-center tabular",
           dueDateClass(invoice.status),
         )}
       >
         {formatInvoiceDate(invoice.due)}
       </TableCell>
-      <TableCell className={cn(HUG_COLUMN, "text-center tabular")}>
+      <TableCell className="whitespace-nowrap text-center tabular">
         {deposit !== null ? (
           <>
             {formatDocumentMoney(deposit, invoice.currency)}
@@ -817,73 +1057,80 @@ function InvoiceRow({
       <TableCell className="text-center">
         <StatusCell invoice={invoice} matched={matched} />
       </TableCell>
-      <TableCell className={cn(HUG_COLUMN, "text-center")}>
+      <TableCell className="whitespace-nowrap text-center">
+        <SentCell invoice={invoice} />
+      </TableCell>
+      <TableCell className="whitespace-nowrap text-center">
         <MatchCell
           invoice={invoice}
           matched={matched}
           suggestions={suggestions}
           onMatch={onMatch}
+          matchingIncluded={matchingIncluded}
         />
       </TableCell>
       <TableCell className={HUG_COLUMN}>
-        <div className="flex items-center justify-end gap-1.5">
+        <div className="flex items-center justify-end gap-1">
           {/* The one thing people come to this list to do, out of the menu and
-              onto the row. */}
-          {!paid && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-muted-foreground hover:text-foreground"
-              onClick={onMarkPaid}
-            >
-              <Check />
-              Mark as paid
-            </Button>
-          )}
+              onto the row. An empty slot keeps the other icons in the same
+              place on every row, so the Actions header can sit over them. */}
+          {primaryAction ?? <span className="size-8" aria-hidden />}
+          <RowIconAction
+            icon={<Pencil />}
+            label="Edit invoice"
+            href={`/invoices/${invoice.id}`}
+            disabledReason={
+              !canEdit ? NO_EDIT_ACCESS : invoiceEditBlock(invoice)
+            }
+          />
+          {/* Opens a fresh invoice prefilled from this one. */}
+          <RowIconAction
+            icon={<Copy />}
+            label="Duplicate invoice"
+            onClick={onDuplicate}
+          />
+          <RowIconAction
+            icon={<History />}
+            label="Invoice history"
+            onClick={onHistory}
+          />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
                 size="icon"
-                className="size-8"
+                className={cn(ROW_ICON_CLASS, "data-[state=open]:text-primary")}
                 aria-label={`Actions for ${invoice.number}`}
+                data-usertour="invoice-actions"
               >
-                <MoreHorizontal className="size-4 text-muted-foreground" />
+                <MoreHorizontal className="size-4" />
               </Button>
             </DropdownMenuTrigger>
-            {/* View actions, then edit actions, then Delete on its own. */}
             <DropdownMenuContent align="end" className="w-52">
+              {/* Hidden for now — View (re-add the Eye import to bring it back; clicking the row already opens the preview):
               <MenuAction icon={<Eye />} label="View" onSelect={onView} />
-              <MenuAction
-                icon={<History />}
-                label="Invoice history"
-                onSelect={onHistory}
-              />
-              {/* The match action in full, whichever way round it is. The row's
-                  AI Match button is a shortcut past this, not the only route.
-                  A draft or a settled invoice has nothing left to reconcile —
-                  the same rule the Match column follows — so matching is
-                  disabled on those, with the reason. */}
-              {matched ? (
-                <MenuAction
-                  icon={<Unlink />}
-                  label="Unmatch"
-                  onSelect={onUnmatch}
-                />
-              ) : (
+              */}
+              {/* Invoice history, Edit and Duplicate now live on the row itself. */}
+              {/* Unmatch and Undo paid with cash are the Undo button on the row
+                  (UndoPaymentButton), not menu items. */}
+              {/* Hidden for now — Match to transaction (the Match column covers it):
+              {!matched && (
                 <MenuAction
                   icon={<Link2 />}
                   label="Match to transaction"
                   onSelect={onMatch}
                   disabledReason={
-                    draft
-                      ? "Finalise the invoice before matching it"
-                      : paid
-                        ? "Already paid in full"
-                        : undefined
+                    !matchingIncluded
+                      ? "Bank matching isn't part of your plan"
+                      : draft
+                        ? "Finalise the invoice before matching it"
+                        : paid
+                          ? "Already paid in full"
+                          : undefined
                   }
                 />
               )}
+              */}
               <MenuAction
                 icon={<Download />}
                 label="Download PDF"
@@ -891,23 +1138,27 @@ function InvoiceRow({
               />
               <DropdownMenuSeparator />
               <MenuAction
-                icon={<Pencil />}
-                label="Edit"
-                href={`/invoices/${invoice.id}`}
-              />
-              <MenuAction
                 icon={<Paperclip />}
                 label="Add attachment"
                 onSelect={onAttach}
+                disabledReason={!canEdit ? NO_EDIT_ACCESS : undefined}
               />
               <MenuAction
-                icon={<Send />}
-                label="Mark as sent"
-                onSelect={onMarkSent}
+                icon={sending ? <Loader2 className="animate-spin" /> : <Send />}
+                label={sending ? "Sending…" : "Send to client"}
+                onSelect={onSendToClient}
                 disabledReason={
-                  invoice.sentAt
-                    ? `Sent on ${formatInvoiceDate(invoice.sentAt)}`
-                    : undefined
+                  !canEdit
+                    ? NO_EDIT_ACCESS
+                    : draft
+                      ? "Finalise the invoice before sending it"
+                      : invoice.sentAt
+                        ? `Sent on ${formatInvoiceDate(invoice.sentAt)}`
+                        : missingClientEmail
+                          ? `Add an email for ${client} before sending`
+                          : sending
+                            ? "Sending…"
+                            : undefined
                 }
               />
               <MenuAction
@@ -927,15 +1178,6 @@ function InvoiceRow({
                 }}
                 disabledReason={reminderReason}
               />
-              {/* Only a cash settlement has anything to undo here — one paid
-                  by a matched bank transaction is undone by unmatching it. */}
-              {invoice.status === "Paid" && invoice.paidWithCash && (
-                <MenuAction
-                  icon={<Undo2 />}
-                  label="Undo paid with cash"
-                  onSelect={onUndoPaid}
-                />
-              )}
               {invoice.status === "Paid" && (
                 <MenuAction
                   icon={<Receipt />}
@@ -951,15 +1193,18 @@ function InvoiceRow({
                 />
               )}
               <MenuAction
-                icon={<Copy />}
-                label="Duplicate"
-                onSelect={onDuplicate}
-              />
-              <MenuAction
                 icon={<Star />}
                 label="Send NPS"
                 onSelect={onSendNps}
-                disabledReason={npsCompleted ? "An NPS response is already in for this invoice" : undefined}
+                disabledReason={
+                  draft
+                    ? "Finalise the invoice before sending an NPS survey"
+                    : invoice.status === "Outstanding"
+                      ? "An NPS survey can be sent once the invoice is paid or overdue"
+                      : npsCompleted
+                        ? "An NPS response is already in for this invoice"
+                        : undefined
+                }
               />
               <DropdownMenuSeparator />
               {/* Money has been received against it, so deleting it would
@@ -970,7 +1215,9 @@ function InvoiceRow({
                 onSelect={onDelete}
                 destructive
                 disabledReason={
-                  paid
+                  !canDelete
+                    ? "Your access doesn't include deleting invoices"
+                    : paid
                     ? "Paid invoices can't be deleted"
                     : partPaid || invoice.status === "Partially paid"
                       ? "Partially paid invoices can't be deleted"
@@ -988,19 +1235,10 @@ function InvoiceRow({
 /**
  * Where an invoice stands, in one pill.
  *
- * Sent is not the same question as status, and the gap between them is the one
- * worth catching: an invoice can be finalised, outstanding and counting towards
- * what you're owed while the client has never seen it. That gap used to cost a
- * column on every row to report on the rows where there is no gap. Here the
- * pill carries the status, the tooltip carries the date it went out, and only a
- * finalised invoice that hasn't been sent picks up a mark — the one case where
- * the two disagree.
- *
- * The status word is the invoice's own status, not one re-derived from whether
- * it was sent. Draft is already a status here, and an unsent invoice is not
- * necessarily in it — relabelling an unsent Outstanding invoice as a draft
- * would hide the one row this is for, while the Outstanding tab went on
- * counting it and its money.
+ * Sent is not the same question as status — an invoice can be finalised,
+ * outstanding and counting towards what you're owed while the client has never
+ * seen it — and it has its own column for that. The pill carries the status;
+ * when the invoice is matched to a bank transaction, hovering it says which.
  */
 function StatusCell({
   invoice,
@@ -1009,15 +1247,13 @@ function StatusCell({
   invoice: Invoice;
   matched: Transaction | null;
 }) {
-  const draft = invoice.status === "Draft";
-  const unsent = !invoice.sentAt;
-  const sent = invoice.sentAt
-    ? `Sent ${formatInvoiceDate(invoice.sentAt)}`
-    : draft
-      ? "Not sent yet"
-      : invoice.savedAt
-        ? `Saved ${formatInvoiceDate(invoice.savedAt)}, but not sent to the client`
-        : "Finalised, but not sent to the client";
+  const badge = (
+    <Badge variant={statusVariant(invoice.status)}>
+      {invoice.status}
+      <span className="sr-only">, {sentSummary(invoice)}</span>
+    </Badge>
+  );
+  if (!matched) return <div className="mx-auto w-fit">{badge}</div>;
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -1025,25 +1261,27 @@ function StatusCell({
         <TooltipTrigger asChild>
           {/* A div rather than a span: Badge renders a div, and Radix needs a
               ref on the trigger, which Badge doesn't forward. */}
-          <div className="mx-auto w-fit">
-            <Badge variant={statusVariant(invoice.status)} className="gap-1">
-              {unsent && !draft && <MailX className="size-3" aria-hidden />}
-              {invoice.status}
-              <span className="sr-only">, {sent}</span>
-            </Badge>
-          </div>
+          <div className="mx-auto w-fit">{badge}</div>
         </TooltipTrigger>
-        <TooltipContent className="max-w-[16rem] space-y-0.5">
-          <p className="tabular">{sent}</p>
-          {matched && (
-            <p className="text-muted-foreground">
-              Matched to {matched.description}
-            </p>
-          )}
+        <TooltipContent className="max-w-[16rem]">
+          Matched to {matched.description}
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>
   );
+}
+
+/**
+ * Where an invoice stands with the client, in words: when it went out, or why
+ * it hasn't.
+ */
+function sentSummary(invoice: Invoice): string {
+  if (invoice.sentAt) return `Sent ${formatInvoiceDate(invoice.sentAt)}`;
+  if (invoice.status === "Draft") return "Not sent yet";
+  if (invoice.bulkUpload) return "Imported by bulk upload";
+  return invoice.savedAt
+    ? `Saved ${formatInvoiceDate(invoice.savedAt)}, but not sent to the client`
+    : "Finalised, but not sent to the client";
 }
 
 /**
@@ -1063,15 +1301,15 @@ function MatchCell({
   matched,
   suggestions,
   onMatch,
+  matchingIncluded,
 }: {
   invoice: Invoice;
   matched: Transaction | null;
   suggestions: number;
   onMatch: () => void;
+  /** False when the plan has no bank matching — there is then nothing to offer. */
+  matchingIncluded: boolean;
 }) {
-  const draft = invoice.status === "Draft";
-  const nothingOwing = invoiceOutstanding(invoice) <= 0;
-
   if (matched) {
     return (
       <Badge variant="success" className="gap-1">
@@ -1081,7 +1319,7 @@ function MatchCell({
     );
   }
 
-  if (draft || nothingOwing) {
+  if (!matchingIncluded || !invoiceAwaitingPayment(invoice, suggestions)) {
     return <span className="text-sm text-muted-foreground">—</span>;
   }
 
@@ -1089,16 +1327,12 @@ function MatchCell({
     return <AiMatchButton suggestions={suggestions} onOpen={onMatch} />;
   }
 
-  if (invoice.sentAt && OUTSTANDING_STATUSES.includes(invoice.status)) {
-    return (
-      <Button variant="outline" size="sm" onClick={onMatch}>
-        <Link2 />
-        Match
-      </Button>
-    );
-  }
-
-  return <span className="text-sm text-muted-foreground">—</span>;
+  return (
+    <Button variant="outline" size="sm" onClick={onMatch}>
+      <Link2 />
+      Match
+    </Button>
+  );
 }
 
 /**
@@ -1135,7 +1369,7 @@ function CreditNoteChip({ note }: { note: Refund }) {
  * table is never left blank while a request that already looks "done" in the
  * network tab is still on its way into `pageQuery`.
  */
-function InvoicesTableSkeleton() {
+function InvoicesTableSkeleton({ rows }: { rows: number }) {
   return (
     <div
       className="overflow-hidden rounded-lg border border-border bg-card shadow-sm"
@@ -1145,16 +1379,19 @@ function InvoicesTableSkeleton() {
         <TableHeader>
           <TableRow>
             <TableHead className="w-[44px]" />
-            <TableHead>Invoice</TableHead>
-            <TableHead className={cn(HUG_COLUMN, "text-center")}>
+            <TableHead className="w-[15rem]">Invoice</TableHead>
+            <TableHead className={"whitespace-nowrap text-center"}>
               Due
             </TableHead>
-            <TableHead className={cn(HUG_COLUMN, "text-center")}>
+            <TableHead className={"whitespace-nowrap text-center"}>
               Deposit
             </TableHead>
             <TableHead className="text-center">Amount</TableHead>
             <TableHead className="text-center">Status</TableHead>
-            <TableHead className={cn(HUG_COLUMN, "text-center")}>
+            <TableHead className={"whitespace-nowrap text-center"}>
+              Sent
+            </TableHead>
+            <TableHead className={"whitespace-nowrap text-center"}>
               Match
             </TableHead>
             <TableHead className={cn(HUG_COLUMN, "text-right")}>
@@ -1163,7 +1400,7 @@ function InvoicesTableSkeleton() {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {Array.from({ length: 8 }).map((_, index) => (
+          {Array.from({ length: rows }).map((_, index) => (
             <TableRow key={`skeleton-${index}`}>
               <TableCell>
                 <Shimmer className="size-4 rounded-sm" />
@@ -1172,10 +1409,10 @@ function InvoicesTableSkeleton() {
                 <Shimmer className="h-4 w-24" />
                 <Shimmer className="mt-1.5 h-3 w-32" />
               </TableCell>
-              <TableCell className={HUG_COLUMN}>
+              <TableCell>
                 <Shimmer className="mx-auto h-4 w-16" />
               </TableCell>
-              <TableCell className={HUG_COLUMN}>
+              <TableCell>
                 <Shimmer className="mx-auto h-4 w-14" />
               </TableCell>
               <TableCell>
@@ -1184,11 +1421,14 @@ function InvoicesTableSkeleton() {
               <TableCell>
                 <Shimmer className="mx-auto h-5 w-20 rounded-full" />
               </TableCell>
-              <TableCell className={HUG_COLUMN}>
+              <TableCell>
+                <Shimmer className="mx-auto size-4 rounded-full" />
+              </TableCell>
+              <TableCell>
                 <Shimmer className="mx-auto h-5 w-16 rounded-full" />
               </TableCell>
               <TableCell>
-                <Shimmer className="ml-auto size-8 rounded-full" />
+                <Shimmer className="ml-auto h-8 w-40 rounded-full" />
               </TableCell>
             </TableRow>
           ))}

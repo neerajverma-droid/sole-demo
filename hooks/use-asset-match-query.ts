@@ -12,8 +12,21 @@ import {
   fetchPossibleAssetMatches,
   matchAssetToMultipleTransactionsApi,
   matchAssetToTransactionApi,
+  undoAssetCashPaymentApi,
   undoAssetMatchApi,
 } from "@/lib/asset-match";
+
+/**
+ * An asset id — undo its latest match — or an asset id and the one matched
+ * journal entry to take off, for an asset matched to several transactions.
+ */
+export type UndoAssetMatchVariables =
+  | string
+  | { assetId: string; journalEntryId?: string };
+
+function undoTarget(variables: UndoAssetMatchVariables) {
+  return typeof variables === "string" ? { assetId: variables } : variables;
+}
 
 /**
  * Candidate bank transactions for one asset, fetched fresh each time the
@@ -35,14 +48,19 @@ export function usePossibleAssetMatchesQuery(
   });
 }
 
-function useInvalidateAssetMatch(assetId: string) {
-  const queryClient = useQueryClient();
-  return () => {
-    queryClient.invalidateQueries({ queryKey: ["assets"] });
-    queryClient.invalidateQueries({
+/**
+ * After a match changes: the register, each affected asset's own record (the
+ * matched flag the edit form, the edit gate and the View dialog read) and its
+ * candidate list.
+ */
+function invalidateAssetMatch(queryClient: QueryClient, assetIds: string[]) {
+  void queryClient.invalidateQueries({ queryKey: ["assets"] });
+  for (const assetId of assetIds) {
+    void queryClient.invalidateQueries({ queryKey: ["asset", assetId] });
+    void queryClient.invalidateQueries({
       queryKey: ["asset-possible-matches", assetId],
     });
-  };
+  }
 }
 
 export function useMatchAssetMutation() {
@@ -55,21 +73,16 @@ export function useMatchAssetMutation() {
       assetId: string;
       bankTransactionId: string;
     }) => matchAssetToTransactionApi(assetId, bankTransactionId),
-    onSuccess: (_result, { assetId }) => {
-      queryClient.invalidateQueries({ queryKey: ["assets"] });
-      queryClient.invalidateQueries({
-        queryKey: ["asset-possible-matches", assetId],
-      });
-    },
+    onSuccess: (_result, { assetId }) => invalidateAssetMatch(queryClient, [assetId]),
   });
 }
 
 export function useMatchAssetToMultipleMutation(assetId: string) {
-  const invalidate = useInvalidateAssetMatch(assetId);
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (transactionIds: string[]) =>
       matchAssetToMultipleTransactionsApi(assetId, transactionIds),
-    onSuccess: invalidate,
+    onSuccess: () => invalidateAssetMatch(queryClient, [assetId]),
   });
 }
 
@@ -81,12 +94,17 @@ export function useMatchAssetToMultipleMutation(assetId: string) {
  */
 export function undoAssetMatchMutationOptions(queryClient: QueryClient) {
   return {
-    mutationFn: (assetId: string) => undoAssetMatchApi(assetId),
+    mutationFn: (variables: UndoAssetMatchVariables) => {
+      const { assetId, journalEntryId } = undoTarget(variables);
+      return undoAssetMatchApi(assetId, journalEntryId);
+    },
     // Not returned: the register refetches behind the caller.
-    onSuccess: (_: void, assetId: string) => {
+    onSuccess: (_: void, variables: UndoAssetMatchVariables) => {
       void queryClient.invalidateQueries({ queryKey: ["assets"] });
       // The one asset's own record carries the matched flag the edit form reads.
-      void queryClient.invalidateQueries({ queryKey: ["asset", assetId] });
+      void queryClient.invalidateQueries({
+        queryKey: ["asset", undoTarget(variables).assetId],
+      });
     },
   };
 }
@@ -96,10 +114,22 @@ export function useUndoAssetMatchMutation() {
   return useMutation(undoAssetMatchMutationOptions(queryClient));
 }
 
+/** Undoes a paid-with-cash asset's cash payment (and its cash transaction). */
+export function useUndoAssetCashPaymentMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (assetId: string) => undoAssetCashPaymentApi(assetId),
+    onSuccess: (_: void, assetId: string) => {
+      void queryClient.invalidateQueries({ queryKey: ["assets"] });
+      void queryClient.invalidateQueries({ queryKey: ["asset", assetId] });
+    },
+  });
+}
+
 export function useBulkUndoAssetMatchMutation() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (assetIds: string[]) => bulkUndoAssetMatchesApi(assetIds),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["assets"] }),
+    onSuccess: (_result, assetIds) => invalidateAssetMatch(queryClient, assetIds),
   });
 }

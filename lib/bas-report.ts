@@ -31,11 +31,13 @@ import { format } from "date-fns";
 
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
+import type { CountryContext } from "@/lib/country-context";
 import { AU_FISCAL_YEAR_START, type FiscalYearStart } from "@/lib/fiscal-year";
 import {
   periodShape,
   round2,
   spanLabel,
+  type NamedRange,
   type ReportPeriod,
   type ReportRange,
   type Span,
@@ -54,6 +56,125 @@ export const BAS_PERIODS: readonly ReportPeriod[] = [
   "Last financial year",
   "Custom range",
 ];
+
+/**
+ * The presets for a business that doesn't file quarterly — New Zealand's
+ * two-monthly or six-monthly GST. Its filing periods ("This period", "Last
+ * period") are offered above these, from `filingPeriodChoices`; a calendar
+ * quarter is left out because it isn't a period anyone there files on.
+ */
+export const BAS_FILING_PERIOD_PRESETS: readonly ReportPeriod[] = [
+  "This financial year",
+  "Last financial year",
+  "Custom range",
+];
+
+/**
+ * Whether the return screen offers the business's own filing periods instead
+ * of calendar quarters: outside Australia, for anyone not filing quarterly,
+ * once the country context has said which periods those are. Australia keeps
+ * its quarter presets exactly as they were.
+ */
+export function usesFilingPeriods(
+  country: Pick<CountryContext, "iso2" | "filingFrequency" | "currentFilingPeriod">,
+): boolean {
+  return (
+    country.iso2 !== "AU" &&
+    Boolean(country.filingFrequency) &&
+    country.filingFrequency !== "quarterly" &&
+    Boolean(country.currentFilingPeriod?.startDate && country.currentFilingPeriod?.endDate)
+  );
+}
+
+/**
+ * "This period" and "Last period", with the dates the backend's own filing
+ * calendar gives them (`/country-context` → `filing.current_period` /
+ * `previous_period`, built by the same `getFilingPeriods` the return uses), so
+ * the range asked for is exactly one period the return reports.
+ */
+export function filingPeriodChoices(
+  country: Pick<CountryContext, "currentFilingPeriod" | "previousFilingPeriod">,
+): NamedRange[] {
+  const choices: NamedRange[] = [];
+  const add = (key: string, name: string, period: CountryContext["currentFilingPeriod"]) => {
+    if (period?.startDate && period.endDate) {
+      choices.push({ key, name, scope: period.label, range: { from: period.startDate, to: period.endDate } });
+    }
+  };
+  add("this-period", "This period", country.currentFilingPeriod);
+  add("last-period", "Last period", country.previousFilingPeriod);
+  return choices;
+}
+
+/**
+ * What one filing period is called on the worksheet: "quarter" where the
+ * backend labelled them "Quarter N" (quarterly filers), "period" otherwise.
+ */
+export function periodNoun(report: Pick<BasReport, "quarters">): "quarter" | "period" {
+  return report.quarters.every((q) => q.label.startsWith("Quarter")) ? "quarter" : "period";
+}
+
+/**
+ * The return's own label for a listed transaction, or null to show the BAS
+ * code. A row with no GST gets the return's "no GST" label where it has one:
+ * on a GST101A a purchase without GST is not in Box 11, and a sale without GST
+ * sits in Boxes 5 and 6.
+ */
+export function transactionLabelFor(
+  labels: BasReport["transactionLabels"],
+  code: BasCode,
+  gst: number,
+): string | null {
+  if (!labels) return null;
+  const noGst = gst === 0;
+  const specific =
+    noGst && code === "G1" ? "SALE_NO_GST" : noGst && (code === "G10" || code === "G11") ? "PURCHASE_NO_GST" : null;
+  return (specific && labels[specific]) || labels[code] || null;
+}
+
+/** What the return screen runs for: a period, its range, and the named filing period it is, if any. */
+export type BasPeriodChoice = {
+  period: ReportPeriod;
+  range: ReportRange | null;
+  namedKey: string | null;
+};
+
+/**
+ * The period the return screen runs for, from what's stored and what the
+ * business is:
+ *  - a named filing period picked on another business isn't carried over —
+ *    its dates belong to that business's filing calendar;
+ *  - a named period follows the calendar's own dates for it;
+ *  - a quarter preset (the default) means nothing to a two-monthly filer, so it
+ *    starts on the last filing period, the one most likely being prepared.
+ * Until the country context has answered, the stored choice stands.
+ */
+export function resolveBasPeriod(input: {
+  stored: BasPeriodChoice;
+  ready: boolean;
+  businessId: string | null;
+  periodOwner: string | null;
+  filingMode: boolean;
+  filingChoices: readonly NamedRange[];
+}): BasPeriodChoice {
+  const { stored, ready, businessId, periodOwner, filingMode, filingChoices } = input;
+  let next: BasPeriodChoice = { ...stored };
+  if (!ready) return next;
+  if (businessId !== null && periodOwner !== null && periodOwner !== businessId && next.namedKey !== null) {
+    next = { period: "This quarter", range: null, namedKey: null };
+  }
+  const named = next.namedKey ? filingChoices.find((choice) => choice.key === next.namedKey) : undefined;
+  if (named) {
+    next = { period: "Custom range", range: { ...named.range }, namedKey: named.key };
+  } else if (next.namedKey !== null) {
+    next = { ...next, namedKey: null };
+  }
+  if (filingMode && (next.period === "This quarter" || next.period === "Last quarter")) {
+    const start = filingChoices.find((choice) => choice.key === "last-period") ?? filingChoices[0];
+    if (start) next = { period: "Custom range", range: { ...start.range }, namedKey: start.key };
+  }
+  return next;
+}
 
 export const BAS_PAGE_SIZE = 25;
 
@@ -97,6 +218,15 @@ export type BasQuarter = {
   /** Unsigned — `outcome` says which way it goes. */
   net: number;
   outcome: "payable" | "refund";
+  /**
+   * Where the form prints the bottom line, when it numbers it: GST101A's Box
+   * 15, "Difference between Box 10 and Box 14". Null for the BAS, whose
+   * worksheet has no such box.
+   */
+  summaryCode: string | null;
+  summaryLabel: string | null;
+  /** ISO date the return and payment are due; "" where the screen doesn't show one (the BAS). */
+  dueDate: string;
 };
 
 export type BasTransaction = {
@@ -130,6 +260,12 @@ export type BasReport = {
    * layout is not something to lodge, and the screen says so.
    */
   draft: boolean;
+  /**
+   * What to show for a transaction's code, when the country's form groups it
+   * differently from the BAS: "Purchases (Box 11)" rather than G11 on a
+   * GST101A. Null keeps the codes themselves (Australia).
+   */
+  transactionLabels: Partial<Record<string, string>> | null;
   quarters: BasQuarter[];
   transactions: BasTransaction[];
   /** Transactions across every page, not just this one. */
@@ -161,7 +297,9 @@ type BackendTaxReturn = {
   draft?: boolean;
   sections?: { title?: string; rows?: { box?: string | null; label?: string; amount?: number }[] }[];
   boxes?: Record<string, { label?: string; amount?: number }>;
-  summary?: { direction?: string; amount?: number; net_tax?: number };
+  summary?: { direction?: string; amount?: number; net_tax?: number; box?: string; box_label?: string };
+  period?: { due_date?: string | null };
+  transaction_labels?: Partial<Record<string, string>>;
 };
 
 type BackendQuarter = {
@@ -244,12 +382,18 @@ function sectionsOf(raw: BackendQuarter): BasSection[] {
  * The tax on sales and on purchases, wherever this country puts them.
  *
  * By box code, from the country's own map: G9/G20 on an Australian worksheet,
- * boxes 8 and 14 on a GST101A, fields 13 and 19 on a VAT201, 3.1(a) and 4(C)
- * on a GSTR-3B. The first code present wins, so a form that labels the same
- * figure twice — the BAS repeats G9 as 1A — is counted once.
+ * boxes 10 and 14 on a GST101A (the totals, adjustments included), fields 13
+ * and 19 on a VAT201, 3.1(a) and 4(C) on a GSTR-3B. The first code present
+ * wins, so a form that labels the same figure twice — the BAS repeats G9 as
+ * 1A — is counted once.
+ *
+ * Order matters where forms reuse a number for different things: GST101A's
+ * Box 13 is a purchase-side adjustment but VAT201's field 13 is output tax,
+ * so "10" and "8" come first; VAT201's field 14 is a capital-goods VALUE, not
+ * tax, so "19" comes before GST101A's "14".
  */
-const SALES_TAX_BOXES = ["G9", "1A", "8", "13", "4A", "3.1(a) tax"];
-const PURCHASE_TAX_BOXES = ["G20", "1B", "14", "19", "4(C)"];
+const SALES_TAX_BOXES = ["G9", "1A", "10", "8", "13", "4A", "3.1(a) tax"];
+const PURCHASE_TAX_BOXES = ["G20", "1B", "19", "14", "4(C)"];
 
 function amountForBoxes(sections: BasSection[], codes: string[]): number {
   const rows = sections.flatMap((section) => section.rows);
@@ -290,6 +434,16 @@ function toQuarter(raw: BackendQuarter): BasQuarter {
         : /refund/i.test(netText)
           ? "refund"
           : "payable",
+    summaryCode: summary?.box?.trim() || null,
+    summaryLabel: summary?.box_label?.trim() || null,
+    // Shown for the countries whose return screen gained it; the BAS keeps the
+    // heading it always had.
+    dueDate:
+      raw.tax_return?.template && raw.tax_return.template !== "au_bas"
+        ? /^\d{4}-\d{2}-\d{2}$/.test(raw.tax_return.period?.due_date ?? "")
+          ? (raw.tax_return.period?.due_date as string)
+          : ""
+        : "",
   };
 }
 
@@ -380,6 +534,7 @@ export async function fetchBasReport(
     taxLabel: template?.tax_label?.trim() || "GST",
     taxAuthority: template?.tax_authority?.trim() || null,
     draft: template?.draft === true,
+    transactionLabels: template?.transaction_labels ?? null,
     quarters,
     transactions: (body.data?.transactions ?? []).map((row, index) =>
       toTransaction(row, index, page),

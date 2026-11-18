@@ -73,12 +73,45 @@ export function InvoiceClientSelect({
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
   const [dialogOpen, setDialogOpen] = React.useState(false);
+  /**
+   * Set by picking someone: the list then shows only the rest of that person's
+   * company, since the next thing anyone wants is a colleague of theirs, not a
+   * different client. Cleared whenever the dropdown closes, so opening it again
+   * starts from the full list and switching client is still one click.
+   */
+  const [narrowed, setNarrowed] = React.useState(false);
+  const listRef = React.useRef<HTMLDivElement>(null);
+
+  /*
+   * Opening the dropdown with someone already chosen starts on them, not at
+   * the top of a list that may be dozens long. Scrolls the list's own
+   * container rather than calling `scrollIntoView`, which would also move the
+   * page under it.
+   */
+  React.useEffect(() => {
+    if (!open) return;
+    const frame = requestAnimationFrame(() => {
+      const list = listRef.current;
+      const row = list?.querySelector<HTMLElement>('[data-chosen="true"]');
+      if (!list || !row) return;
+      const offset =
+        row.getBoundingClientRect().top -
+        list.getBoundingClientRect().top -
+        (list.clientHeight - row.clientHeight) / 2;
+      list.scrollTop += offset;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open]);
 
   const { clientId, clientName, recipients } = selection;
   const selectedIds = new Set(recipients.map((person) => person.id));
 
   const needle = query.trim().toLowerCase();
   const matches = contacts.filter((contact) => {
+    // Only the chosen company's people who aren't already on the invoice.
+    if (narrowed && (contact.clientId !== clientId || selectedIds.has(contact.id))) {
+      return false;
+    }
     if (!needle) return true;
     return (
       contact.name.toLowerCase().includes(needle) ||
@@ -91,40 +124,70 @@ export function InvoiceClientSelect({
   const client = contacts.find((contact) => contact.clientId === clientId);
   const clientContacts = contactsForClient(contacts, clientId);
 
-  const toggle = (contact: InvoiceContact) => {
-    // A different company replaces the selection outright rather than
-    // silently billing the wrong client.
+  /** Applies a pick, and returns the selection it produced. */
+  const toggle = (contact: InvoiceContact): ClientSelection => {
+    let next: ClientSelection;
+
     if (clientId && contact.clientId !== clientId) {
-      onChange({
+      // A different company replaces the selection outright rather than
+      // silently billing the wrong client.
+      next = {
         clientId: contact.clientId,
         clientName: contact.clientName || contact.name,
         recipients: [
           { id: contact.id, name: contact.name, email: contact.email },
         ],
-      });
-      return;
-    }
-
-    if (selectedIds.has(contact.id)) {
-      const next = recipients.filter((person) => person.id !== contact.id);
-      onChange(
-        next.length > 0
-          ? { clientId, clientName, recipients: next }
+      };
+    } else if (selectedIds.has(contact.id)) {
+      const remaining = recipients.filter((person) => person.id !== contact.id);
+      next =
+        remaining.length > 0
+          ? { clientId, clientName, recipients: remaining }
           : // The last person removed clears the client too — an invoice
             // addressed to nobody has no client either.
-            { clientId: null, clientName: "", recipients: [] },
-      );
-      return;
+            { clientId: null, clientName: "", recipients: [] };
+    } else {
+      next = {
+        clientId: contact.clientId,
+        clientName: contact.clientName || contact.name,
+        recipients: [
+          ...recipients,
+          { id: contact.id, name: contact.name, email: contact.email },
+        ],
+      };
     }
 
-    onChange({
-      clientId: contact.clientId,
-      clientName: contact.clientName || contact.name,
-      recipients: [
-        ...recipients,
-        { id: contact.id, name: contact.name, email: contact.email },
-      ],
-    });
+    onChange(next);
+    return next;
+  };
+
+  /**
+   * What happens to the dropdown after a pick.
+   *
+   * Someone was added: if their company has others who could be copied in, the
+   * list stays open but narrows to them; if there's nobody left to add — a
+   * single-contact client, or everyone already chosen — the choice is made and
+   * the dropdown closes. Someone was removed: the list stays as it was, since
+   * that's a correction rather than a choice.
+   */
+  const afterPick = (contact: InvoiceContact, next: ClientSelection) => {
+    setQuery("");
+    const added = next.recipients.some((person) => person.id === contact.id);
+    if (!added) return;
+
+    const chosen = new Set(next.recipients.map((person) => person.id));
+    const others = contactsForClient(contacts, next.clientId).filter(
+      (entry) => !chosen.has(entry.id),
+    );
+    if (others.length > 0) {
+      setNarrowed(true);
+    } else {
+      // Closing from here doesn't go through the popover's own change handler,
+      // so the narrowing is cleared by hand — otherwise reopening would show an
+      // empty list under a heading.
+      setNarrowed(false);
+      setOpen(false);
+    }
   };
 
   const triggerLabel = clientName || "Select a client";
@@ -143,7 +206,10 @@ export function InvoiceClientSelect({
           open={open}
           onOpenChange={(next) => {
             setOpen(next);
-            if (!next) setQuery("");
+            if (!next) {
+              setQuery("");
+              setNarrowed(false);
+            }
           }}
         >
           <PopoverTrigger asChild>
@@ -175,7 +241,7 @@ export function InvoiceClientSelect({
                 value={query}
                 onValueChange={setQuery}
               />
-              <CommandList>
+              <CommandList ref={listRef}>
                 {matches.length === 0 ? (
                   <p className="py-6 text-center text-sm text-muted-foreground">
                     {contacts.length === 0
@@ -183,7 +249,16 @@ export function InvoiceClientSelect({
                       : "No contacts found"}
                   </p>
                 ) : (
-                  <CommandGroup>
+                  <CommandGroup
+                    // A little air between rows, so a ticked row's ring and the
+                    // highlighted row beside it don't run into each other.
+                    className="[&_[cmdk-group-items]]:flex [&_[cmdk-group-items]]:flex-col [&_[cmdk-group-items]]:gap-1"
+                    heading={
+                      narrowed
+                        ? `More contacts at ${clientName || "this client"}`
+                        : undefined
+                    }
+                  >
                     {matches.map((contact) => {
                       const chosen = selectedIds.has(contact.id);
                       // Everything outside the locked company is dimmed but
@@ -195,10 +270,8 @@ export function InvoiceClientSelect({
                         <CommandItem
                           key={contact.id}
                           value={contact.id}
-                          onSelect={() => {
-                            toggle(contact);
-                            setQuery("");
-                          }}
+                          data-chosen={chosen || undefined}
+                          onSelect={() => afterPick(contact, toggle(contact))}
                           className={cn(
                             otherClient && "opacity-60",
                             // Picked rows keep their own tint, distinct from
@@ -259,10 +332,24 @@ export function InvoiceClientSelect({
                 )}
               </CommandList>
 
+              {/* Back to everyone, for when the client picked was the wrong one.
+                  Outside CommandList, like the button below, so a search can't
+                  filter it away. */}
+              {narrowed && (
+                <button
+                  type="button"
+                  onClick={() => setNarrowed(false)}
+                  className="w-full border-t border-border p-2.5 text-left text-sm text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent"
+                >
+                  Show all clients
+                </button>
+              )}
+
               {/* Outside CommandList so it can never be filtered away. */}
               <button
                 type="button"
                 onClick={() => {
+                  setNarrowed(false);
                   setOpen(false);
                   setDialogOpen(true);
                 }}
@@ -296,6 +383,17 @@ export function InvoiceClientSelect({
                 className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-muted py-1 pl-2.5 pr-1 text-xs"
               >
                 <span className="truncate">{person.name || person.email}</span>
+                {/* Two contacts can share a name; the address tells them apart. */}
+                {person.name && person.email && (
+                  <>
+                    <span className="text-muted-foreground" aria-hidden>
+                      -
+                    </span>
+                    <span className="truncate text-muted-foreground">
+                      {person.email}
+                    </span>
+                  </>
+                )}
                 <button
                   type="button"
                   onClick={() => {

@@ -72,7 +72,7 @@ import {
   SkeletonTextCell,
 } from "@/components/ui/table-skeleton";
 import { Highlight } from "@/components/contacts/highlight";
-import { AssetsFiltersDialog } from "@/components/assets/assets-filters";
+import { AssetsFiltersPopover } from "@/components/assets/assets-filters";
 import {
   assetSelectionAtom,
   assetsAdvancedFilterAtom,
@@ -89,7 +89,6 @@ import {
 import {
   ASSET_SORTS,
   EMPTY_ASSET_ADVANCED_FILTERS,
-  assetValueCeiling,
   assetMoney,
   assetOwing,
   assetValue,
@@ -102,8 +101,11 @@ import {
   type Asset,
   type AssetSort,
 } from "@/lib/assets";
+import { assetUndoKind, canUndoAssetMatch } from "@/lib/asset-match";
+import { apiErrorMessage } from "@/lib/api-error";
 import { cn } from "@/lib/utils";
 import { useDuplicateAssetMutation } from "@/hooks/use-asset-mutations";
+import { useAssetAccess } from "@/components/assets/asset-access";
 import { useFilteredAssetsQuery } from "@/hooks/use-assets-query";
 
 export const ASSETS_ROOT = "/assets";
@@ -154,21 +156,18 @@ const DEFAULT_PAGE_SIZE = 25;
 export function AssetsTable({
   assets,
   loading,
-  isEmpty,
 }: {
   assets: Asset[];
   /** The register hasn't landed yet — a skeleton rather than "No assets yet",
    *  which reads as a real answer when it's only a slow one. */
   loading?: boolean;
-  /** The register has loaded with nothing in it — just "No assets yet",
-   *  without a search, filters and sort over nothing. */
-  isEmpty?: boolean;
 }) {
   const [query, setQuery] = useAtom(assetsQueryAtom);
   const [advanced, setAdvanced] = useAtom(assetsAdvancedFilterAtom);
   const [sort, setSort] = useAtom(assetsSortAtom);
   const [selected, setSelected] = useAtom(assetSelectionAtom);
   const router = useRouter();
+  const access = useAssetAccess();
 
   const setViewId = useSetAtom(viewAssetIdAtom);
   const setAttachId = useSetAtom(attachAssetIdAtom);
@@ -192,7 +191,6 @@ export function AssetsTable({
   const source = filtered.assets ?? assets;
   const rows = filterAssets(source, { query, sort });
   const narrowed = assetsNarrowed({ query, advanced });
-  const valueCeiling = assetValueCeiling(assets);
   const tableLoading = loading || filtered.isLoading;
 
   /* ---------------------------------------------------------------- *
@@ -236,10 +234,16 @@ export function AssetsTable({
   const allChosen = chosen.length > 0 && chosen.length === visibleIds.length;
   const someChosen = chosen.length > 0 && chosen.length < visibleIds.length;
   // Same rule as sole-webapp's own bulk bar: only offered when every
-  // selection is actually matched, not just some of them.
+  // selection has a bank match to undo (fully or partly matched), not just
+  // some of them. A paid-with-cash asset is undone on its own row instead —
+  // the bulk undo-match endpoint doesn't reverse a cash payment.
   const canBulkUndoMatch =
+    access.canEdit &&
     chosen.length > 0 &&
-    chosen.every((id) => assets.find((asset) => asset.id === id)?.isReconciled);
+    chosen.every((id) => {
+      const asset = assets.find((entry) => entry.id === id);
+      return !!asset && canUndoAssetMatch(asset);
+    });
 
   const toggleAll = () => setSelected(allChosen ? [] : visibleIds);
   const toggleOne = (id: string) =>
@@ -254,28 +258,10 @@ export function AssetsTable({
     setAdvanced(EMPTY_ASSET_ADVANCED_FILTERS);
   };
 
-  if (isEmpty) {
-    return (
-      <Empty className="gap-2.5 py-9">
-        <EmptyMedia>
-          <Landmark aria-hidden />
-        </EmptyMedia>
-        <div className="space-y-1">
-          <EmptyTitle>No assets yet</EmptyTitle>
-          <EmptyDescription>
-            Add what your business owns — equipment, vehicles, tools and stock
-            — and Sole tracks its value and depreciation.
-          </EmptyDescription>
-        </div>
-        <EmptyCue label="Start here" />
-        <EmptyActions>
-          <Button size="sm" asChild data-usertour="asset-new-button">
-            <Link href={`${ASSETS_ROOT}/new`}>New asset</Link>
-          </Button>
-        </EmptyActions>
-      </Empty>
-    );
-  }
+  /*
+   * An empty register keeps the search, filters and sort above it: "No assets
+   * yet" takes the rows' place below, the same as the Invoices list.
+   */
 
   return (
     <div className="space-y-4">
@@ -298,11 +284,7 @@ export function AssetsTable({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <AssetsFiltersDialog
-            value={advanced}
-            onChange={setAdvanced}
-            ceiling={valueCeiling}
-          />
+          <AssetsFiltersPopover value={advanced} onChange={setAdvanced} />
 
           <Select
             value={sort}
@@ -336,8 +318,8 @@ export function AssetsTable({
                 link.download = "assets.zip";
                 link.click();
                 URL.revokeObjectURL(url);
-              } catch {
-                toast.error("Couldn't download those assets");
+              } catch (error) {
+                toast.error(apiErrorMessage(error, "Couldn't download those assets"));
               } finally {
                 setDownloading(false);
               }
@@ -369,15 +351,17 @@ export function AssetsTable({
                 Undo match
               </Button>
             )}
-            <Button
-              variant="outline"
-              size="sm"
-              className="text-destructive hover:text-destructive"
-              onClick={() => setDeleteIds(chosen)}
-            >
-              <Trash2 />
-              Delete
-            </Button>
+            {access.canDelete && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-destructive hover:text-destructive"
+                onClick={() => setDeleteIds(chosen)}
+              >
+                <Trash2 />
+                Delete
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"
@@ -433,7 +417,7 @@ export function AssetsTable({
                 Clear filters
               </Button>
             ) : (
-              <Button size="sm" asChild data-usertour="asset-new-button">
+              <Button size="sm" asChild>
                 <Link href={`${ASSETS_ROOT}/new`}>New asset</Link>
               </Button>
             )}
@@ -517,8 +501,10 @@ export function AssetsTable({
                       duplicateAsset.mutate(asset, {
                         onSuccess: () =>
                           toast.success(`Duplicated ${asset.name}`),
-                        onError: () =>
-                          toast.error(`Couldn't duplicate ${asset.name}`),
+                        onError: (error) =>
+                          toast.error(
+                            apiErrorMessage(error, `Couldn't duplicate ${asset.name}`),
+                          ),
                       });
                     }}
                   />
@@ -589,6 +575,13 @@ function AssetRow({
   onDuplicate: () => void;
 }) {
   const owing = assetOwing(asset);
+  const undoKind = assetUndoKind(asset);
+  // Plan + accountant-grant gates (old AssetList: hasAdvancedAssets for the
+  // lifecycle actions, blockAction for edit / add / delete).
+  const access = useAssetAccess();
+  const lifecycle = access.advanced && access.canEdit;
+  // Matching and undoing change the books, so they need the edit grant too.
+  const canMatch = access.canEdit;
 
   return (
     <TableRow data-state={selected ? "selected" : undefined}>
@@ -668,25 +661,43 @@ function AssetRow({
       </TableCell>
 
       <TableCell className={DATA_COLUMN}>
-        {asset.isReconciled ? (
+        {asset.isReconciled || asset.paidWithCash ? (
           <span className="flex min-w-0 items-center gap-1.5">
             <Badge variant="success" className="shrink-0">
               Matched
             </Badge>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground"
-              onClick={onUndoMatch}
-            >
-              Undo
-            </Button>
+            {undoKind && canMatch && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground"
+                onClick={onUndoMatch}
+              >
+                {undoKind === "cash" ? "Undo cash payment" : "Undo"}
+              </Button>
+            )}
           </span>
+        ) : !canMatch ? (
+          <span className="text-xs text-muted-foreground">Not matched</span>
         ) : (
-          <Button variant="outline" size="sm" onClick={onMatch}>
-            <Link2 />
-            {asset.possibleMatchCount > 0 ? "AI Match" : "Match"}
-          </Button>
+          // Partly matched: what's left can still be matched, and what's
+          // already matched can be undone.
+          <span className="flex min-w-0 items-center gap-1.5">
+            <Button variant="outline" size="sm" onClick={onMatch}>
+              <Link2 />
+              {asset.possibleMatchCount > 0 ? "AI Match" : "Match"}
+            </Button>
+            {undoKind === "match" && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground"
+                onClick={onUndoMatch}
+              >
+                Undo match
+              </Button>
+            )}
+          </span>
         )}
       </TableCell>
 
@@ -713,7 +724,7 @@ function AssetRow({
           />
           {/* Absent rather than disabled once matched, as on Expenses: the cost it
               was matched against shouldn't move without an undo first. */}
-          {canEditAsset(asset) && (
+          {canEditAsset(asset) && access.canEdit && (
             <RowIconButton
               icon={<Pencil />}
               label={`Edit ${asset.name}`}
@@ -734,55 +745,73 @@ function AssetRow({
             </DropdownMenuTrigger>
             {/* The edit actions, then Delete on its own. */}
             <DropdownMenuContent align="end" className="w-56">
-              <MenuAction
-                icon={<Paperclip />}
-                label="Attach document"
-                onSelect={onAttach}
-              />
-              <MenuAction
-                icon={<TrendingDown />}
-                label="Depreciation settings"
-                onSelect={onDepreciation}
-              />
-              <MenuAction
-                icon={<CalendarRange />}
-                label="View depreciation schedule"
-                onSelect={onSchedule}
-              />
-              <MenuAction
-                icon={<PackageX />}
-                label="Record disposal"
-                onSelect={onDisposal}
-              />
-              <MenuAction
-                icon={<Shield />}
-                label="Manage insurance"
-                onSelect={onInsurance}
-              />
-              <MenuAction
-                icon={<ShieldAlert />}
-                label="Report lost, damaged or stolen"
-                onSelect={onStatus}
-              />
-              <MenuAction
-                icon={
-                  duplicating ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <Copy />
-                  )
-                }
-                label={duplicating ? "Duplicating…" : "Duplicate"}
-                disabledReason={duplicating ? "Duplicating…" : undefined}
-                onSelect={onDuplicate}
-              />
-              <DropdownMenuSeparator />
-              <MenuAction
-                icon={<Trash2 />}
-                label="Delete"
-                onSelect={onDelete}
-                destructive
-              />
+              {access.canEdit && (
+                <MenuAction
+                  icon={<Paperclip />}
+                  label="Attach document"
+                  onSelect={onAttach}
+                />
+              )}
+              {lifecycle && (
+                <MenuAction
+                  icon={<TrendingDown />}
+                  label="Depreciation settings"
+                  onSelect={onDepreciation}
+                />
+              )}
+              {access.advanced && (
+                <MenuAction
+                  icon={<CalendarRange />}
+                  label="View depreciation schedule"
+                  onSelect={onSchedule}
+                />
+              )}
+              {lifecycle && (
+                <>
+                  <MenuAction
+                    icon={<PackageX />}
+                    label="Record disposal"
+                    onSelect={onDisposal}
+                  />
+                  <MenuAction
+                    icon={<Shield />}
+                    label="Manage insurance"
+                    onSelect={onInsurance}
+                  />
+                  <MenuAction
+                    icon={<ShieldAlert />}
+                    label="Report lost, damaged or stolen"
+                    onSelect={onStatus}
+                  />
+                </>
+              )}
+              {access.canAdd && access.withinFreeTier && (
+                <MenuAction
+                  icon={
+                    duplicating ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Copy />
+                    )
+                  }
+                  label={duplicating ? "Duplicating…" : "Duplicate"}
+                  disabledReason={duplicating ? "Duplicating…" : undefined}
+                  onSelect={onDuplicate}
+                />
+              )}
+              {access.canDelete && (
+                <>
+                  <DropdownMenuSeparator />
+                  <MenuAction
+                    icon={<Trash2 />}
+                    label="Delete"
+                    onSelect={onDelete}
+                    // The server won't delete a matched asset; say so here.
+                    disabledReason={canEditAsset(asset) ? undefined : "Undo the match first"}
+                    destructive
+                  />
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>

@@ -20,22 +20,31 @@ export function SalesSection({
   icon,
   title,
   description,
+  tourId,
   children,
 }: {
   icon: LucideIcon;
   title: string;
   description?: string;
+  /** Rendered as `data-tour`, for the walkthroughs to point at. */
+  tourId?: string;
   children: React.ReactNode;
 }) {
   return (
-    <FormSection icon={icon} title={title} description={description}>
+    <FormSection
+      icon={icon}
+      title={title}
+      description={description}
+      tourId={tourId}
+    >
       {children}
     </FormSection>
   );
 }
 
 /**
- * Save Changes bottom-right — the same footer on every tab. Save stays disabled until the tab is both dirty and valid, and the
+ * Save Changes bottom-right, pinned to the bottom of the viewport like the
+ * invoice and quote editors' footer — the same footer on every tab. Save stays disabled until the tab is both dirty and valid, and the
  * outstanding issue is named rather than left to guess at. While a save is in
  * flight both buttons lock and Save shows a spinner, so it reads as working
  * rather than as a click that did nothing.
@@ -53,7 +62,7 @@ export function TabFooter({
 }) {
   return (
     <div
-      className="flex flex-wrap items-center justify-end gap-3 border-t pt-4"
+      className="sticky bottom-0 z-10 -mb-2 flex flex-wrap items-center justify-end gap-3 border-t bg-background py-3"
       data-usertour="sales-settings-save"
     >
       <div className="flex flex-wrap items-center gap-3">

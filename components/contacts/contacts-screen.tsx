@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useSearchParams } from "next/navigation";
-import { useAtomValue, useSetAtom } from "jotai";
+import { useSetAtom } from "jotai";
 import { Plus, Upload, Users } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -16,7 +16,6 @@ import { useContactTabCountsQuery } from "@/hooks/use-contacts-query";
 import {
   bulkUploadOpenAtom,
   contactDrawerAtom,
-  contactsQueryAtom,
 } from "@/lib/atoms";
 import { useCreateIntent } from "@/lib/use-create-intent";
 import { useContactsStore } from "@/stores/contacts";
@@ -31,19 +30,6 @@ export function ContactsScreen() {
   // `invoices-screen.tsx` pairs `hydrated` with its list query.
   const countsQuery = useContactTabCountsQuery();
   const loading = !hydrated && countsQuery.isLoading;
-  /*
-   * No clients or suppliers at all, and no search narrowing it — the summary
-   * goes and the table is left showing only its own empty state. The same
-   * counts the summary and the tabs already read, so nothing extra is
-   * fetched.
-   */
-  const search = useAtomValue(contactsQueryAtom);
-  const hasNoContacts =
-    countsQuery.isSuccess &&
-    countsQuery.data.clients === 0 &&
-    countsQuery.data.suppliers === 0 &&
-    !search.trim();
-
   // `?contact=<id>` is how the rest of the app links to one client's record
   // — the dashboard's area drill-in, for one. There's no page per contact,
   // so the record is the drawer, opened on arrival.
@@ -72,18 +58,24 @@ export function ContactsScreen() {
         title="Contacts"
         description="Your clients and suppliers in one place."
       >
-        <Button variant="outline" onClick={() => setBulkOpen(true)}>
-          <Upload />
-          Bulk upload
-        </Button>
-        <Button
-          data-tour="add-contact"
-          data-usertour="contact-new-button"
-          onClick={() => setDrawer({ open: true, editId: null })}
+        {/* One wrapper so the contacts tour can highlight both actions together. */}
+        <div
+          className="flex flex-wrap items-center gap-3"
+          data-usertour="contact-actions"
         >
-          <Plus />
-          New contact
-        </Button>
+          <Button variant="outline" onClick={() => setBulkOpen(true)}>
+            <Upload />
+            Bulk upload
+          </Button>
+          <Button
+            data-tour="add-contact"
+            data-usertour="contact-new-button"
+            onClick={() => setDrawer({ open: true, editId: null })}
+          >
+            <Plus />
+            New contact
+          </Button>
+        </div>
       </PageHeader>
 
       {/*
@@ -91,7 +83,7 @@ export function ContactsScreen() {
         the table's own paginated fetch fire together rather than one
         waiting on the other.
       */}
-      {!hasNoContacts && <ContactsSummary loading={loading} />}
+      <ContactsSummary loading={loading} />
       <ContactsTable />
 
       <ContactDrawer />

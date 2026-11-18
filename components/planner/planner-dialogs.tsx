@@ -20,7 +20,7 @@ import {
 } from "@/lib/atoms";
 import { apiErrorMessage } from "@/lib/api-error";
 import { invoiceMoney } from "@/lib/invoices";
-import { planCommitted } from "@/lib/planner";
+import { planGap } from "@/lib/planner";
 import {
   useDeleteBudgetMutation,
   useDeleteGoalMutation,
@@ -124,7 +124,7 @@ export function DeletePlanDialog({
       title="Delete this expense plan?"
       body={
         plan
-          ? `${plan.name} will be removed, and the ${invoiceMoney(planCommitted(plan))} committed to it returns to your available cash.`
+          ? `${plan.name} will be removed, and the ${invoiceMoney(planGap(plan))} committed to it returns to your available cash.`
           : ""
       }
       pending={deletePlan.isPending}

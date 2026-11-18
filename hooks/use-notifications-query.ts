@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   fetchNotificationFeed,
   markAllNotificationsRead,
+  markNotificationRead,
   type NotificationFeed,
 } from "@/lib/notifications";
 
@@ -24,6 +25,29 @@ export function useNotificationsQuery() {
     queryKey: KEY,
     queryFn: fetchNotificationFeed,
     refetchInterval: POLL_MS,
+  });
+}
+
+/** One notification read, optimistically: its dot clears at once, back if the server refuses. */
+export function useMarkNotificationReadMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: markNotificationRead,
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey: KEY });
+      const previous = queryClient.getQueryData<NotificationFeed>(KEY);
+      if (previous) {
+        queryClient.setQueryData<NotificationFeed>(KEY, {
+          ...previous,
+          items: previous.items.map((item) => (item.id === id ? { ...item, read: true } : item)),
+        });
+      }
+      return { previous };
+    },
+    onError: (_error, _id, context) => {
+      if (context?.previous) queryClient.setQueryData(KEY, context.previous);
+    },
   });
 }
 

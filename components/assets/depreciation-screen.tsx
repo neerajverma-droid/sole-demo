@@ -41,6 +41,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { apiErrorMessage } from "@/lib/api-error";
+import { depreciationErrors, type DepreciationField } from "@/lib/asset-validation";
 import { documentTax } from "@/lib/country-context";
 import { toIsoDate } from "@/lib/invoices";
 import { cn } from "@/lib/utils";
@@ -49,9 +51,8 @@ import {
   useDeleteAssetDepreciationMutation,
   useSaveAssetDepreciationMutation,
 } from "@/hooks/use-asset-depreciation-query";
-import { useAssetsQuery } from "@/hooks/use-assets-query";
+import { useRegisterAsset } from "@/hooks/use-asset-query";
 import { useCountryContext } from "@/hooks/use-country-context";
-import { useAssetsStore } from "@/stores/assets";
 
 const ASSETS_ROOT = "/assets";
 
@@ -94,6 +95,28 @@ const RESIDUAL_TIP =
 const ATO_DEPRECIATION_URL =
   "https://www.ato.gov.au/businesses-and-organisations/income-deductions-and-concessions/depreciation-and-capital-expenses-and-allowances";
 
+/**
+ * The tax authority's depreciation rules this screen points at. New Zealand
+ * depreciates under IRD's rules (published rates by asset class, IR265); every
+ * other country keeps the Australian wording it has always had.
+ */
+const DEPRECIATION_RULES_COPY = {
+  AU: {
+    authority: "ATO",
+    url: ATO_DEPRECIATION_URL,
+    lifeHint: "Based on ATO effective life determinations or your own reasonable estimate",
+    rateHint: "Leave blank to use the ATO's default 200% of the straight-line rate",
+    costLimitHint: "ATO cost limit for cars and specified assets",
+  },
+  NZ: {
+    authority: "IRD",
+    url: "https://www.ird.govt.nz/income-tax/income-tax-for-businesses-and-organisations/types-of-business-expenses/depreciation/claiming-depreciation",
+    lifeHint: "IRD's estimated useful life for this asset class (IR265 or IRD's rate finder)",
+    rateHint: "Leave blank to use IRD's published rate for this useful life",
+    costLimitHint: "Optional cap on the cost that is depreciated",
+  },
+} as const;
+
 /** A fraction as a percentage, or the panel's stand-in when there isn't one. */
 function rateLabel(rate: number | null): string {
   return rate === null ? "N/A" : `${(rate * 100).toFixed(2)}%`;
@@ -115,9 +138,8 @@ function rateLabel(rate: number | null): string {
  */
 export function DepreciationScreen({ assetId }: { assetId: string }) {
   const router = useRouter();
-  // Hydrates the register on a direct/refreshed visit to this route.
-  useAssetsQuery();
-  const assets = useAssetsStore((state) => state.assets);
+  // The register's copy, or the asset fetched on its own on a direct visit.
+  const { asset, loading } = useRegisterAsset(assetId);
   const saveDepreciation = useSaveAssetDepreciationMutation(assetId);
   const deleteDepreciation = useDeleteAssetDepreciationMutation(assetId);
   // The list-embedded `asset.depreciation` has no record id — needed here so
@@ -126,8 +148,10 @@ export function DepreciationScreen({ assetId }: { assetId: string }) {
   const [confirmingRemove, setConfirmingRemove] = React.useState(false);
   const { country } = useCountryContext();
 
-  const asset = assets.find((entry) => entry.id === assetId);
-  const assetHref = `${ASSETS_ROOT}/${assetId}`;
+  // Back, Cancel and "done" return to the register — `/assets/:id` is the edit
+  // form (it shows "Loading asset…" and isn't where these screens were opened
+  // from).
+  const assetHref = ASSETS_ROOT;
   const today = toIsoDate(new Date());
 
   /**
@@ -149,21 +173,53 @@ export function DepreciationScreen({ assetId }: { assetId: string }) {
    * loaded — the dedicated fetch is the authoritative one (it's what carries
    * the record id "Remove depreciation" needs), so this waits for it rather
    * than trusting the list-embedded summary a moment earlier.
+   *
+   * And again whenever that record changes on the server while nothing has
+   * been typed here: a cached copy paints first and the refetch behind it
+   * (say, after the asset form changed the life) must replace it.
    */
-  const seeded = React.useRef(false);
+  const edited = React.useRef(false);
+  const source = asset && depreciationRecord !== undefined
+    ? (depreciationRecord ?? asset.depreciation)
+    : null;
+  const sourceKey = source ? JSON.stringify(source) : null;
   React.useEffect(() => {
-    if (seeded.current || !asset || depreciationRecord === undefined) return;
-    seeded.current = true;
+    if (!source || edited.current) return;
     setDraft({
       ...EMPTY_DEPRECIATION,
-      ...(depreciationRecord ?? asset.depreciation),
-      startDate:
-        (depreciationRecord ?? asset.depreciation).startDate || today,
+      ...source,
+      startDate: source.startDate || today,
     });
-  }, [asset, depreciationRecord, today]);
+    // `sourceKey` stands for `source`: a new object with the same values
+    // shouldn't reseed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceKey, today]);
 
-  const set = (values: Partial<AssetDepreciation>) =>
+  const set = (values: Partial<AssetDepreciation>) => {
+    edited.current = true;
     setDraft((current) => ({ ...current, ...values }));
+  };
+
+  /**
+   * Errors show once a field is left or Save is tried — never on first paint,
+   * where a seeded record would otherwise open already complaining.
+   */
+  const [touched, setTouched] = React.useState<Set<DepreciationField>>(
+    new Set(),
+  );
+  const [attempted, setAttempted] = React.useState(false);
+  const touch = (field: DepreciationField) =>
+    setTouched((current) =>
+      current.has(field) ? current : new Set(current).add(field),
+    );
+
+  if (loading) {
+    return (
+      <div className="mx-auto max-w-3xl py-12 text-center text-sm text-muted-foreground">
+        Loading asset…
+      </div>
+    );
+  }
 
   if (!asset) {
     return (
@@ -191,34 +247,48 @@ export function DepreciationScreen({ assetId }: { assetId: string }) {
   // The business's word and rate on the purchase date — its custom rate, else
   // 10% AU / 15% NZ / 15% ZA — so the GST taken out is the GST that was paid.
   const assetTax = documentTax(country, asset.purchaseDate);
-  const preview = depreciationPreview(asset, draft, assetTax.rate);
+  const preview = depreciationPreview(asset, draft, assetTax.rate, country.iso2);
+  const rulesCopy = country.iso2 === "NZ" ? DEPRECIATION_RULES_COPY.NZ : DEPRECIATION_RULES_COPY.AU;
   /** The price with GST taken out — said in the subtitle and in the callout. */
   const exGstAmount = assetMoney(assetExGstValue(asset, assetTax.rate));
-  const canSave = Number(draft.effectiveLife) > 0 && !!draft.startDate;
+  // A full write-off is the whole cost in year one — no effective life to ask for.
+  const fullWriteOff = draft.method === "Full depreciation on purchase";
+  /*
+   * Residual and cost limit cap at the figure depreciation is worked out on —
+   * the ex-GST cost where the price carried GST, the same base the preview
+   * uses. The override rate is only checked where its field is editable.
+   */
+  const errors = depreciationErrors(draft, {
+    assetValue: assetExGstValue(asset, assetTax.rate),
+    fullWriteOff,
+    overrideRateApplies: draft.method === "Diminishing value",
+  });
+  const errorFor = (field: DepreciationField) =>
+    attempted || touched.has(field) ? errors[field] : undefined;
+  const canSave = Object.keys(errors).length === 0 && !!draft.startDate;
 
   const create = async () => {
+    setAttempted(true);
+    if (!canSave) return;
     try {
       await saveDepreciation.mutateAsync({ ...draft, enabled: true });
       toast.success("Depreciation set up");
       router.push(assetHref);
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Couldn't save depreciation",
-      );
+      toast.error(apiErrorMessage(error, "Couldn't save depreciation"));
     }
   };
 
   const removeDepreciation = async () => {
     if (!depreciationRecord) return;
     try {
-      await deleteDepreciation.mutateAsync(depreciationRecord.id);
+      // By asset id: the endpoint finds the asset's active record itself.
+      await deleteDepreciation.mutateAsync();
       toast.success("Depreciation removed");
       setConfirmingRemove(false);
       router.push(assetHref);
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Couldn't remove depreciation",
-      );
+      toast.error(apiErrorMessage(error, "Couldn't remove depreciation"));
     }
   };
 
@@ -228,7 +298,7 @@ export function DepreciationScreen({ assetId }: { assetId: string }) {
         <Button variant="ghost" size="sm" className="-ml-2" asChild>
           <Link href={assetHref}>
             <ArrowLeft />
-            {asset.name}
+            Assets
           </Link>
         </Button>
         <div className="space-y-1">
@@ -259,6 +329,7 @@ export function DepreciationScreen({ assetId }: { assetId: string }) {
             icon={TrendingDown}
             title="Depreciation method"
             description="How the asset's value is written down over the years you use it."
+            tourId="asset-depreciation-method"
           >
             <fieldset>
               <legend className="mb-2 flex items-center gap-1.5 text-sm font-medium">
@@ -309,17 +380,26 @@ export function DepreciationScreen({ assetId }: { assetId: string }) {
               <Field
                 label="Effective life (years)"
                 htmlFor="dep-life"
-                required
-                hint="Based on ATO effective life determinations or your own reasonable estimate"
+                required={!fullWriteOff}
+                hint={
+                  fullWriteOff
+                    ? "Not needed — a full write-off claims the whole cost in the first year"
+                    : rulesCopy.lifeHint
+                }
+                error={errorFor("effectiveLife")}
               >
                 <Input
                   id="dep-life"
+                  placeholder="e.g. 5"
                   inputMode="decimal"
                   className="tabular"
-                  value={draft.effectiveLife}
+                  disabled={fullWriteOff}
+                  value={fullWriteOff ? "" : draft.effectiveLife}
                   onChange={(event) =>
                     set({ effectiveLife: event.target.value })
                   }
+                  onBlur={() => touch("effectiveLife")}
+                  aria-invalid={!!errorFor("effectiveLife")}
                 />
               </Field>
 
@@ -328,9 +408,10 @@ export function DepreciationScreen({ assetId }: { assetId: string }) {
                 htmlFor="dep-rate"
                 hint={
                   draft.method === "Diminishing value"
-                    ? "Leave blank to use the ATO's default 200% of the straight-line rate"
+                    ? rulesCopy.rateHint
                     : `Only used for diminishing value — ${draft.method.toLowerCase()} has a fixed rate this can't change`
                 }
+                error={errorFor("overrideRate")}
               >
                 <Input
                   id="dep-rate"
@@ -342,6 +423,8 @@ export function DepreciationScreen({ assetId }: { assetId: string }) {
                   onChange={(event) =>
                     set({ overrideRate: event.target.value })
                   }
+                  onBlur={() => touch("overrideRate")}
+                  aria-invalid={!!errorFor("overrideRate")}
                 />
               </Field>
 
@@ -349,25 +432,33 @@ export function DepreciationScreen({ assetId }: { assetId: string }) {
                 label="Residual (salvage) value"
                 htmlFor="dep-residual"
                 labelTip={RESIDUAL_TIP}
+                error={errorFor("residualValue")}
               >
                 <MoneyInput
                   id="dep-residual"
+                  placeholder="0.00"
                   label="Residual (salvage) value"
                   value={draft.residualValue}
                   onChange={(residualValue) => set({ residualValue })}
+                  onBlur={() => touch("residualValue")}
+                  invalid={!!errorFor("residualValue")}
                 />
               </Field>
 
               <Field
                 label="Cost limit"
                 htmlFor="dep-limit"
-                hint="ATO cost limit for cars and specified assets"
+                hint={rulesCopy.costLimitHint}
+                error={errorFor("costLimit")}
               >
                 <MoneyInput
                   id="dep-limit"
+                  placeholder="No limit"
                   label="Cost limit"
                   value={draft.costLimit}
                   onChange={(costLimit) => set({ costLimit })}
+                  onBlur={() => touch("costLimit")}
+                  invalid={!!errorFor("costLimit")}
                 />
               </Field>
 
@@ -400,7 +491,10 @@ export function DepreciationScreen({ assetId }: { assetId: string }) {
           Stuck to the top of its column on a wide screen so it's still on
           screen at the last field.
         */}
-        <aside className="lg:sticky lg:top-20 lg:self-start">
+        <aside
+          className="lg:sticky lg:top-20 lg:self-start"
+          data-usertour="asset-depreciation-preview"
+        >
           <div className="space-y-4 rounded-[14px] border border-border bg-card p-5 shadow-sm">
             <h2 className="text-sm font-semibold">Depreciation preview</h2>
 
@@ -423,9 +517,9 @@ export function DepreciationScreen({ assetId }: { assetId: string }) {
                 <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
                 <p className="text-xs leading-relaxed">
                   Asset cost used for depreciation = purchase price excluding{" "}
-                  {assetTax.word} ({exGstAmount}), per ATO rules.{" "}
+                  {assetTax.word} ({exGstAmount}), per {rulesCopy.authority} rules.{" "}
                   <a
-                    href={ATO_DEPRECIATION_URL}
+                    href={rulesCopy.url}
                     target="_blank"
                     rel="noreferrer"
                     className="font-medium underline underline-offset-2 outline-none hover:no-underline focus-visible:ring-2 focus-visible:ring-ring"
@@ -472,7 +566,9 @@ export function DepreciationScreen({ assetId }: { assetId: string }) {
           <Link href={assetHref}>Cancel</Link>
         </Button>
         <Button
-          disabled={!canSave || saveDepreciation.isPending}
+          // Clickable until tried, so the first click can say what's wrong;
+          // after that it stays off until the errors are fixed.
+          disabled={(attempted && !canSave) || saveDepreciation.isPending}
           onClick={create}
         >
           {saveDepreciation.isPending && <Loader2 className="size-4 animate-spin" />}

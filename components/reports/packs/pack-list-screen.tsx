@@ -568,12 +568,15 @@ export function PackListScreen() {
           </p>
         </div>
         {tab === "packs" ? (
-          <Button onClick={() => go({ creating: true })}>
+          <Button
+            onClick={() => go({ creating: true })}
+            data-usertour="report-pack-new"
+          >
             <Plus />
             New report pack
           </Button>
         ) : (
-          <Button asChild>
+          <Button asChild data-usertour="report-pack-new">
             <Link href={PACK_ROUTES.newTemplate}>
               <Plus />
               New template
@@ -586,7 +589,7 @@ export function PackListScreen() {
         value={tab}
         onValueChange={(next) => go({ tab: next, creating: false })}
       >
-        <TabsList>
+        <TabsList data-usertour="report-pack-tabs">
           <TabsTrigger value="packs">Report packs</TabsTrigger>
           <TabsTrigger value="templates">Templates</TabsTrigger>
         </TabsList>

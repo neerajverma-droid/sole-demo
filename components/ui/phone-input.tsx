@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { AsYouType, getCountries, getCountryCallingCode, type CountryCode } from "libphonenumber-js";
+import { getCountries, getCountryCallingCode, type CountryCode } from "libphonenumber-js";
 import { Check, ChevronsUpDown } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -20,12 +20,19 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  caretAfterFormatting,
+  cleanPhoneValue,
+  exceedsMaxDigits,
+  phonePlaceholder,
+  phoneStateForCountry,
+  phoneStateFromInput,
+  phoneStateFromValue,
+  phoneValue,
+  resolveDeletion,
+  type PhoneState,
+} from "@/lib/phone";
 import { cn } from "@/lib/utils";
-
-const cleanPhoneValue = (value: string | undefined): string => {
-  if (!value) return "";
-  return value.replace(/undefined|null/gi, "").trim();
-};
 
 /** 🇦🇺 from "AU" — the regional-indicator-symbol trick, no flag image or data file needed. */
 function flagEmoji(iso2: string): string {
@@ -54,15 +61,132 @@ const COUNTRIES = getCountries()
   }))
   .sort((a, b) => a.name.localeCompare(b.name));
 
+const COUNTRY_BY_ISO = new Map(COUNTRIES.map((country) => [country.iso2, country]));
+
 /**
- * A phone field with its own country/dial-code picker — ported from
- * sole-webapp's `components/ui/phone-input/index.js` (read for the behavior,
- * not imported): formats as you type via libphonenumber-js's `AsYouType`,
- * detects the country from what's typed or pasted, and lets picking a
- * country from the popover set the dial code directly. The reference also
- * wraps its state in an undo/redo history hook, but nothing in its own
- * render ever calls back/forward — dropped here in favour of plain state,
- * since there's no control that would have used it.
+ * The flag-and-dial-code picker ("🇦🇺 +61") with a searchable country list.
+ *
+ * `PhoneInput` uses it for its own country, and forms that store the dial code
+ * and the number as two fields (contacts) use it on its own next to a plain
+ * number input. `onCloseFocus` says where focus goes when the list closes —
+ * usually the number field beside it.
+ */
+export function CountryCodePicker({
+  country,
+  invalid = false,
+  className,
+  onSelect,
+  onCloseFocus,
+}: {
+  country: CountryCode;
+  invalid?: boolean;
+  className?: string;
+  onSelect: (country: CountryCode) => void;
+  onCloseFocus?: () => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const selectedCountry = COUNTRY_BY_ISO.get(country);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen} modal>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          aria-invalid={invalid}
+          aria-label={
+            selectedCountry
+              ? `Country code: ${selectedCountry.name}, plus ${selectedCountry.callingCode}`
+              : "Choose a country code"
+          }
+          className={cn(
+            "shrink-0 items-center justify-between gap-1.5 whitespace-nowrap px-3",
+            invalid && "border-destructive focus-visible:ring-destructive",
+            className,
+          )}
+        >
+          {selectedCountry ? (
+            <>
+              <span className="text-xl leading-none" aria-hidden>
+                {selectedCountry.emoji}
+              </span>
+              <span className="text-sm tabular-nums">
+                +{selectedCountry.callingCode}
+              </span>
+            </>
+          ) : (
+            "Select"
+          )}
+          <ChevronsUpDown className="size-4 shrink-0 opacity-50" aria-hidden />
+        </Button>
+      </PopoverTrigger>
+
+      <PopoverContent
+        className="w-[300px] p-0"
+        align="start"
+        onCloseAutoFocus={(event) => {
+          if (!onCloseFocus) return;
+          event.preventDefault();
+          onCloseFocus();
+        }}
+      >
+        <Command>
+          <CommandInput placeholder="Search country or code…" />
+          <CommandList>
+            <CommandEmpty>No country found.</CommandEmpty>
+            <ScrollArea className="[&>[data-radix-scroll-area-viewport]]:max-h-[250px]">
+              <CommandGroup>
+                {COUNTRIES.map((entry) => (
+                  <CommandItem
+                    key={entry.iso2}
+                    // Searchable by name, dial code or ISO code ("au", "61").
+                    value={`${entry.name} +${entry.callingCode} ${entry.iso2}`}
+                    onSelect={() => {
+                      onSelect(entry.iso2);
+                      setOpen(false);
+                    }}
+                  >
+                    <span className="mr-2 text-2xl">{entry.emoji}</span>
+                    {entry.name}
+                    <span className="ml-1 text-muted-foreground">
+                      (+{entry.callingCode})
+                    </span>
+                    <Check
+                      className={cn(
+                        "ml-auto size-4",
+                        country === entry.iso2 ? "opacity-100" : "opacity-0",
+                      )}
+                      aria-hidden
+                    />
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </ScrollArea>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/**
+ * A phone field the way mobile and checkout forms do it: the country picker
+ * shows the flag **and the dial code** ("🇦🇺 +61"), and the text field next to
+ * it takes just the national number — "0412 345 678", trunk 0 and all — which
+ * is how people actually type their own number.
+ *
+ * Nothing needs typing to get the country code in: it's already there from the
+ * picker, and `defaultCountry` (the business's country) chooses it until the
+ * person picks another. Pasting a full international number ("+61 412 345 678")
+ * still works — the dial code moves into the picker and the country follows it.
+ *
+ * What it reports through `onChange` is always the international form
+ * ("+61 412 345 678"), or "" while nothing is typed, so callers can store and
+ * validate it as-is. A value passed in may be in either form; it's read back
+ * into country + national number. The parsing and formatting live in
+ * `lib/phone.ts`.
  */
 export function PhoneInput({
   value: valueProp,
@@ -72,6 +196,7 @@ export function PhoneInput({
   id,
   required = false,
   onChange,
+  onBlur,
 }: {
   value?: string;
   defaultCountry?: CountryCode;
@@ -80,135 +205,108 @@ export function PhoneInput({
   id?: string;
   required?: boolean;
   onChange?: (value: string) => void;
+  onBlur?: () => void;
 }) {
   const inputRef = React.useRef<HTMLInputElement>(null);
-  const [value, setValue] = React.useState(cleanPhoneValue(valueProp));
-  const [openCommand, setOpenCommand] = React.useState(false);
-  const [countryCode, setCountryCode] = React.useState<CountryCode>(defaultCountry);
+  const [state, setState] = React.useState<PhoneState>(() =>
+    phoneStateFromValue(valueProp, defaultCountry),
+  );
+  /** Whether the person has chosen a country themselves. */
+  const [picked, setPicked] = React.useState(false);
+  /** Where the caret goes once the re-formatted text is on screen. */
+  const caret = React.useRef<number | null>(null);
 
-  // Sync from the parent (edit mode, loading a saved number).
-  React.useEffect(() => {
-    if (valueProp !== undefined) setValue(cleanPhoneValue(valueProp));
-  }, [valueProp]);
+  // The two syncs below adjust state while rendering rather than in an effect:
+  // React re-renders before painting, so a value that arrives from outside
+  // never shows for a frame as the old number.
 
-  React.useEffect(() => {
-    const clean = cleanPhoneValue(value);
-    if (!clean) {
-      setCountryCode(defaultCountry);
-      return;
+  // A value from outside — a saved number loading, a form reset. What this
+  // field just reported coming back round is recognised (it is exactly what the
+  // current text would report) and left alone.
+  const [seenValue, setSeenValue] = React.useState(valueProp);
+  if (valueProp !== undefined && valueProp !== seenValue) {
+    setSeenValue(valueProp);
+    const clean = cleanPhoneValue(valueProp);
+    if (clean !== phoneValue(state)) {
+      setState(phoneStateFromValue(clean, defaultCountry));
+      // A cleared form starts over, including following the business country.
+      if (!clean) setPicked(false);
     }
-    const asYouType = new AsYouType();
-    asYouType.input(clean);
-    const detected = asYouType.getCountry();
-    if (detected) setCountryCode(detected);
-  }, [value, defaultCountry]);
+  }
 
-  const selectedCountry = COUNTRIES.find((country) => country.iso2 === countryCode);
-
-  const handleOnInput: React.FormEventHandler<HTMLInputElement> = (event) => {
-    const asYouType = new AsYouType();
-    let inputValue = cleanPhoneValue(event.currentTarget.value);
-    if (inputValue && !inputValue.startsWith("+")) {
-      inputValue = `+${inputValue}`;
+  // Until a number is typed or a country picked, the field follows the
+  // business's country as it changes.
+  const [seenDefault, setSeenDefault] = React.useState(defaultCountry);
+  if (defaultCountry !== seenDefault) {
+    setSeenDefault(defaultCountry);
+    if (!picked && state.text === "") {
+      setState({ country: defaultCountry, text: "" });
     }
-    const formattedValue = inputValue ? asYouType.input(inputValue) : "";
-    const number = asYouType.getNumber();
-    if (number?.country) setCountryCode(number.country);
+  }
 
-    setValue(formattedValue);
-    onChange?.(formattedValue);
+  // Re-formatting moves the caret to the end; put it back after the digit it
+  // was on. Runs every render because the text can come out unchanged.
+  React.useLayoutEffect(() => {
+    const target = caret.current;
+    if (target === null) return;
+    caret.current = null;
+    const input = inputRef.current;
+    if (input && document.activeElement === input) {
+      input.setSelectionRange(target, target);
+    }
+  });
+
+  const commit = (next: PhoneState) => {
+    const value = phoneValue(next);
+    const changed = value !== phoneValue(state);
+    setState(next);
+    if (changed) onChange?.(value);
   };
 
-  const handleOnPaste: React.ClipboardEventHandler<HTMLInputElement> = (event) => {
-    event.preventDefault();
-    const clipboardData = event.clipboardData?.getData("text/plain");
-    if (!clipboardData) return;
+  const handleChange: React.ChangeEventHandler<HTMLInputElement> = (event) => {
+    const input = event.currentTarget;
+    const edited = resolveDeletion(
+      input.value,
+      input.selectionStart ?? input.value.length,
+      state.text,
+    );
+    // Returning without committing snaps the field back to what it held.
+    if (exceedsMaxDigits(edited.raw)) return;
 
-    const asYouType = new AsYouType();
-    const formattedValue = asYouType.input(clipboardData);
-    const number = asYouType.getNumber();
-    if (number?.country) setCountryCode(number.country);
-
-    setValue(formattedValue);
-    onChange?.(formattedValue);
+    const next = phoneStateFromInput(edited.raw, state.country);
+    caret.current = caretAfterFormatting(edited.raw, edited.caret, next.text);
+    commit(next);
   };
 
   return (
     <div className={cn("flex gap-2", className)}>
-      <Popover open={openCommand} onOpenChange={setOpenCommand} modal>
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="outline"
-            role="combobox"
-            aria-expanded={openCommand}
-            aria-invalid={invalid}
-            className={cn(
-              "w-max items-center justify-between whitespace-nowrap",
-              invalid && "border-destructive focus-visible:ring-destructive",
-            )}
-          >
-            {selectedCountry ? (
-              <span className="text-xl">{selectedCountry.emoji}</span>
-            ) : (
-              "Select"
-            )}
-            <ChevronsUpDown className="ml-2 size-4 shrink-0 opacity-50" aria-hidden />
-          </Button>
-        </PopoverTrigger>
-
-        <PopoverContent className="w-[300px] p-0" align="start">
-          <Command>
-            <CommandInput placeholder="Search country..." />
-            <CommandList>
-              <CommandEmpty>No country found.</CommandEmpty>
-              <ScrollArea className="[&>[data-radix-scroll-area-viewport]]:max-h-[250px]">
-                <CommandGroup>
-                  {COUNTRIES.map((country) => (
-                    <CommandItem
-                      key={country.iso2}
-                      value={`${country.name} (+${country.callingCode})`}
-                      onSelect={() => {
-                        const newValue = `+${country.callingCode}`;
-                        setValue(newValue);
-                        setCountryCode(country.iso2);
-                        onChange?.(newValue);
-                        inputRef.current?.focus();
-                        setOpenCommand(false);
-                      }}
-                    >
-                      <span className="mr-2 text-2xl">{country.emoji}</span>
-                      {country.name}
-                      <span className="ml-1 text-muted-foreground">
-                        (+{country.callingCode})
-                      </span>
-                      <Check
-                        className={cn(
-                          "ml-auto size-4",
-                          countryCode === country.iso2 ? "opacity-100" : "opacity-0",
-                        )}
-                        aria-hidden
-                      />
-                    </CommandItem>
-                  ))}
-                </CommandGroup>
-              </ScrollArea>
-            </CommandList>
-          </Command>
-        </PopoverContent>
-      </Popover>
+      <CountryCodePicker
+        country={state.country}
+        invalid={invalid}
+        // Radix would hand focus back to the picker; the number is next.
+        onCloseFocus={() => inputRef.current?.focus()}
+        onSelect={(country) => {
+          setPicked(true);
+          commit(phoneStateForCountry(state.text, country));
+        }}
+      />
 
       <Input
         ref={inputRef}
-        type="text"
+        // `tel` brings up the phone keypad; the font-size stays at 16px on
+        // small screens (see Input), which is what stops iOS zooming on focus.
+        type="tel"
+        inputMode="tel"
+        autoComplete="tel-national"
         name="phone"
         id={id}
-        placeholder="Phone"
-        value={value}
-        onInput={handleOnInput}
-        onPaste={handleOnPaste}
+        placeholder={phonePlaceholder(state.country)}
+        value={state.text}
+        onChange={handleChange}
+        onBlur={onBlur}
         aria-invalid={invalid}
         required={required}
+        className={cn(invalid && "border-destructive focus-visible:ring-destructive")}
       />
     </div>
   );

@@ -46,10 +46,12 @@ import { cn } from "@/lib/utils";
  */
 type Tone = "success" | "info" | "warning" | "error";
 
-function resultTone({ created, skipped, failed }: BulkImportResult): Tone {
+function resultTone({ created, skipped, failed, invalid = 0 }: BulkImportResult): Tone {
   if (failed > 0 && created === 0 && skipped === 0) return "error";
   if (failed > 0) return "warning";
   if (created > 0) return "success";
+  // Nothing created and nothing the server already had: every row was left out.
+  if (skipped === 0 && invalid > 0) return "warning";
   return "info";
 }
 
@@ -93,16 +95,21 @@ function bannerCopy(
   nounPlural: string,
 ): { tone: Tone; lead: string; detail: string } {
   const { created, skipped, failed } = result;
+  const invalid = result.invalid ?? 0;
   const tone = resultTone(result);
+
+  // The two reasons a row isn't imported, kept apart: the server already had
+  // it, or it still had errors on Review and was never sent.
+  const left = [
+    skipped > 0 ? `${plural(skipped, "row")} skipped because they already existed` : "",
+    invalid > 0 ? `${plural(invalid, "row")} left out because of errors` : "",
+  ].filter(Boolean);
 
   if (tone === "success") {
     return {
       tone,
       lead: `${plural(created, noun)} imported.`,
-      detail:
-        skipped > 0
-          ? `${plural(skipped, "row")} skipped because they already existed.`
-          : "Every row imported cleanly.",
+      detail: left.length > 0 ? `${left.join(", ")}.` : "Every row imported cleanly.",
     };
   }
 
@@ -118,10 +125,23 @@ function bannerCopy(
     };
   }
 
+  if (tone === "warning" && failed === 0) {
+    return {
+      tone,
+      lead: "Nothing imported.",
+      detail: `${left.join(", ")}. Fix them on the Review step or upload a corrected file.`.replace(
+        /^./,
+        (c) => c.toUpperCase(),
+      ),
+    };
+  }
+
   if (tone === "warning") {
     return {
       tone,
-      lead: `${created} created, ${skipped} skipped, ${failed} failed.`,
+      lead: `${created} created, ${skipped} skipped, ${failed} failed${
+        invalid > 0 ? `, ${invalid} left out because of errors` : ""
+      }.`,
       detail: `Fix the failed row${failed === 1 ? "" : "s"} and re-upload just ${
         failed === 1 ? "it" : "those"
       }.`,
@@ -157,14 +177,30 @@ export function BulkResultsDialog({
 
   const { tone, lead, detail } = bannerCopy(result, noun, nounPlural);
   const ToneIcon = TONE_ICON[tone];
-  const total = result.created + result.skipped + result.failed;
+  const invalid = result.invalid ?? 0;
+  const total = result.created + result.skipped + result.failed + invalid;
   const rows = result.rows ?? [];
+
+  // "Already existed" only where the importer can tell — contacts report it
+  // per row. Invoices, expenses, assets and transactions don't look for
+  // duplicates, so a permanent 0 there would claim a check that never ran.
+  const reportsExisting = result.skipped > 0 || rows.length > 0;
 
   const tiles = [
     { key: "created", label: "Created", value: result.created, icon: CheckCircle2, tone: "success" },
-    { key: "skipped", label: "Skipped", value: result.skipped, icon: Info, tone: "warning" },
+    ...(reportsExisting
+      ? ([
+          { key: "skipped", label: "Already existed", value: result.skipped, icon: Info, tone: "warning" },
+        ] as const)
+      : []),
     { key: "failed", label: "Failed", value: result.failed, icon: XCircle, tone: "destructive" },
-  ] as const;
+    // Only when the wizard left rows out, so the usual tiles stay as they were.
+    ...(invalid > 0
+      ? ([
+          { key: "invalid", label: "Had errors", value: invalid, icon: AlertTriangle, tone: "warning" },
+        ] as const)
+      : []),
+  ];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -193,7 +229,14 @@ export function BulkResultsDialog({
             </p>
           </div>
 
-          <dl className="grid grid-cols-3 gap-3">
+          <dl
+            className={cn(
+              "grid gap-3",
+              tiles.length === 2 && "grid-cols-2",
+              tiles.length === 3 && "grid-cols-3",
+              tiles.length === 4 && "grid-cols-2 sm:grid-cols-4",
+            )}
+          >
             {tiles.map((tile) => {
               const active = tile.value > 0;
               const Icon = tile.icon;

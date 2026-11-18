@@ -25,15 +25,17 @@ import {
 import { useContributionsQuery } from "@/hooks/use-super-contributions-query";
 import { useSuperMatrixQuery } from "@/hooks/use-super-matrix-query";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { useCountryContext } from "@/hooks/use-country-context";
+import { superContributionsLabel, superWord } from "@/lib/country-context";
 
 export const SUPER_ROOT = "/expenses/super-contributions";
 
 const DEFAULT_PAGE_SIZE = 25;
 
-const TITLE_TIP =
-  "What you've paid into super in the selected period, and how much of it has been matched to the money that actually left your bank account. Personal contributions you intend to claim can be flagged as a tax deduction.";
-
 export function SuperScreen() {
+  const { country } = useCountryContext();
+  const titleTip = `What you've paid into ${superWord(country)} in the selected period, and how much of it has been matched to the money that actually left your bank account. Personal contributions you intend to claim can be flagged as a tax deduction.`;
+
   const [search] = useAtom(superQueryAtom);
   // Waits for typing to pause before it hits the API — the search box reads
   // the same atom directly, so it keeps updating instantly either way.
@@ -95,12 +97,14 @@ export function SuperScreen() {
     : null;
 
   /*
-   * Covers both halves of "applying a filter": debounce, then the request
-   * for the page it asks for. Not `isFetching`, which is also true of a
-   * background refresh of the page already on screen.
+   * Covers both halves of "applying a filter" — debounce, then the request
+   * for the page it asks for — plus any refetch of rows already on screen.
+   * Focus/reconnect refetches are off app-wide (providers.tsx), so on this
+   * screen a refetch only ever means a write just invalidated the list: a
+   * create/edit/delete landing back here, or a match from the dialog.
    */
-  const isFiltering =
-    search !== debouncedSearch || contributionsQuery.isPlaceholderData;
+  const isFiltering = search !== debouncedSearch || contributionsQuery.isFetching;
+  const isStatsLoading = matrixQuery.isFetching;
 
   const cards: StatCard[] = [
     {
@@ -142,14 +146,15 @@ export function SuperScreen() {
     <div className="space-y-[15px]">
       <PageHeader
         icon={PiggyBank}
-        title="Super contributions"
-        titleTip={TITLE_TIP}
-        description="Track what you've paid into super and match each payment to your bank feed."
+        title={superContributionsLabel(country)}
+        tourId="super-header"
+        titleTip={titleTip}
+        description={`Track what you've paid into ${superWord(country)} and match each payment to your bank feed.`}
       >
         {/* No "New fund" here: a fund is only ever created from the
             contribution form's combobox, in the context that needs it. */}
         {!isEmpty && (
-          <Button asChild>
+          <Button asChild data-usertour="super-new-button">
             <Link href={`${SUPER_ROOT}/new`}>
               <Plus />
               New contribution
@@ -160,40 +165,45 @@ export function SuperScreen() {
 
       {/* Scopes the cards only — the list isn't filtered by period, same as
           sole-webapp's own analytics toggle. */}
-      {!isEmpty && (
-        <Tabs
-          value={period}
-          onValueChange={(next) => setPeriod(next as SuperPeriod)}
-        >
-          <TabsList aria-label="Summary period">
-            {SUPER_PERIODS.map((option) => (
-              <TabsTrigger key={option} value={option}>
-                {option}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
-      )}
+      <Tabs
+        value={period}
+        onValueChange={(next) => setPeriod(next as SuperPeriod)}
+      >
+        <TabsList aria-label="Summary period" data-usertour="super-period">
+          {SUPER_PERIODS.map((option) => (
+            <TabsTrigger key={option} value={option}>
+              {option}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
 
-      {/* Gone with no contributions at all — zeroes over an empty table say
-          nothing the empty state doesn't. */}
-      {!isEmpty && <StatCards stats={cards} loading={matrixQuery.isPending} />}
+      {/* Kept with no contributions yet too, as zeroes. */}
+      <div data-usertour="super-stats">
+        <StatCards stats={cards} loading={isStatsLoading} />
+      </div>
 
-      <SuperTable
-        contributions={contributions}
-        loading={isFiltering}
-        isEmpty={isEmpty}
-        pageInfo={pageInfo}
-        pageSize={pageSize}
-        onPageChange={setPage}
-        onPageSizeChange={(next) => {
-          setPageSize(next);
-          // Row 30 is on a different page at 10 a page than at 50, so the
-          // honest thing after a resize is the top of the list rather than
-          // whichever page number happens to still be in range.
-          setPage(1);
-        }}
-      />
+      {/* The list tour's anchor: the table, or the empty state in its place. */}
+      <div
+        data-usertour="super-table"
+        data-usertour-loading={isFiltering || undefined}
+      >
+        <SuperTable
+          contributions={contributions}
+          loading={isFiltering}
+          isEmpty={isEmpty}
+          pageInfo={pageInfo}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={(next) => {
+            setPageSize(next);
+            // Row 30 is on a different page at 10 a page than at 50, so the
+            // honest thing after a resize is the top of the list rather than
+            // whichever page number happens to still be in range.
+            setPage(1);
+          }}
+        />
+      </div>
 
       <MatchDialog />
       <DeleteContributionDialog />

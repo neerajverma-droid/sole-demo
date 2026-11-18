@@ -29,7 +29,7 @@ export function EquityScreen() {
         title="Equity"
         description="Capital you've put into the business, and the drawings you've taken back out."
       >
-        <Button asChild>
+        <Button asChild data-usertour="equity-new-button">
           <Link href="/equity/new">
             <Plus />
             New equity

@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 import { useCountryContext } from "@/hooks/use-country-context";
 import { taxWord } from "@/lib/country-context";
 
-const NO_COMPARISON: ExpenseComparison = {
+export const NO_COMPARISON: ExpenseComparison = {
   percent: null,
   up: false,
   label: "No comparison for this period",
@@ -50,9 +50,11 @@ export function ExpensesSummary({
   const tax = taxWord(country);
 
   if (loading) {
+    // Carries the tour anchor too — see the Invoices summary.
     return (
       <section
         className="overflow-hidden rounded-lg border border-border bg-card shadow-sm"
+        data-usertour="expense-summary"
         aria-hidden
       >
         <HeroHairline />
@@ -111,7 +113,8 @@ export function ExpensesSummary({
   );
 }
 
-function Stat({
+/** One figure in the hero — also the Bills tab's, so the two read the same. */
+export function Stat({
   icon,
   tone = "primary",
   label,

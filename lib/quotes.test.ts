@@ -27,6 +27,7 @@ const {
   fetchQuotePdfBlob,
   fetchQuoteTemplates,
   fetchQuotes,
+  fetchQuoteSummaryStats,
   quoteAmount,
   quoteAmountAud,
   quoteDisplayStatus,
@@ -35,6 +36,8 @@ const {
   quoteTemplateIndustryTag,
   sendQuoteApi,
   sendQuoteReminderApi,
+  sendQuoteToClientApi,
+  quoteSendAction,
   mapQuoteDeposit,
   isNdisQuoteTemplate,
   mapApiQuoteTemplate,
@@ -275,6 +278,45 @@ describe("fetching the quote list", () => {
 /* ------------------------------------------------------------------ *
  * Status, as the list displays it
  * ------------------------------------------------------------------ */
+
+describe("fetchQuoteSummaryStats", () => {
+  beforeEach(() => apiMock.get.mockReset());
+
+  it("asks the status-counts route for stats and maps both periods", async () => {
+    apiMock.get.mockResolvedValue({
+      data: {
+        success: true,
+        data: {
+          stats: {
+            year: {
+              quoted: 517.78,
+              draft_count: 2,
+              converted: { count: 1, amount: 268.77 },
+              open: { count: 3, accepted: 1, amount: "100.5" },
+              lost: { count: 1, amount: 148.51 },
+            },
+          },
+        },
+      },
+    });
+
+    const stats = await fetchQuoteSummaryStats();
+
+    expect(apiMock.get).toHaveBeenCalledWith(apiRoutes.quote.statusCounts, {
+      params: { include_stats: 1 },
+    });
+    expect(stats.year).toEqual({
+      quoted: 517.78,
+      draftCount: 2,
+      converted: { count: 1, amount: 268.77 },
+      open: { count: 3, accepted: 1, amount: 100.5 },
+      lost: { count: 1, amount: 148.51 },
+    });
+    // A period the server leaves out is zeroes, not a crash.
+    expect(stats.month.quoted).toBe(0);
+    expect(stats.month.open.accepted).toBe(0);
+  });
+});
 
 describe("quoteDisplayStatus", () => {
   const today = "2026-06-01";
@@ -652,6 +694,104 @@ describe("sending a quote", () => {
       apiRoutes.unibox.sendQuote("4501"),
     );
   });
+
+  it("sends from the list and returns every recipient, client first", async () => {
+    apiMock.post.mockResolvedValue({
+      data: {
+        success: true,
+        data: {
+          resent: true,
+          valid_till: "2026-12-14",
+          expiry_extended: true,
+          recipients: { to: ["client@example.com"], cc: ["cc@example.com"] },
+        },
+      },
+    });
+    const result = await sendQuoteToClientApi("4501");
+    expect(apiMock.post.mock.calls[0][0]).toBe(
+      apiRoutes.quote.sendToClient("4501"),
+    );
+    expect(result).toEqual({
+      recipients: ["client@example.com", "cc@example.com"],
+      resent: true,
+      expiryExtendedTo: "2026-12-14",
+    });
+  });
+
+  it("reports no new expiry when the server didn't move it", async () => {
+    apiMock.post.mockResolvedValue({
+      data: {
+        success: true,
+        data: {
+          valid_till: "2026-12-14",
+          expiry_extended: false,
+          recipients: { to: ["client@example.com"], cc: [] },
+        },
+      },
+    });
+    const result = await sendQuoteToClientApi("4501");
+    expect(result.expiryExtendedTo).toBeNull();
+    expect(result.resent).toBe(false);
+  });
+
+  it("surfaces the server's reason when the send is refused", async () => {
+    apiMock.post.mockResolvedValue({
+      data: { success: false, message: "This quote has already been sent to the client." },
+    });
+    await expect(sendQuoteToClientApi("4501")).rejects.toThrow(/already been sent/);
+  });
+});
+
+describe("quoteSendAction", () => {
+  const today = "2026-06-01";
+
+  it("offers a first send for a draft or a quote saved but never emailed", () => {
+    expect(quoteSendAction(quote({ status: "Draft" }), today)).toEqual({
+      kind: "send",
+      label: "Send to client",
+    });
+    expect(
+      quoteSendAction(
+        quote({ status: "Sent", sentAt: null, expiry: "2026-07-01" }),
+        today,
+      ),
+    ).toEqual({ kind: "send", label: "Send to client" });
+  });
+
+  it("greys out a quote that's already with the client", () => {
+    expect(
+      quoteSendAction(
+        quote({ status: "Sent", sentAt: "2026-05-20", expiry: "2026-07-01" }),
+        today,
+      ),
+    ).toEqual({ kind: "blocked", label: "Send to client", reason: "Already sent" });
+  });
+
+  it("offers Send again for a declined or expired quote", () => {
+    const declined = quoteSendAction(quote({ status: "Declined" }), today);
+    expect(declined.kind).toBe("resend");
+    expect(declined.label).toBe("Send again");
+
+    const expired = quoteSendAction(
+      quote({ status: "Sent", sentAt: "2026-04-01", expiry: "2026-05-01" }),
+      today,
+    );
+    expect(expired.kind).toBe("resend");
+    expect(expired.kind === "resend" && expired.hint).toMatch(/new expiry/);
+  });
+
+  it("blocks an accepted or converted quote, saying why", () => {
+    expect(quoteSendAction(quote({ status: "Accepted" }), today)).toMatchObject({
+      kind: "blocked",
+      reason: "The client has already accepted this quote",
+    });
+    expect(
+      quoteSendAction(
+        quote({ status: "Accepted", convertedInvoice: "INV-9" }),
+        today,
+      ),
+    ).toMatchObject({ kind: "blocked", reason: "Already converted to INV-9" });
+  });
 });
 
 describe("downloading a selection", () => {
@@ -917,6 +1057,17 @@ describe("mapQuoteDeposit", () => {
 /* ------------------------------------------------------------------ *
  * Templates — which editor, and what they prefill
  * ------------------------------------------------------------------ */
+
+describe("mapApiQuoteTemplate — favourites", () => {
+  it("carries the user's star from the list response", () => {
+    expect(mapApiQuoteTemplate({ id: 1, is_favourite: true }).favourite).toBe(true);
+  });
+
+  it("leaves a template unstarred when the response says so or is silent", () => {
+    expect(mapApiQuoteTemplate({ id: 2, is_favourite: false }).favourite).toBeUndefined();
+    expect(mapApiQuoteTemplate({ id: 3 }).favourite).toBeUndefined();
+  });
+});
 
 describe("isNdisQuoteTemplate", () => {
   it("trusts type over industry", () => {

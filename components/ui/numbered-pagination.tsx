@@ -25,19 +25,35 @@ import { cn } from "@/lib/utils";
  */
 const PAGE_CONTROL = "size-9 shrink-0 rounded-[9px] text-sm tabular";
 
-/** The geometry the fixed group width is worked out from: `size-9` and `gap-1`. */
-const CONTROL_PX = 36;
-const CONTROL_GAP_PX = 4;
+/**
+ * Space to leave above the table when scrolling it back into view: the sticky
+ * top bar (h-14, 56px) plus a little air.
+ */
+const STICKY_TOP_OFFSET = 72;
 
 /**
- * The most slots the collapse rule can ever produce.
+ * Keeps the table on screen across a page change.
  *
- * First, last, the current page and one either side, with a gap between each
- * run — seven at the widest, in the middle of a long list. Fewer near the ends,
- * which is exactly why the group is padded to this width rather than left to
- * measure itself.
+ * A pager sits under its table, so it's clicked from the bottom of a long page.
+ * The next page loads behind a shimmer that is rarely as tall as the rows it
+ * replaces, the document shortens, and the browser clamps the scroll position
+ * to the shorter page — which, once the rows land and the page grows back, is
+ * left somewhere in the middle of the list. Bringing the table's top back to
+ * the top of the screen first means there is nothing left to clamp, and
+ * whoever changed page lands at the start of the new one, which is where a
+ * pager is expected to leave them.
+ *
+ * Only scrolls when the top of the table is already above the viewport; a
+ * table that's fully in view stays exactly where it is.
  */
-const MAX_PAGE_SLOTS = 7;
+function keepTableInView(pager: HTMLElement | null) {
+  const table = pager?.previousElementSibling;
+  if (!table) return;
+  const top = table.getBoundingClientRect().top;
+  if (top < STICKY_TOP_OFFSET) {
+    window.scrollBy({ top: top - STICKY_TOP_OFFSET });
+  }
+}
 
 /**
  * The pages to show, and where the runs are broken.
@@ -88,6 +104,7 @@ export function NumberedPagination({
   itemLabelPlural,
   navLabel,
   disabled = false,
+  keepScrollPosition = false,
 }: {
   page: PageInfo;
   pageSize: number;
@@ -102,9 +119,21 @@ export function NumberedPagination({
   navLabel: string;
   /** Whether controls are disabled (e.g. while data is fetching). */
   disabled?: boolean;
+  /**
+   * Don't scroll the table's top back into view when the page changes. For a
+   * list whose own screen keeps the reader at the pager instead, so that going
+   * to the next page and back doesn't drop them at the top of the list.
+   */
+  keepScrollPosition?: boolean;
 }) {
   const rowsPerPageId = React.useId();
   const slots = pageSlots(page.page, page.pageCount);
+  const rootRef = React.useRef<HTMLDivElement>(null);
+
+  const goToPage = (next: number) => {
+    if (!keepScrollPosition) keepTableInView(rootRef.current);
+    onPageChange(next);
+  };
 
   const availableSizes = React.useMemo(() => {
     const base = pageSizes ? [...pageSizes] : [...PAGE_SIZES];
@@ -115,18 +144,11 @@ export function NumberedPagination({
     return base;
   }, [pageSizes, pageSize]);
 
-  /*
-   * The numbered group is held at the width of its widest state, so the arrows
-   * either side of it stay put as the run of pages grows and shrinks. Measured
-   * from the constants rather than written as a class, because the figure
-   * depends on how many pages there are.
-   */
-  const widestRun = Math.min(page.pageCount, MAX_PAGE_SLOTS);
-  const groupMinWidth =
-    widestRun * CONTROL_PX + Math.max(0, widestRun - 1) * CONTROL_GAP_PX;
-
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border py-3">
+    <div
+      ref={rootRef}
+      className="flex flex-wrap items-center justify-between gap-3 border-t border-border py-3"
+    >
       <p className="text-sm text-muted-foreground tabular">
         {page.from}–{page.to} of {page.total}{" "}
         {page.total === 1 ? itemLabel : (itemLabelPlural ?? `${itemLabel}s`)}
@@ -141,7 +163,10 @@ export function NumberedPagination({
             <Select
               disabled={disabled}
               value={String(pageSize)}
-              onValueChange={(value) => onPageSizeChange(Number(value))}
+              onValueChange={(value) => {
+                keepTableInView(rootRef.current);
+                onPageSizeChange(Number(value));
+              }}
             >
               <SelectTrigger
                 aria-labelledby={rowsPerPageId}
@@ -170,7 +195,7 @@ export function NumberedPagination({
             size="icon"
             aria-label="Previous page"
             disabled={disabled || page.page <= 1}
-            onClick={() => onPageChange(page.page - 1)}
+            onClick={() => goToPage(page.page - 1)}
             className={cn(
               PAGE_CONTROL,
               "text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -180,10 +205,12 @@ export function NumberedPagination({
             <ChevronLeft />
           </Button>
 
-          <div
-            className="flex items-center justify-center gap-1"
-            style={{ minWidth: groupMinWidth }}
-          >
+          {/*
+            Sized to the slots actually shown, so the arrows sit right beside
+            the numbers. Padding it to the widest possible run left a wide
+            empty band either side on long lists ("‹   1 2 … 24   ›").
+          */}
+          <div className="flex items-center justify-center gap-1">
             {slots.map((slot) =>
               typeof slot === "number" ? (
                 <Button
@@ -193,7 +220,7 @@ export function NumberedPagination({
                   disabled={disabled}
                   aria-current={slot === page.page ? "page" : undefined}
                   aria-label={`Page ${slot}`}
-                  onClick={() => onPageChange(slot)}
+                  onClick={() => goToPage(slot)}
                   className={cn(
                     PAGE_CONTROL,
                     "font-medium focus-visible:ring-2",
@@ -221,7 +248,7 @@ export function NumberedPagination({
             size="icon"
             aria-label="Next page"
             disabled={disabled || page.page >= page.pageCount}
-            onClick={() => onPageChange(page.page + 1)}
+            onClick={() => goToPage(page.page + 1)}
             className={cn(
               PAGE_CONTROL,
               "text-muted-foreground hover:bg-muted hover:text-foreground",

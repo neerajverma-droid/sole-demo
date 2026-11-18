@@ -15,9 +15,8 @@ vi.mock("@/utils/axiosInstance", () => ({
 
 // Imported after the mock so `lib/reports.ts`'s own `import api from
 // "@/utils/axiosInstance"` resolves to the mocked module above.
-const { fetchPlReport, plSplit, plDelta, PL_REPORT_TYPE_ID } = await import(
-  "@/lib/reports"
-);
+const { fetchPlReport, fetchPlFinancialYears, plSplit, plDelta, PL_REPORT_TYPE_ID } =
+  await import("@/lib/reports");
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -135,6 +134,7 @@ describe("fetchPlReport", () => {
       action: "view",
       start_date: "2026-01-01",
       end_date: "2026-01-31",
+      gst_inclusive: "false",
     });
 
     // The previous span is the same number of days immediately before it.
@@ -235,6 +235,53 @@ describe("fetchPlReport", () => {
       grossProfit: { amount: 0, previous: 0 },
     });
     expect(report.blocks).toHaveLength(10);
+  });
+
+  it("sends gst_inclusive on both calls, and reads the result's own flag rather than echoing the request", async () => {
+    apiMock.post.mockResolvedValue({
+      data: { ...backendPlResponse({ monthLabel: "Jan2026" }), gst_inclusive: true },
+    });
+
+    const report = await fetchPlReport(
+      "Custom range",
+      { from: "2026-01-01", to: "2026-01-31" },
+      undefined,
+      true,
+    );
+
+    expect(sentFields(apiMock.post.mock.calls[0][1]).gst_inclusive).toBe("true");
+    expect(sentFields(apiMock.post.mock.calls[1][1]).gst_inclusive).toBe("true");
+    expect(report.gstInclusive).toBe(true);
+  });
+});
+
+describe("fetchPlFinancialYears", () => {
+  it("maps the backend's financial-year list into label and ISO bounds", async () => {
+    apiMock.post.mockResolvedValue({
+      data: {
+        success: true,
+        data: {
+          financialYear: [
+            { id: 1, start_year: 2024, end_year: 2025, start_date: "2024-07-01", end_date: "2025-06-30" },
+            { id: 2, start_year: 2025, end_year: 2026, start_date: "2025-07-01", end_date: "2026-06-30" },
+          ],
+        },
+      },
+    });
+
+    const years = await fetchPlFinancialYears();
+
+    expect(apiMock.post.mock.calls[0][0]).toBe(apiRoutes.tax.getFinancialYears);
+    expect(years).toEqual([
+      { id: "1", label: "2024-2025", from: "2024-07-01", to: "2025-06-30" },
+      { id: "2", label: "2025-2026", from: "2025-07-01", to: "2026-06-30" },
+    ]);
+  });
+
+  it("comes back empty rather than throwing when the business has no financial years on file", async () => {
+    apiMock.post.mockResolvedValue({ data: { success: true, data: {} } });
+
+    await expect(fetchPlFinancialYears()).resolves.toEqual([]);
   });
 });
 

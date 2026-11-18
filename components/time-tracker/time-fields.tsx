@@ -4,6 +4,7 @@ import * as React from "react";
 import { Loader2 } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
+import { PrefixInput } from "@/components/ui/prefix-input";
 import {
   Select,
   SelectContent,
@@ -67,22 +68,28 @@ export function TimeDetailsFields<T extends TimeDetails>({
 
   return (
     <div className="space-y-4">
-      <Field label="Client" htmlFor={`${idPrefix}-client`} required={clientRequired} error={errors.client}>
-        <ProjectClientSelect
-          id={`${idPrefix}-client`}
-          value={value.client}
-          invalid={!!errors.client}
-          onChange={(client) => {
-            // Projects belong to a client, so a new client clears them.
-            const sameClient = client?.clientId === value.client?.clientId;
-            set(sameClient ? { client } : { client, projectId: "", jobId: "" });
-          }}
-        />
-      </Field>
+      <div data-usertour={`time-${idPrefix}-client`}>
+        <Field label="Client" htmlFor={`${idPrefix}-client`} required={clientRequired} error={errors.client}>
+          <ProjectClientSelect
+            id={`${idPrefix}-client`}
+            value={value.client}
+            invalid={!!errors.client}
+            askPhone={false}
+            onChange={(client) => {
+              // Projects belong to a client, so a new client clears them.
+              const sameClient = client?.clientId === value.client?.clientId;
+              set(sameClient ? { client } : { client, projectId: "", jobId: "" });
+            }}
+          />
+        </Field>
+      </div>
 
       {projectReadOnly ?? (
         <>
-          <label className="flex cursor-pointer items-center justify-between gap-4">
+          <label
+            className="flex cursor-pointer items-center justify-between gap-4"
+            data-usertour={`time-${idPrefix}-project`}
+          >
             <span>
               <span className="block text-sm font-semibold">Assign to specific project</span>
               <span className="block text-xs text-muted-foreground">
@@ -174,29 +181,27 @@ export function TimeDetailsFields<T extends TimeDetails>({
         </>
       )}
 
-      <label className="flex cursor-pointer items-center justify-between gap-4">
-        <span className="text-sm font-semibold">Billable</span>
-        <Switch checked={value.isBillable} onCheckedChange={(isBillable) => set({ isBillable })} />
-      </label>
+      <div className="space-y-4" data-usertour={`time-${idPrefix}-billing`}>
+        <label className="flex cursor-pointer items-center justify-between gap-4">
+          <span className="text-sm font-semibold">Billable</span>
+          <Switch checked={value.isBillable} onCheckedChange={(isBillable) => set({ isBillable })} />
+        </label>
 
-      {showRate && value.isBillable && (
-        <Field label="Hourly rate" htmlFor={`${idPrefix}-rate`} error={errors.rate}>
-          <div className="relative">
-            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-              {activeCurrencySymbol()}
-            </span>
-            <Input
+        {showRate && value.isBillable && (
+          <Field label="Hourly rate" htmlFor={`${idPrefix}-rate`} error={errors.rate}>
+            <PrefixInput
+              prefix={activeCurrencySymbol()}
               id={`${idPrefix}-rate`}
               inputMode="decimal"
               value={value.hourlyRate}
               onChange={(event) => set({ hourlyRate: event.target.value.replace(/[^\d.]/g, "") })}
               placeholder="0.00"
               aria-invalid={!!errors.rate || undefined}
-              className={cn("pl-7 tabular", errors.rate && "border-destructive")}
+              className="tabular"
             />
-          </div>
-        </Field>
-      )}
+          </Field>
+        )}
+      </div>
     </div>
   );
 }

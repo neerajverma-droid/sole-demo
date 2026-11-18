@@ -18,12 +18,29 @@ import {
 } from "@/components/ui/select";
 import { AddonCartBar } from "@/components/addons/addon-cart-bar";
 import { AddonOverview } from "@/components/addons/addon-overview";
-import { selectedAddonsAtom, toggleSelectedAddonAtom } from "@/lib/atoms";
-import { addonsByGroup, type Addon } from "@/lib/addons";
+import {
+  moreAddonsOpenAtom,
+  selectedAddonsAtom,
+  toggleSelectedAddonAtom,
+} from "@/lib/atoms";
+import { usePayrollSeatsQuery } from "@/hooks/use-payroll-query";
+import { payrollEnabled } from "@/lib/payroll";
+import {
+  addonPriceShort,
+  addonRecommendedFor,
+  addonSoldBySeat,
+  addonsByGroup,
+  type Addon,
+} from "@/lib/addons";
 import { cn } from "@/lib/utils";
 import { useAddons } from "@/hooks/use-addons";
+import { trackAddonSelected } from "@/lib/addon-analytics";
+import { useActiveBusiness } from "@/hooks/use-active-business";
 import { RemoveAddonDialog } from "@/components/addons/remove-addon-dialog";
-import { addonMonthlyPrice } from "@/lib/addon-entitlements";
+import {
+  addonBilledPrice,
+  type AddonBilledPrice,
+} from "@/lib/addon-entitlements";
 
 
 export function AddonsMarketplace({
@@ -35,19 +52,35 @@ export function AddonsMarketplace({
 }) {
   const {
     activeIds: added,
+    includedIds: included,
     remove: removeAddon,
     busy,
     catalogue,
     subscription,
   } = useAddons();
- 
+  const { business } = useActiveBusiness();
+  const industryId =
+    business?.industryId != null ? String(business.industryId) : null;
+
   const [cart] = useAtom(selectedAddonsAtom);
   const toggleSelected = useSetAtom(toggleSelectedAddonAtom);
   const [query, setQuery] = React.useState("");
 
-  const groups = addonsByGroup(query);
+  const groups = addonsByGroup(query, { catalogue, industryId });
+  // Payroll is open when its seats are — see `addonSoldBySeat`.
+  const payrollOn = payrollEnabled(usePayrollSeatsQuery().data);
+  const isIncluded = (addon: Addon) =>
+    included.includes(addon.id) || (addonSoldBySeat(addon) && payrollOn);
+  const setMoreOpen = useSetAtom(moreAddonsOpenAtom);
+  const planInterval = subscription?.planInterval ?? "monthly";
 
-  const toggle = (addon: Addon) => toggleSelected(addon.id);
+  const toggle = (addon: Addon) => {
+    // Into the cart only; taking one back out isn't a selection.
+    if (!cart.includes(addon.id)) {
+      trackAddonSelected(addon, { catalogue, interval: planInterval });
+    }
+    toggleSelected(addon.id);
+  };
   const [removing, setRemoving] = React.useState<Addon | null>(null);
 
   const confirmRemove = async () => {
@@ -103,7 +136,11 @@ export function AddonsMarketplace({
                     {entry.addons.map((addon) => (
                       <SelectItem key={addon.id} value={addon.id}>
                         {addon.name}
-                        {added.includes(addon.id) ? " · Added" : ""}
+                        {added.includes(addon.id)
+                          ? " · Added"
+                          : isIncluded(addon)
+                            ? " · In your plan"
+                            : ""}
                       </SelectItem>
                     ))}
                   </SelectGroup>
@@ -129,13 +166,14 @@ export function AddonsMarketplace({
                         <li key={addon.id}>
                           <RailRow
                             addon={addon}
-                            price={addonMonthlyPrice(
+                            price={addonBilledPrice(
                               addon,
                               catalogue,
-                              subscription?.planInterval ?? "monthly",
+                              planInterval,
                             )}
                             active={addon.id === selected.id}
                             added={added.includes(addon.id)}
+                            included={isIncluded(addon)}
                             inCart={cart.includes(addon.id)}
                             onSelect={() => onSelect(addon.id)}
                           />
@@ -152,7 +190,11 @@ export function AddonsMarketplace({
           <AddonOverview
             key={selected.id}
             addon={selected}
+            price={addonBilledPrice(selected, catalogue, planInterval)}
+            recommended={addonRecommendedFor(selected, industryId)}
             added={added.includes(selected.id)}
+            included={isIncluded(selected)}
+            onNavigate={() => setMoreOpen(false)}
             selected={cart.includes(selected.id)}
             onToggleSelect={() => toggle(selected)}
             onRemove={() => remove(selected)}
@@ -179,14 +221,17 @@ function RailRow({
   price,
   active,
   added,
+  included,
   inCart,
   onSelect,
 }: {
   addon: Addon;
-  /** From the price list, not the card — see `addonMonthlyPrice`. */
-  price: number;
+  /** From the price list, not the card — see `addonBilledPrice`. */
+  price: AddonBilledPrice;
   active: boolean;
   added: boolean;
+  /** Unlocked by the package, not bought as an add-on. */
+  included: boolean;
   /** Chosen but not paid for. Only ever true while `added` is false. */
   inCart: boolean;
   onSelect: () => void;
@@ -229,13 +274,13 @@ function RailRow({
           </span>
           {/* On the plan, or in the cart — never both, and the rail is where
               someone checks what they've ticked without opening each one. */}
-          {added ? (
+          {added || included ? (
             <Badge
               variant="success"
               className="shrink-0 gap-0.5 px-1.5 py-0 text-[10px]"
             >
               <Check className="size-2.5" aria-hidden />
-              Added
+              {added ? "Added" : "Unlocked"}
             </Badge>
           ) : (
             inCart && (
@@ -254,8 +299,7 @@ function RailRow({
         </span>
       </span>
       <span className="shrink-0 text-xs text-muted-foreground tabular">
-        ${price}
-        {addon.priceUnit ? `/${addon.priceUnit}` : ""}
+        {addonPriceShort(addon, price.amount, price.interval)}
       </span>
     </button>
   );

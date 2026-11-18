@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSetAtom } from "jotai";
 
 import { pinnedNavIdsAtom } from "@/lib/atoms";
-import { addonById } from "@/lib/addons";
+import { ADDONS, addonById } from "@/lib/addons";
 import {
   addonBillingMode,
   addedMonthlyCost,
@@ -22,6 +22,7 @@ import {
   type SubscriptionInfo,
   type SubscriptionPlan,
 } from "@/lib/subscription";
+import { useAccess } from "@/hooks/use-access";
 import { useSubscriptionQuery } from "@/hooks/use-subscription-query";
 
 /**
@@ -43,6 +44,12 @@ import { useSubscriptionQuery } from "@/hooks/use-subscription-query";
 export type AddonState = {
   /** Card ids currently on the plan — what the rail draws and the cards unlock. */
   activeIds: string[];
+  /**
+   * Card ids the package itself includes — unlocked by the plan's
+   * `allowed_features`, not bought as an add-on, so there's nothing to remove.
+   * Never overlaps `activeIds`. Empty until the profile has been read.
+   */
+  includedIds: string[];
   /** The raw subscription slugs, including ones this app has no card for. */
   activeSlugs: string[];
   /** False until the subscription has been read once. Cards stay locked until then. */
@@ -52,6 +59,17 @@ export type AddonState = {
   mode: AddonBillingMode;
   /** True while a purchase or removal is in flight. */
   busy: boolean;
+  /**
+   * Ask the server again, now.
+   *
+   * For a surface that is mounted long before it is looked at. The shared
+   * subscription is cached for five minutes and doesn't refetch on focus, so a
+   * modal that lives beside the sidebar can open onto a plan that changed in
+   * another tab, on another device, or in the seconds after a Stripe webhook
+   * landed — and an add-on catalogue is exactly where that matters, because
+   * every card's state is a claim about what the business is paying for.
+   */
+  refresh: () => void;
   has: (id: string) => boolean;
   /** What these card ids would ADD to the monthly bill, allowance applied. */
   costOf: (ids: string[]) => number;
@@ -103,6 +121,22 @@ export function useAddons(): AddonState {
   const catalogue = catalogueQuery.data?.addons ?? [];
 
   /*
+   * What the package unlocks without an add-on, from the server's feature list
+   * rather than a copy of its plan table here. Waits for the profile: the
+   * access hook is permissive before it loads, which would flash every card as
+   * included.
+   */
+  const access = useAccess();
+  const includedIds = access.ready
+    ? ADDONS.filter(
+        (addon) =>
+          addon.feature &&
+          !activeIds.includes(addon.id) &&
+          access.hasFeature(addon.feature),
+      ).map((addon) => addon.id)
+    : [];
+
+  /*
    * Both writes refetch the subscription rather than patching a local copy of
    * it. The server does more than echo the list back — the free-add-on
    * allowance, the billing total and the next invoice date all move — and a
@@ -111,11 +145,27 @@ export function useAddons(): AddonState {
    */
   const settle = React.useCallback(
     () =>
-      queryClient.invalidateQueries({
-        queryKey: ["subscription", "my-subscription"],
-      }),
+      Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ["subscription", "my-subscription"],
+        }),
+        // The feature list moves with the plan, and decides `includedIds`.
+        queryClient.invalidateQueries({ queryKey: ["access-profile"] }),
+      ]),
     [queryClient],
   );
+
+  /*
+   * Both the subscription and the price list, because the two are read
+   * together: the catalogue's stale time is half an hour, and a card priced
+   * from a figure that moved since is a card arguing with the invoice.
+   */
+  const refresh = React.useCallback(() => {
+    void settle();
+    void queryClient.invalidateQueries({
+      queryKey: ["subscription", "catalogue"],
+    });
+  }, [queryClient, settle]);
 
   const mode = addonBillingMode(subscription);
 
@@ -185,12 +235,14 @@ export function useAddons(): AddonState {
 
   return {
     activeIds,
+    includedIds,
     activeSlugs,
     ready,
     subscription,
     catalogue,
     mode,
     busy: buyMutation.isPending || removeMutation.isPending,
+    refresh,
     /*
      * Locked until the subscription has been read. The other way round would
      * flash every card as owned on a slow connection and let someone open an

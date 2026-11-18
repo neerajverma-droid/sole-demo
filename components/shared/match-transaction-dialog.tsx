@@ -20,11 +20,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  fetchPossibleMatches,
   filterMatchCandidates,
   matchMultipleTransactions,
   matchSelectionTotals,
   matchSingleTransaction,
+  possibleMatchesQuery,
+  refreshAfterMatch,
   type BankMatchType,
   type MatchCandidate,
 } from "@/lib/bank-match";
@@ -79,21 +80,15 @@ export function MatchTransactionDialog({
   invalidateQueryKeys: QueryKey[];
   remainingFromFetch?: boolean;
 }) {
-  const queryClient = useQueryClient();
-
   return (
     <Dialog
       open={open}
       onOpenChange={(isOpen) => {
         if (isOpen) return;
+        // Just closes. A match refreshes the list itself, in `afterMatch`, on
+        // its own way out — refreshing here as well meant opening the dialog
+        // and cancelling refetched the whole list for nothing.
         onClose();
-        // Refreshes the list (and any cards) on every close, not only a
-        // successful match — a cancelled attempt can still follow a match
-        // made moments earlier, and closing shouldn't leave stale figures on
-        // screen once the dialog's out of the way.
-        invalidateQueryKeys.forEach((queryKey) =>
-          queryClient.invalidateQueries({ queryKey }),
-        );
       }}
     >
       <DialogContent
@@ -149,17 +144,10 @@ function MatchBody({
   const [matchingId, setMatchingId] = React.useState<string | null>(null);
   const [confirming, setConfirming] = React.useState(false);
 
-  /**
-   * Not a client-side view of one fetched list — "Assign to multiple" is a
-   * genuinely different server query (every debit in the last 260 days,
-   * rather than ones sized to what's still owing), so switching tabs
-   * refetches rather than re-filtering.
-   */
-  const query = useQuery({
-    queryKey: ["possible-matches", type, entity.id, tab === "multiple"],
-    queryFn: () =>
-      fetchPossibleMatches(type, entity.id, { multiple: tab === "multiple" }),
-  });
+  // Switching tabs refetches rather than re-filtering — see the options.
+  const query = useQuery(
+    possibleMatchesQuery(type, entity.id, tab === "multiple"),
+  );
 
   const candidates = query.data?.candidates ?? [];
   // A failed lookup must not read as "nothing matches" — that's what made a
@@ -201,19 +189,14 @@ function MatchBody({
 
   const nounLabel = noun.charAt(0).toUpperCase() + noun.slice(1);
 
-  const afterMatch = async (count: number) => {
-    await Promise.all(
-      invalidateQueryKeys.map((queryKey) =>
-        queryClient.invalidateQueries({ queryKey }),
-      ),
-    );
+  const afterMatch = (count: number) => {
+    refreshAfterMatch(queryClient, invalidateQueryKeys, onClose);
     toast.success(
       totals.settled ? `${nounLabel} fully matched` : `${nounLabel} matched`,
       {
         description: `${count} ${count === 1 ? "transaction" : "transactions"} assigned to ${entity.title}.`,
       },
     );
-    onClose();
   };
 
   /** Potential transactions tab: one click, one match — no selection step. */
@@ -222,7 +205,7 @@ function MatchBody({
     setMatchingId(candidate.id);
     try {
       await matchSingleTransaction(type, entity.id, candidate.id);
-      await afterMatch(1);
+      afterMatch(1);
     } catch (error) {
       toast.error(
         apiErrorMessage(error, "Couldn't match that transaction. Try again."),
@@ -247,7 +230,7 @@ function MatchBody({
         entity.id,
         selected.map((entry) => entry.id),
       );
-      await afterMatch(selected.length);
+      afterMatch(selected.length);
     } catch (error) {
       toast.error(
         apiErrorMessage(error, "Couldn't match those transactions. Try again."),

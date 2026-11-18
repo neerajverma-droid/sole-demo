@@ -13,8 +13,6 @@
  */
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
 import {
   AU_FISCAL_YEAR_START,
@@ -23,9 +21,17 @@ import {
   type FiscalYearStart,
 } from "@/lib/fiscal-year";
 import type { TransactionFilterParams } from "@/lib/transaction-filters";
+import { matchSingleTransaction, type BankMatchType } from "@/lib/bank-match";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
 import {
+  TRANSACTION_FILTERS,
   financialYearLabel,
+  pendingSuggestions,
   type AiSuggestions,
+  type SuggestedClient,
+  type SuggestedDocument,
+  type SuggestedDocumentType,
   type Transaction,
   type TransactionFilter,
   type TransactionSource,
@@ -97,6 +103,55 @@ export type TransactionsTab = "unmatched" | "matched";
 /** Personal and Transfer are views of the matched list, as in sole-webapp. */
 export function tabForFilter(filter: TransactionFilter): TransactionsTab {
   return filter === "Review" ? "unmatched" : "matched";
+}
+
+/** The tab a `?status=` deep link names, whatever its case — or null. */
+export function filterFromStatusParam(
+  status: string | null | undefined,
+): TransactionFilter | null {
+  if (!status) return null;
+  return (
+    TRANSACTION_FILTERS.find(
+      (option) => option.toLowerCase() === status.toLowerCase(),
+    ) ?? null
+  );
+}
+
+/**
+ * The Transactions URL with `filter` as its tab. Unmatched is the default, so
+ * it drops `status` rather than writing it; every other param (a search or
+ * undo deep link) is kept as it was.
+ */
+export function transactionsTabHref(
+  pathname: string,
+  search: string,
+  filter: TransactionFilter,
+): string {
+  const params = new URLSearchParams(search);
+  if (filter === "Review") params.delete("status");
+  else params.set("status", filter.toLowerCase());
+  const query = params.toString();
+  return query ? `${pathname}?${query}` : pathname;
+}
+
+/**
+ * Skeleton or fade for the list's own fetch.
+ *
+ * The first load, and the refetch after an undo, delete, match or approve —
+ * rows on screen are stale then, so they're replaced by a skeleton. A page or
+ * page-size change keeps the previous page on screen (`placeholderData`) and
+ * only fades it. Focus refetching is off app-wide, so nothing else refetches
+ * the same list.
+ */
+export function listLoadState(query: {
+  isPending: boolean;
+  isFetching: boolean;
+  isPlaceholderData: boolean;
+}): { loading: boolean; fetching: boolean } {
+  return {
+    loading: query.isPending || (query.isFetching && !query.isPlaceholderData),
+    fetching: query.isFetching && query.isPlaceholderData,
+  };
 }
 
 export type TransactionListParams = {
@@ -193,6 +248,17 @@ export function confidencePercent(value: unknown): number {
 }
 
 type ApiPrediction = {
+  /** What the model settled on: a document of the user's own, else a category. */
+  type?: string | null;
+  document?: {
+    type?: string | null;
+    id?: number | string | null;
+    reference?: string | null;
+    name?: string | null;
+    amount?: number | string | null;
+    client_name?: string | null;
+  } | null;
+  client?: { client_id?: number | string | null; name?: string | null } | null;
   account_subcategory_id?: number | string | null;
   name?: string | null;
   confidence?: number | string | null;
@@ -203,6 +269,43 @@ type ApiPrediction = {
     confidence?: number | string | null;
   }[];
 };
+
+const DOCUMENT_TYPES: readonly SuggestedDocumentType[] = ["invoice", "expense", "asset"];
+
+/** The invoice, expense or asset the model paired the line with, if it did. */
+export function suggestedDocumentFrom(
+  prediction: ApiPrediction | null | undefined,
+): SuggestedDocument | null {
+  const document = prediction?.document;
+  const type = String(document?.type ?? "").toLowerCase() as SuggestedDocumentType;
+  if (!document || !DOCUMENT_TYPES.includes(type) || document.id == null) return null;
+  return {
+    type,
+    id: String(document.id),
+    reference: document.reference?.trim() || document.name?.trim() || `#${document.id}`,
+    clientName: document.client_name?.trim() ?? "",
+    amount: num(document.amount),
+    confidence: optionalPercent(prediction?.confidence),
+    reason: prediction?.reason?.trim() || null,
+  };
+}
+
+/** The client / supplier the model knew for the line, if it knew one. */
+export function suggestedClientFrom(
+  prediction: ApiPrediction | null | undefined,
+): SuggestedClient | null {
+  const client = prediction?.client;
+  if (client?.client_id == null || !client.name?.trim()) return null;
+  return { id: String(client.client_id), name: client.name.trim() };
+}
+
+/** "INV-0021 · Turner Consulting" — the form `suggestedMatch` has always taken. */
+function suggestedMatchLabel(document: SuggestedDocument | null): string {
+  if (!document) return "";
+  return document.clientName
+    ? `${document.reference} · ${document.clientName}`
+    : document.reference;
+}
 
 /** A confidence as a whole percent; null only where the model gave none. */
 export function optionalPercent(value: unknown): number | null {
@@ -266,6 +369,7 @@ export function mapUnmatchedRow(row: ApiUnmatchedRow): Transaction {
   const type = typeOf(row.direction ?? row.type);
   const source = sourceLabel(row.source);
   const prediction = row.classification_prediction;
+  const suggestedDocument = suggestedDocumentFrom(prediction);
 
   return {
     id,
@@ -303,10 +407,12 @@ export function mapUnmatchedRow(row: ApiUnmatchedRow): Transaction {
         ? String(prediction.account_subcategory_id)
         : null,
     aiSuggestions: aiSuggestionsFrom(prediction),
+    suggestedDocument,
+    suggestedClient: suggestedClientFrom(prediction),
     supplier: "",
     // `gst_exclude` 0 means GST is included — the backend's inverted naming.
     gst: row.gst_exclude != null && Number(row.gst_exclude) === 0,
-    suggestedMatch: "",
+    suggestedMatch: suggestedMatchLabel(suggestedDocument),
     splits: [],
     personal: false,
     transfer: null,
@@ -494,6 +600,35 @@ export async function fetchTransactionBalances(
  * Row actions — each POST is encrypted, as sole-webapp's `useService.post`
  * ------------------------------------------------------------------ */
 
+/**
+ * What the server says when the line it was asked to record looks like one
+ * that's already in the books. sole-ocr answers that with `success: true` and
+ * `data.direction: "duplicate"` — nothing was created or matched — so it is
+ * thrown rather than returned, or the caller would toast a success for a
+ * record that doesn't exist. sole-webapp read it the same way
+ * (`MatchTransaction.js`, `result.data.direction === "duplicate"`).
+ */
+export class DuplicateTransactionError extends Error {
+  readonly duplicate = true;
+
+  constructor(message?: string) {
+    super(
+      message ||
+        "This looks like a duplicate of something already recorded — nothing was created.",
+    );
+    this.name = "DuplicateTransactionError";
+  }
+}
+
+/** Whether a successful reply is really the server declining a duplicate. */
+export function isDuplicateReply(data: unknown): boolean {
+  return (
+    !!data &&
+    typeof data === "object" &&
+    (data as { direction?: unknown }).direction === "duplicate"
+  );
+}
+
 async function postAction(
   url: string,
   fields: Record<string, unknown>,
@@ -505,6 +640,9 @@ async function postAction(
   );
   if (!response.data?.success) {
     throw new Error(response.data?.message || fallback);
+  }
+  if (isDuplicateReply(response.data.data)) {
+    throw new DuplicateTransactionError(response.data.message);
   }
   return response.data.message || "";
 }
@@ -632,6 +770,12 @@ export type ApprovalInput = {
   /** The company's client_id. */
   clientId: string;
   gstIncluded: boolean;
+  /**
+   * The invoice, expense or asset the model paired the line with, when that is
+   * what's being approved. The document already carries its own category and
+   * client, so neither is asked for.
+   */
+  document?: { type: SuggestedDocumentType; id: string } | null;
 };
 
 /**
@@ -639,23 +783,45 @@ export type ApprovalInput = {
  * order and words — or null when it's ready.
  */
 export function approvalIssue(
-  input: Pick<ApprovalInput, "categoryId" | "clientId">,
+  input: Pick<ApprovalInput, "categoryId" | "clientId" | "document">,
 ): string | null {
+  if (input.document) return null;
   if (!input.categoryId) return "Please select a suggested category to approve.";
   if (!input.clientId) return "Please select a client/supplier before approving.";
   return null;
 }
 
 /**
+ * Approving a document suggestion reconciles the line against that invoice,
+ * expense or asset — the same call as picking it in the Match dialog.
+ */
+async function approveDocumentApi(
+  transactionId: string,
+  document: NonNullable<ApprovalInput["document"]>,
+): Promise<string> {
+  await matchSingleTransaction(
+    document.type as BankMatchType,
+    document.id,
+    transactionId,
+  );
+  track(EVENTS.TRANSACTION_RECONCILED, { document_type: document.type });
+  return "Transaction matched successfully.";
+}
+
+/**
  * sole-webapp's inline Approve: `POST /v2/bank/transaction-detail-match`,
  * flagged as an AI match. The server reconciles the line against that
- * account — creating the invoice, expense or asset behind it.
+ * account — creating the invoice, expense or asset behind it. A line the
+ * model paired with a document of its own is matched to that instead.
  */
 export async function approveTransactionApi(
   input: ApprovalInput,
 ): Promise<string> {
   const issue = approvalIssue(input);
   if (issue) throw new Error(issue);
+  if (input.document) {
+    return approveDocumentApi(input.transactionId, input.document);
+  }
   const result = await postAction(
     apiRoutes.bankTransaction.setMatch,
     {
@@ -667,10 +833,6 @@ export async function approveTransactionApi(
     },
     "Failed to approve transaction.",
   );
-  // Reconciliation is the daily-habit action in this product, so it is the
-  // closest thing to a real engagement measure — unlike `total_events`, which
-  // in the old project was mostly page views and session-replay chunks.
-  track(EVENTS.TRANSACTION_RECONCILED, { gst_included: input.gstIncluded });
   return result;
 }
 
@@ -782,16 +944,32 @@ export function fetchSuggestionsPage(page: number) {
   });
 }
 
-/** How many unmatched lines are waiting, for the banner. */
+/**
+ * The unmatched endpoint has no "has a suggestion" filter, so finding the ones
+ * that do means walking every page. Capped well past what a business ever has
+ * sitting unmatched, so a bad `total` from the server can't loop forever.
+ */
+const MAX_SUGGESTION_PAGES = 40;
+
+/**
+ * Every unmatched line the model actually had something to say about — a
+ * suggested category or a document to match. One function so the banner's
+ * count and the review dialog's rows are the same question, answered the same
+ * way: see `pendingSuggestions`.
+ */
+export async function fetchSuggestedTransactions(): Promise<Transaction[]> {
+  const found: Transaction[] = [];
+  for (let page = 1; page <= MAX_SUGGESTION_PAGES; page += 1) {
+    const result = await fetchSuggestionsPage(page);
+    found.push(...pendingSuggestions(result.rows));
+    if (page * SUGGESTIONS_PAGE_SIZE >= result.total) break;
+  }
+  return found;
+}
+
+/** How many unmatched lines actually carry a suggestion, for the banner. */
 export async function fetchSuggestionsCount(): Promise<number> {
-  const page = await fetchTransactionsPage({
-    tab: "unmatched",
-    page: 1,
-    pageSize: 1,
-    period: "",
-    search: "",
-  });
-  return page.total;
+  return (await fetchSuggestedTransactions()).length;
 }
 
 export type ApprovalRow = ApprovalInput & {
@@ -800,26 +978,62 @@ export type ApprovalRow = ApprovalInput & {
   contactName: string;
 };
 
-/** Approve All's check over every loaded row — sole-webapp's bulk messages. */
+/**
+ * Approve All's check over every loaded row — sole-webapp's bulk messages.
+ * A row paired with a document needs neither a category nor a client.
+ */
 export function bulkApprovalIssue(rows: ApprovalRow[]): string | null {
   if (rows.length === 0) return "There are no suggestions to approve.";
-  if (rows.some((row) => !row.categoryId)) {
+  const coded = rows.filter((row) => !row.document);
+  if (coded.some((row) => !row.categoryId)) {
     return "Please select a suggested category for all transactions to approve.";
   }
-  if (rows.some((row) => !row.clientId)) {
+  if (coded.some((row) => !row.clientId)) {
     return "Please select a client/supplier for all transactions before approving.";
   }
   return null;
 }
 
 /**
- * Approve All: every loaded row in one call — sole-webapp's bulk form of the
- * single approve, `{ transactions: [...], is_ai_match: true }` to the same
- * endpoint, which takes the array as a bulk match.
+ * Approve All: every loaded row — sole-webapp's bulk form of the single
+ * approve, `{ transactions: [...], is_ai_match: true }` to the same endpoint,
+ * which takes the array as a bulk match. Rows the model paired with an
+ * invoice, expense or asset are matched to it one by one afterwards: each is a
+ * match of its own, and one that fails (say, the invoice was paid in the
+ * meantime) must not stop the rest.
  */
 export async function approveAllApi(rows: ApprovalRow[]): Promise<string> {
   const issue = bulkApprovalIssue(rows);
   if (issue) throw new Error(issue);
+
+  const documentRows = rows.filter((row) => row.document);
+  const codedRows = rows.filter((row) => !row.document);
+
+  let message = "";
+  if (codedRows.length > 0) {
+    message = await approveCodedRowsApi(codedRows);
+  }
+  if (documentRows.length === 0) return message;
+
+  let failed = 0;
+  let firstError = "";
+  for (const row of documentRows) {
+    try {
+      await approveDocumentApi(row.transactionId, row.document!);
+    } catch (error) {
+      failed += 1;
+      firstError ||= error instanceof Error ? error.message : "Couldn't match it.";
+    }
+  }
+  if (failed > 0) {
+    throw new Error(
+      `${documentRows.length - failed} of ${documentRows.length} document matches approved. ${firstError}`,
+    );
+  }
+  return message || `${documentRows.length} transactions matched successfully.`;
+}
+
+async function approveCodedRowsApi(rows: ApprovalRow[]): Promise<string> {
   return postAction(
     apiRoutes.bankTransaction.setMatch,
     {

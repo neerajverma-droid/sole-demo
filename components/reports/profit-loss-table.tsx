@@ -61,9 +61,18 @@ const PIN_ACCOUNT = "sticky left-44 z-10 w-60";
 export function ProfitLossTable({
   report,
   empty = false,
+  layout = "monthly",
 }: {
   report: PlReport;
   empty?: boolean;
+  /**
+   * "total" shows only the range total — the single
+   * period-total column Xero/MYOB default to, and the only layout that fits
+   * an A4 portrait page. "monthly" (the default here) restores the
+   * month-by-month breakdown. Purely a display slice: the full monthly
+   * dataset is already in `report` either way.
+   */
+  layout?: "total" | "monthly";
 }) {
   /**
    * Which sections are folded away, by id. Only the closed ones are tracked, so a
@@ -94,6 +103,19 @@ export function ProfitLossTable({
     );
 
   const months = report.columns.filter((column) => column.kind === "month");
+
+  // "total" drops every month column down to just the range total. The
+  // previous period's column is never shown: beside this period's it read as
+  // two years mixed into one breakdown. The summary cards above still compare
+  // against it, each saying "vs last …" in words.
+  // Kept as indices, not a second copy of `report.columns`, because that's
+  // what lets a row's own `values` (one figure per column, same order) be
+  // sliced the same way without rebuilding the report.
+  const visibleIndices = report.columns
+    .map((_, index) => index)
+    .filter((index) => report.columns[index].kind !== "previous")
+    .filter((index) => layout === "monthly" || report.columns[index].kind !== "month");
+  const visibleColumns = visibleIndices.map((index) => report.columns[index]);
 
   /*
    * A ladder of zeros would be a table pretending to be a report. The shared
@@ -127,7 +149,9 @@ export function ProfitLossTable({
           <h2 className="text-sm font-semibold">Detailed breakdown</h2>
           <p className="text-xs text-muted-foreground tabular">
             {report.rangeLabel}
-            {months.length > 1 && ` · ${months.length} months`}
+            {layout === "monthly" &&
+              months.length > 1 &&
+              ` · ${months.length} months`}
           </p>
         </div>
         <Button
@@ -139,6 +163,19 @@ export function ProfitLossTable({
           {allCollapsed ? "Expand all" : "Collapse all"}
         </Button>
       </div>
+
+      {/*
+       * Echoes the backend's own flag rather than the toggle that requested
+       * it, so a report still mid-refetch can't show a banner for figures it
+       * hasn't actually rendered yet.
+       */}
+      <p className="border-b border-border bg-muted/50 px-4 py-2 text-xs text-muted-foreground sm:px-5">
+        All figures below (Income, Cost of Sales, Expenses and LIDT) are shown{" "}
+        <span className="font-medium text-foreground">
+          {report.gstInclusive ? "including GST" : "excluding GST"}
+        </span>
+        .
+      </p>
 
       {/*
         The scroll container for both axes: a bounded height is what a sticky
@@ -167,7 +204,7 @@ export function ProfitLossTable({
             >
               Account name
             </TableHead>
-            {report.columns.map((column) => (
+            {visibleColumns.map((column) => (
               <ColumnHead key={column.key} column={column} />
             ))}
           </TableRow>
@@ -178,7 +215,7 @@ export function ProfitLossTable({
             <BlockRows
               key={block.id}
               block={block}
-              width={report.columns.length}
+              visibleIndices={visibleIndices}
               collapsed={!!collapsed[block.id]}
               onToggle={() => toggle(block.id)}
               // Every block but the first opens with the stronger rule that
@@ -226,17 +263,20 @@ function ColumnHead({ column }: { column: PlColumn }) {
  */
 function BlockRows({
   block,
-  width,
+  visibleIndices,
   collapsed,
   onToggle,
   divide,
 }: {
   block: PlBlock;
-  width: number;
+  /** Which of `values`' positions the "total" layout keeps — see `ProfitLossTable`. */
+  visibleIndices: number[];
   collapsed: boolean;
   onToggle: () => void;
   divide: boolean;
 }) {
+  const project = (values: number[]) =>
+    visibleIndices.map((index) => values[index]);
   const foldable = block.rows.length > 0 && block.summary !== null;
   const showRows = !foldable || !collapsed;
   const visibleRows =
@@ -314,7 +354,10 @@ function BlockRows({
           <TableCell className={cn(PIN_ACCOUNT, TONE.item, CELL, RULE)}>
             {row.label}
           </TableCell>
-          <Amounts values={row.values} columnCount={width} />
+          <Amounts
+            values={project(row.values)}
+            columnCount={visibleIndices.length}
+          />
         </TableRow>,
       );
     });
@@ -341,8 +384,8 @@ function BlockRows({
           </TableCell>
         )}
         <Amounts
-          values={block.summary.values}
-          columnCount={width}
+          values={project(block.summary.values)}
+          columnCount={visibleIndices.length}
           tone={tone}
           large={block.isResult}
         />

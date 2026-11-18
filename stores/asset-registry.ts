@@ -38,6 +38,8 @@ type AssetRegistryState = {
   addBrandRecord: (entry: AssetRegistryEntry) => void;
   /** Appends one newly-created asset type, keeping the list sorted. */
   addTypeRecord: (entry: AssetRegistryEntry) => void;
+  /** Empties both lists — on a business or user switch (`QueryCacheScope`). */
+  reset: () => void;
 };
 
 function sorted(entries: AssetRegistryEntry[]): AssetRegistryEntry[] {
@@ -72,4 +74,6 @@ export const useAssetRegistryStore = create<AssetRegistryState>()((set) => ({
       const typeRecords = sorted([...state.typeRecords, entry]);
       return { typeRecords, types: typeRecords.map((e) => e.name) };
     }),
+
+  reset: () => set({ brandRecords: [], typeRecords: [], brands: [], types: [] }),
 }));

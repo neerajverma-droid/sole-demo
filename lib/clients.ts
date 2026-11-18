@@ -13,6 +13,8 @@ import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
 import { normaliseCurrency, type DocumentCurrency } from "@/lib/invoices";
 import type { ContactType } from "@/lib/contacts";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
 
 export type BusinessContact = {
   id: string;
@@ -164,6 +166,13 @@ export async function createBusinessContactApi(
       `The ${type.toLowerCase()} saved but the server returned no id.`,
     );
   }
+
+  track(EVENTS.CONTACT_CREATED, {
+    contact_type: type,
+    business_type: null,
+    contact_name: values.name.trim() || null,
+    contact_email: values.email?.trim() || null,
+  });
 
   return {
     id: String(id),

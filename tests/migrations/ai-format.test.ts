@@ -29,6 +29,7 @@ const { aiTargetFromBulkSpec, importFileError, readImportFile } = await import(
   "@/lib/ai-format"
 );
 const { INVOICE_IMPORT_SPEC } = await import("@/lib/invoice-import");
+const { expenseImportSpec } = await import("@/lib/expense-import");
 const { TXN_AI_TARGET } = await import("@/lib/transaction-import");
 
 const TARGET = {
@@ -78,6 +79,30 @@ describe("aiTargetFromBulkSpec", () => {
     expect(withOptions.map((field) => [field.label, field.options])).toEqual([
       ["Mark as", ["Draft", "Paid", "Overdue"]],
     ]);
+  });
+});
+
+describe("aiTargetFromBulkSpec — expense categories", () => {
+  const spec = expenseImportSpec([
+    { id: "72", name: "Office supplies" },
+    { id: "73", name: "Software" },
+  ]);
+
+  it("sends the chart of accounts as id and name pairs for Category", () => {
+    const category = aiTargetFromBulkSpec(spec).fields.find(
+      (field) => field.label === "Category",
+    );
+    expect(category?.options).toEqual([
+      { value: "72", label: "Office supplies" },
+      { value: "73", label: "Software" },
+    ]);
+  });
+
+  it("still sends Yes/No as plain strings", () => {
+    const paid = aiTargetFromBulkSpec(spec).fields.find(
+      (field) => field.label === "Paid",
+    );
+    expect(paid?.options).toEqual(["Yes", "No"]);
   });
 });
 

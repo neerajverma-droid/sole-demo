@@ -59,15 +59,21 @@ function Section({
   title,
   description,
   action,
+  tourId,
   children,
 }: {
   title: string;
   description: string;
   action?: React.ReactNode;
+  /** `data-usertour`, for the investment property tour to point at. */
+  tourId?: string;
   children: React.ReactNode;
 }) {
   return (
-    <section className="space-y-5 rounded-lg border border-border bg-card p-5 shadow-sm">
+    <section
+      className="space-y-5 rounded-lg border border-border bg-card p-5 shadow-sm"
+      data-usertour={tourId}
+    >
       <header className="flex flex-wrap items-start justify-between gap-3 border-b border-border pb-4">
         <div className="space-y-1">
           <h2 className="text-base font-semibold">{title}</h2>
@@ -138,6 +144,7 @@ export function SummarySection({
 
   return (
     <Section
+      tourId="portfolio-summary"
       title="Portfolio summary"
       description="Headline portfolio metrics for all properties in the selected scope."
     >
@@ -353,6 +360,7 @@ export function IncomeExpenseSection({ filters }: { filters: PortfolioFilters })
 
   return (
     <Section
+      tourId="portfolio-income"
       title="Income vs expenses"
       description="Rental income, property expenses and net result."
     >
@@ -406,6 +414,7 @@ export function RentCollectionSection({ filters }: { filters: PortfolioFilters }
 
   return (
     <Section
+      tourId="portfolio-rent"
       title="Rent collection"
       description="Received, outstanding, overdue and upcoming rent."
     >
@@ -507,6 +516,7 @@ export function KeyActionsSection({ filters }: { filters: PortfolioFilters }) {
 
   return (
     <Section
+      tourId="portfolio-key-actions"
       title="Key actions"
       description="Things to review for the properties in scope."
     >
@@ -621,6 +631,7 @@ export function ComparisonSection({ filters }: { filters: PortfolioFilters }) {
 
   return (
     <Section
+      tourId="portfolio-comparison"
       title="Property comparison"
       description="Compare property performance for the properties in scope."
       action={

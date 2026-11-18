@@ -1,16 +1,15 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAtom } from "jotai";
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
-import { Plus, Trash2, X } from "lucide-react";
+import { ClipboardList, LineChart, Plus, Table2, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { FormSection } from "@/components/ui/form-section";
 import {
   ChartContainer,
   ChartTooltip,
@@ -40,11 +39,12 @@ import { MoneyInput } from "@/components/planner/money-input";
 import {
   PLANNER_ROOT,
   PlannerDetailHeader,
+  PlannerFormFooter,
   PlannerNotFound,
+  useFieldTouch,
   usePlannerSection,
 } from "@/components/planner/planner-detail";
 import { DeletePlanDialog } from "@/components/planner/planner-dialogs";
-import { StepNumber } from "@/components/planner/step-number";
 import { deletePlanIdAtom } from "@/lib/atoms";
 import { invoiceMoney, parseIsoDate, toIsoDate } from "@/lib/invoices";
 import {
@@ -88,7 +88,7 @@ import { activeCurrencySymbol } from "@/lib/country-context";
 const REVENUE_HINT = "Used to calculate ROI and payback.";
 const VARIANCE_TIP = "Planned less actual. Negative means the line is overspent.";
 const PAYBACK_TIP =
-  "How long the expected revenue takes to cover the planned cost, at one twelfth of it a month.";
+  "How long the expected revenue takes to cover the cost (planned, or spent if more), at the monthly rate the plan's dates imply.";
 const REMAINING_TIP =
   "Total planned cost less what the ledger shows you've actually spent.";
 const ACTUAL_TIP =
@@ -132,7 +132,7 @@ export function PlanDetail({
   const [draft, setDraft] = React.useState<ExpensePlanDraft>(() =>
     editing ? draftFromPlan(editing) : emptyPlanDraft(today),
   );
-  const [edited, setEdited] = React.useState(false);
+  const fields = useFieldTouch();
 
   // Seed the form again the first time the plan arrives — see GoalDetail for
   // why: this page often mounts before its list has loaded.
@@ -141,16 +141,14 @@ export function PlanDetail({
     if (!editing || seededId.current === editing.id) return;
     seededId.current = editing.id;
     setDraft(draftFromPlan(editing));
-    setEdited(false);
-  }, [editing]);
+    fields.reset();
+  }, [editing, fields.reset]);
 
   const patch = (values: Partial<ExpensePlanDraft>) => {
-    setEdited(true);
     setDraft((current) => ({ ...current, ...values }));
   };
 
   const patchLine = (id: string, values: Partial<PlanBudgetLine>) => {
-    setEdited(true);
     setDraft((current) => ({
       ...current,
       lines: current.lines.map((line) =>
@@ -160,7 +158,6 @@ export function PlanDetail({
   };
 
   const addLine = () => {
-    setEdited(true);
     setDraft((current) => ({
       ...current,
       lines: [...current.lines, newBudgetLine()],
@@ -168,7 +165,6 @@ export function PlanDetail({
   };
 
   const removeLine = (id: string) => {
-    setEdited(true);
     setDraft((current) => ({
       ...current,
       lines: current.lines.filter((line) => line.id !== id),
@@ -194,8 +190,8 @@ export function PlanDetail({
   };
 
   const issues = planIssues(draft);
-  const issueFor = (key: string) =>
-    edited ? issues.find((issue) => issue.key === key)?.message : undefined;
+  // Shown once a field has been left, or everything once Save is pressed.
+  const issueFor = (key: string) => fields.visible(issues, key);
 
   /* Every figure below is derived from the draft, so it moves as you type. */
   const planned = planCost(draft);
@@ -215,30 +211,23 @@ export function PlanDetail({
     }));
 
   const onSave = async () => {
-    setEdited(true);
+    fields.submit();
     if (issues.length > 0) return;
     const line = `${invoiceMoney(planned)} · ${payback}`;
 
     try {
       // One call saves the plan and its lines in order — a new plan has to
       // exist before there's anything to hang lines off.
-      const saved = await savePlan.mutateAsync({
+      await savePlan.mutateAsync({
         id: editing?.id ?? null,
         draft,
       });
 
-      if (editing) {
-        toast.success("Expense plan saved", {
-          description: `${draft.name.trim()} · ${line}`,
-        });
-        router.push(PLANNER_ROOT);
-        return;
-      }
-
-      toast.success("Expense plan created", {
+      toast.success(editing ? "Expense plan saved" : "Expense plan created", {
         description: `${draft.name.trim()} · ${line}`,
       });
-      router.replace(`${PLANNER_ROOT}/plans/${saved.id}`);
+      // Creating and editing both end on the list.
+      router.push(PLANNER_ROOT);
     } catch (error) {
       toast.error(apiErrorMessage(error, "Failed to save expense plan."));
     }
@@ -269,44 +258,32 @@ export function PlanDetail({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-[15px]">
       <PlannerDetailHeader
         backHref={PLANNER_ROOT}
         backLabel={SECTION}
         crumbs={crumbs}
-        action={
-          <Button
-            onClick={onSave}
-            disabled={(edited && issues.length > 0) || savePlan.isPending}
-            data-usertour="plan-save"
-          >
-            {savePlan.isPending ? "Saving..." : "Save expense plan"}
-          </Button>
-        }
       />
 
       {/* Step 1 ----------------------------------------------------------- */}
-      <Card data-usertour="plan-define">
-        <CardHeader className="flex-row items-start justify-between gap-3 space-y-0 pb-4">
-          <div className="space-y-1">
-            <CardTitle className="flex items-center gap-2.5 text-base">
-              <StepNumber n={1} />
-              Define the expense plan
-            </CardTitle>
-            <p className="text-sm text-muted-foreground">
-              What you&apos;re planning and how you&apos;ll pay for it.
-            </p>
-          </div>
-          {/* Derived from the figures below, so it can't be set by hand. */}
-          {planned > 0 && (
-            <Badge variant={planStatusVariant(status)}>{status}</Badge>
-          )}
-        </CardHeader>
-        <CardContent className="space-y-4">
+      <div data-usertour="plan-define">
+        <FormSection
+          icon={ClipboardList}
+          title="Define the expense plan"
+          description="What you're planning and how you'll pay for it."
+          // Derived from the figures below, so it can't be set by hand.
+          action={
+            planned > 0 ? (
+              <Badge variant={planStatusVariant(status)}>{status}</Badge>
+            ) : undefined
+          }
+          className="space-y-4"
+        >
           <Field label="Expense name" required error={issueFor("name")}>
             <Input
               value={draft.name}
               onChange={(event) => patch({ name: event.target.value })}
+              onBlur={() => fields.touch("name")}
               placeholder="Replace the work van"
               aria-invalid={!!issueFor("name")}
             />
@@ -361,6 +338,8 @@ export function PlanDetail({
               <DatePicker
                 value={draft.startDate}
                 onChange={(startDate) => patch({ startDate })}
+                onClose={() => fields.touch("startDate")}
+                invalid={!!issueFor("startDate")}
                 label="Planned start date"
               />
             </Field>
@@ -368,6 +347,8 @@ export function PlanDetail({
               <DatePicker
                 value={draft.endDate}
                 onChange={(endDate) => patch({ endDate })}
+                onClose={() => fields.touch("endDate")}
+                invalid={!!issueFor("endDate")}
                 // Can't end before it starts.
                 fromDate={parseIsoDate(draft.startDate)}
                 label="Planned end date"
@@ -384,26 +365,23 @@ export function PlanDetail({
               <MoneyInput
                 value={draft.expectedRevenue}
                 onChange={(expectedRevenue) => patch({ expectedRevenue })}
+                onBlur={() => fields.touch("expectedRevenue")}
                 label="Expected revenue from this plan"
                 invalid={!!issueFor("expectedRevenue")}
               />
             </Field>
           </div>
-        </CardContent>
-      </Card>
+        </FormSection>
+      </div>
 
       {/* Step 2 ----------------------------------------------------------- */}
-      <Card data-usertour="plan-budget">
-        <CardHeader className="pb-4">
-          <CardTitle className="flex items-center gap-2.5 text-base">
-            <StepNumber n={2} />
-            Forecast the budget
-          </CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Planned costs and actuals matched from your ledger.
-          </p>
-        </CardHeader>
-        <CardContent className="space-y-4">
+      <div data-usertour="plan-budget">
+        <FormSection
+          icon={Table2}
+          title="Forecast the budget"
+          description="Planned costs and actuals matched from your ledger."
+          className="space-y-4"
+        >
           <div className="overflow-x-auto rounded-lg border border-border">
             <Table className="min-w-[900px]">
               <TableHeader>
@@ -438,6 +416,7 @@ export function PlanDetail({
                           onChange={(event) =>
                             patchLine(line.id, { name: event.target.value })
                           }
+                          onBlur={() => fields.touch(`name-${line.id}`)}
                           placeholder="Cost item"
                           aria-label={`Budget line ${index + 1}`}
                         />
@@ -449,6 +428,10 @@ export function PlanDetail({
                           onChange={(planned) =>
                             patchLine(line.id, { planned })
                           }
+                          onBlur={() => {
+                            fields.touch(`planned-${line.id}`);
+                            fields.touch(`name-${line.id}`);
+                          }}
                           label={`Planned, line ${index + 1}`}
                           invalid={!!issueFor(`planned-${line.id}`)}
                         />
@@ -458,6 +441,10 @@ export function PlanDetail({
                         <MoneyInput
                           value={line.actual}
                           onChange={(actual) => patchLine(line.id, { actual })}
+                          onBlur={() => {
+                            fields.touch(`actual-${line.id}`);
+                            fields.touch(`name-${line.id}`);
+                          }}
                           label={`Actual, line ${index + 1}`}
                           invalid={!!issueFor(`actual-${line.id}`)}
                         />
@@ -575,7 +562,14 @@ export function PlanDetail({
               </p>
             ) : (
               <ChartContainer config={chartConfig} className="h-[260px] w-full">
-                <BarChart data={chartData} margin={{ left: 4, right: 8, top: 8 }}>
+                <BarChart
+                  data={chartData}
+                  margin={{ left: 4, right: 8, top: 8 }}
+                  // A plan often has one or two lines; without a cap each bar
+                  // stretches to fill its half of the chart.
+                  barCategoryGap="30%"
+                  barGap={4}
+                >
                   <CartesianGrid vertical={false} strokeDasharray="3 3" />
                   <XAxis
                     dataKey="line"
@@ -598,7 +592,25 @@ export function PlanDetail({
                   <ChartTooltip
                     content={
                       <ChartTooltipContent
-                        formatter={(value) => invoiceMoney(Number(value))}
+                        // Replaces the whole row, so it carries the colour dot and
+                        // the series name itself — without them the tooltip is two
+                        // unlabelled amounts.
+                        formatter={(value, name, item) => (
+                          <>
+                            <span
+                              className="size-2.5 shrink-0 rounded-[2px]"
+                              style={{ backgroundColor: item.color }}
+                              aria-hidden
+                            />
+                            <span className="flex-1 text-muted-foreground">
+                              {chartConfig[name as keyof typeof chartConfig]
+                                ?.label ?? name}
+                            </span>
+                            <span className="font-mono font-medium tabular-nums text-foreground">
+                              {invoiceMoney(Number(value))}
+                            </span>
+                          </>
+                        )}
                         indicator="dot"
                       />
                     }
@@ -607,32 +619,29 @@ export function PlanDetail({
                     dataKey="planned"
                     fill="var(--color-planned)"
                     radius={[4, 4, 0, 0]}
+                    maxBarSize={48}
                   />
                   <Bar
                     dataKey="actual"
                     fill="var(--color-actual)"
                     radius={[4, 4, 0, 0]}
+                    maxBarSize={48}
                   />
                 </BarChart>
               </ChartContainer>
             )}
           </div>
-        </CardContent>
-      </Card>
+        </FormSection>
+      </div>
 
       {/* Step 3 ----------------------------------------------------------- */}
-      <Card data-usertour="plan-return">
-        <CardHeader className="pb-4">
-          <CardTitle className="flex items-center gap-2.5 text-base">
-            <StepNumber n={3} />
-            Forecast the return
-          </CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Budget totals, ledger actuals, funding gap and payback — updated live
-            as you type.
-          </p>
-        </CardHeader>
-        <CardContent className="space-y-4">
+      <div data-usertour="plan-return">
+        <FormSection
+          icon={LineChart}
+          title="Forecast the return"
+          description="Budget totals, ledger actuals, funding gap and payback — updated live as you type."
+          className="space-y-4"
+        >
           <dl className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <Tile
               label="Total planned cost"
@@ -691,24 +700,18 @@ export function PlanDetail({
               A line counts as committed once its status leaves Planned.
             </p>
           </div>
-        </CardContent>
-      </Card>
-
-      {/* Footer. Save lives in the header row, so it isn't offered twice. */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-        <Button
-          variant="ghost"
-          className="text-destructive hover:text-destructive"
-          disabled={!editing}
-          onClick={() => editing && setDeleteId(editing.id)}
-        >
-          <Trash2 />
-          Delete
-        </Button>
-        <Button variant="outline" asChild>
-          <Link href={PLANNER_ROOT}>Back to expense plans</Link>
-        </Button>
+        </FormSection>
       </div>
+
+      {/* Save, like every other form, lives bottom right. */}
+      <PlannerFormFooter
+        onCancel={() => router.push(PLANNER_ROOT)}
+        onSave={onSave}
+        saving={savePlan.isPending}
+        saveLabel={editing ? "Update expense plan" : "Save expense plan"}
+        onDelete={editing ? () => setDeleteId(editing.id) : undefined}
+        saveTourId="plan-save"
+      />
 
       <DeletePlanDialog onDeleted={() => router.push(PLANNER_ROOT)} />
     </div>

@@ -36,6 +36,8 @@ import {
   availableCash,
   cashOnHand,
   signedMoney,
+  totalCommitted,
+  totalGoalAllocations,
   walletMovementIssue,
   walletTotals,
 } from "@/lib/planner";
@@ -43,6 +45,9 @@ import { cn } from "@/lib/utils";
 import {
   useCashWalletQuery,
   usePlannerBankAccountsQuery,
+  usePlannerGoalsQuery,
+  usePlannerOverviewQuery,
+  usePlannerPlansQuery,
   useRemoveWalletMovementMutation,
   useWalletMovementMutation,
 } from "@/hooks/use-planner-query";
@@ -74,13 +79,39 @@ export function WalletPage() {
   // relying on the planner screen having been visited first.
   useCashWalletQuery();
   // Cash on hand counts the bank accounts too, not just the wallet.
-  const banks = usePlannerBankAccountsQuery().data ?? [];
+  const banksQuery = usePlannerBankAccountsQuery();
+  const banks = banksQuery.data ?? [];
+  // The page is reachable directly, so the goals and plans the available-cash
+  // figure takes off are loaded here too. Left unloaded they read as empty, and
+  // the figure becomes cash on hand with nothing earmarked.
+  const goalsQuery = usePlannerGoalsQuery();
+  const plansQuery = usePlannerPlansQuery();
+  const overviewQuery = usePlannerOverviewQuery();
+  const overview = overviewQuery.data ?? null;
   // What's left once goal allocations are taken off — the ceiling on cash out.
   const available = usePlannerStore((state) => state.wallet?.available ?? 0);
   const recordMovement = useWalletMovementMutation();
   const removeMovement = useRemoveWalletMovementMutation();
 
   const totals = walletTotals(movements);
+
+  // The same reading the Overview's tile takes, so the two pages can't give
+  // different answers: the server's totals when it has sent them, which count
+  // every goal and plan rather than the ones this page has loaded.
+  const cash = overview?.cashWalletBalance ?? balance;
+  const onHand = cashOnHand(cash, banks);
+  const earmarked = overview?.goals.totalAllocated ?? totalGoalAllocations(goals);
+  const committed = overview?.plans.committedToPlans ?? totalCommitted(plans);
+  const availableToSpend = overview
+    ? Math.max(0, onHand - earmarked - committed)
+    : availableCash(balance, goals, plans, banks);
+  // A figure taken off nothing yet loaded would be the overstated one, so the
+  // tile waits for everything it subtracts.
+  const availableLoading =
+    banksQuery.isLoading ||
+    goalsQuery.isLoading ||
+    plansQuery.isLoading ||
+    overviewQuery.isLoading;
 
   const stats: StatCard[] = [
     {
@@ -105,8 +136,11 @@ export function WalletPage() {
       key: "available",
       label: "Estimated available cash",
       tip: AVAILABLE_TIP,
-      value: invoiceMoney(availableCash(balance, goals, plans, banks)),
-      meta: `${invoiceMoney(cashOnHand(balance, banks))} on hand across all accounts`,
+      value: invoiceMoney(availableToSpend),
+      meta: banksQuery.isError
+        ? `${invoiceMoney(onHand)} — bank balances unavailable, cash wallet only`
+        : `${invoiceMoney(onHand)} on hand across all accounts`,
+      loading: availableLoading,
       icon: ArrowUpRight,
     },
   ];
@@ -143,7 +177,7 @@ export function WalletPage() {
         />
 
         <Card className="flex h-full flex-col" data-usertour="wallet-history">
-          <CardHeader className="flex-row items-baseline justify-between space-y-0 pb-4">
+          <CardHeader className="flex-row items-baseline justify-between space-y-0">
             <CardTitle className="text-base">History</CardTitle>
             <span className="text-xs text-muted-foreground tabular">
               {movements.length}{" "}
@@ -257,7 +291,7 @@ function AddCashCard({
 
   return (
     <Card className="h-fit" data-usertour="wallet-add-cash">
-      <CardHeader className="pb-4">
+      <CardHeader>
         <CardTitle className="text-base">Add cash</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">

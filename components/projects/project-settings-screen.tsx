@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { FormSection } from "@/components/ui/form-section";
 import { Input } from "@/components/ui/input";
+import { PrefixInput } from "@/components/ui/prefix-input";
 import { Shimmer } from "@/components/ui/shimmer";
 import { Switch } from "@/components/ui/switch";
 import { Field } from "@/components/documents/field";
@@ -89,19 +90,16 @@ export function ProjectSettingsScreen() {
   };
 
   const amountInput = (key: keyof ProjectSettings, placeholder: string, label: string) => (
-    <div className="relative max-w-sm">
-      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-        {activeCurrencySymbol()}
-      </span>
-      <Input
-        inputMode="decimal"
-        aria-label={label}
-        value={String(draft[key])}
-        onChange={(event) => set(key, event.target.value.replace(/[^\d.]/g, "") as never)}
-        placeholder={placeholder}
-        className="pl-7 tabular"
-      />
-    </div>
+    <PrefixInput
+      prefix={activeCurrencySymbol()}
+      wrapperClassName="max-w-sm"
+      inputMode="decimal"
+      aria-label={label}
+      value={String(draft[key])}
+      onChange={(event) => set(key, event.target.value.replace(/[^\d.]/g, "") as never)}
+      placeholder={placeholder}
+      className="tabular"
+    />
   );
 
   const codeSection = (
@@ -154,6 +152,7 @@ export function ProjectSettingsScreen() {
       <PageHeader
         icon={LayoutGrid}
         title="Project Settings"
+        tourId="project-settings-header"
         description="Configure default settings for your projects, jobs, rates and budgets."
       />
 
@@ -179,6 +178,7 @@ export function ProjectSettingsScreen() {
           <FormSection
             icon={DollarSign}
             title="Global rates"
+            tourId="project-settings-rates"
             description="Set default rates that will be applied when creating new tasks."
             className="p-[15px]"
           >
@@ -205,6 +205,7 @@ export function ProjectSettingsScreen() {
           <FormSection
             icon={Hash}
             title="Project code"
+            tourId="project-settings-project-code"
             description="Configure the prefix and next number for auto-generated project codes (e.g. PRO-1)."
             className="p-[15px]"
           >
@@ -214,6 +215,7 @@ export function ProjectSettingsScreen() {
           <FormSection
             icon={Briefcase}
             title="Job code"
+            tourId="project-settings-job-code"
             description="Configure the prefix and next number for auto-generated job codes (e.g. JOB-1)."
             className="p-[15px]"
           >
@@ -223,6 +225,7 @@ export function ProjectSettingsScreen() {
           <FormSection
             icon={Wallet}
             title="Default budget"
+            tourId="project-settings-budget"
             description="Set default budget values for new projects."
             className="space-y-[15px] p-[15px]"
           >
@@ -262,7 +265,7 @@ export function ProjectSettingsScreen() {
             )}
           </FormSection>
 
-          <div className="flex justify-end">
+          <div className="flex justify-end" data-usertour="project-settings-save">
             <Button type="submit" disabled={saveSettings.isPending}>
               {saveSettings.isPending ? <Loader2 className="animate-spin" /> : <Save />}
               Save settings

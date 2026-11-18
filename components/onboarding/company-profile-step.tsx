@@ -17,7 +17,7 @@ import { OnboardingLayout } from "@/components/onboarding/onboarding-layout";
 import { authEmailAtom, authNameAtom } from "@/lib/atoms";
 import {
   DEFERRED_BUSINESS_DEFAULTS,
-  ONBOARDING_DONE_HREF,
+  ONBOARDING_PLAN_HREF,
   companyProfileIssues,
   type AbrRecord,
   type CompanyProfileDraft,
@@ -38,6 +38,16 @@ import {
   useDetectedCountryQuery,
 } from "@/hooks/use-countries-query";
 import { countryByIso2 } from "@/lib/countries";
+import { useCountryContext } from "@/hooks/use-country-context";
+import {
+  rememberOnboardingProfile,
+  setUserProfile,
+  track,
+  type OnboardingProfile,
+} from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
+import type { AuthUser } from "@/lib/api/types";
+import { sessionUserId } from "@/stores/session";
 import { lookupBusiness } from "@/lib/business-lookup";
 import {
   formatIdentifier,
@@ -53,6 +63,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useQueryClient } from "@tanstack/react-query";
+import {
+  clearSpmReferral,
+  fetchMySpmReferral,
+  getSpmReferral,
+  type SpmReferralPayload,
+} from "@/lib/spm-referral";
 
 const LOOKUP_DEBOUNCE_MS = 400;
 
@@ -77,15 +93,22 @@ export function CompanyProfileStep() {
 
   const [edited, setEdited] = React.useState(false);
   const [abnTouched, setAbnTouched] = React.useState(false);
+  // Each required field reveals its own error only once the person has left
+  // it, the same way the ABN field already worked — typing into "Business
+  // name" must not light up "Your name" and "Mobile number" before they've
+  // been reached.
+  const [touched, setTouched] = React.useState<Record<string, boolean>>({});
   const [saving, setSaving] = React.useState(false);
   const [checkingAbn, setCheckingAbn] = React.useState(false);
   const [record, setRecord] = React.useState<AbrRecord | null>(null);
   const [lookupNote, setLookupNote] = React.useState<string | null>(null);
 
   const patch = (values: Partial<CompanyProfileDraft>) => {
-    setEdited(true);
     patchProfile(values);
   };
+
+  const markTouched = (key: string) =>
+    setTouched((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
 
   /*
    * Pre-select the country the visitor is probably in, from their IP (or
@@ -100,6 +123,32 @@ export function CompanyProfileStep() {
    */
   const { data: detectedIso2 } = useDetectedCountryQuery();
   const [suggested, setSuggested] = React.useState(false);
+  // Read by the invite prefill below, which must not re-run each time the list loads.
+  const countriesRef = React.useRef(countries);
+  countriesRef.current = countries;
+
+  /*
+   * The country the account's business already started in (picked or detected
+   * on the register screen). Only a non-Australian one is used here: Australia is
+   * also what every account starts as, so it can't tell "chosen" from "default"
+   * and is left to the location guess below. Not marked `suggested`: the person
+   * already saw and could change it at sign-up.
+   */
+  const { country: businessCountry, ready: businessCountryReady } =
+    useCountryContext();
+
+  React.useEffect(() => {
+    if (draft.countryIso2 || !businessCountryReady) return;
+    if (businessCountry.iso2 === "AU") return;
+    if (!countryByIso2(countries, businessCountry.iso2)) return;
+    patchProfile({ countryIso2: businessCountry.iso2 });
+  }, [
+    businessCountry.iso2,
+    businessCountryReady,
+    countries,
+    draft.countryIso2,
+    patchProfile,
+  ]);
 
   React.useEffect(() => {
     if (draft.countryIso2 || !detectedIso2) return;
@@ -107,6 +156,55 @@ export function CompanyProfileStep() {
     patchProfile({ countryIso2: detectedIso2 });
     setSuggested(true);
   }, [detectedIso2, countries, draft.countryIso2, patchProfile]);
+
+  /*
+   * Details the client's accountant already supplied in their invite (see
+   * lib/spm-referral). They fill the gaps only — anything already typed wins —
+   * and stay editable, since the accountant may have had them wrong. The saved
+   * copy covers this browser; the server's copy covers a verification link
+   * opened somewhere else. `patchProfile`, like the country guess: a prefill
+   * isn't the person's edit.
+   */
+  React.useEffect(() => {
+    let cancelled = false;
+
+    const fillFromInvite = (invite: SpmReferralPayload | null) => {
+      if (!invite || cancelled) return;
+      const current = useOnboardingFlowStore.getState().profile;
+      const values: Partial<CompanyProfileDraft> = {};
+      if (!current.businessName.trim() && invite.business_name) {
+        values.businessName = invite.business_name;
+      }
+      if (!current.abn.trim() && invite.abn) {
+        values.abn = invite.abn;
+        // An ABN is Australia's number; SPM accountants are Australian practices.
+        // Not marked `suggested`: that hint says the pick came from location.
+        if (!current.countryIso2 && !invite.country_iso2) {
+          values.countryIso2 = "AU";
+        }
+      }
+      // The country the accountant set for the client's business. Only if it is on the
+      // list of countries a business can start in (it may not be live yet).
+      if (
+        !current.countryIso2 &&
+        invite.country_iso2 &&
+        countryByIso2(countriesRef.current, invite.country_iso2)
+      ) {
+        values.countryIso2 = invite.country_iso2;
+      }
+      if (!current.fullName.trim() && invite.name) values.fullName = invite.name;
+      if (!current.mobile.trim() && invite.phone) values.mobile = invite.phone;
+      if (Object.keys(values).length) patchProfile(values);
+    };
+
+    const local = getSpmReferral();
+    fillFromInvite(local);
+    if (!local) void fetchMySpmReferral().then(fillFromInvite).catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [patchProfile]);
 
   const selectedCountry = countryByIso2(countries, draft.countryIso2);
   const identifierField = registrationField(
@@ -141,7 +239,7 @@ export function CompanyProfileStep() {
     selectedCountry?.name,
   );
   const issueFor = (key: string) =>
-    edited || (key === "abn" && abnTouched)
+    edited || touched[key] || (key === "abn" && abnTouched)
       ? issues.find((issue) => issue.key === key)?.message
       : undefined;
 
@@ -215,6 +313,32 @@ export function CompanyProfileStep() {
     };
   }, [draft.abn, draft.countryIso2, canLookUp, identifierField]);
 
+  /*
+   * `onbd_choose_plan_clicked`, once the profile has saved. Sign-up itself is
+   * not complete here — `signup_completed` waits for the first payment on the
+   * plan step — so what this step collected is kept for it to carry.
+   */
+  const reportChoosePlanClicked = (
+    user: AuthUser | null,
+    businessName: string,
+  ) => {
+    const profile: OnboardingProfile = {
+      primary_country: selectedCountry?.name ?? (draft.countryIso2 || null),
+      primary_email: user?.email || email || null,
+      primary_business_name: businessName || null,
+      user_name: draft.fullName.trim() || null,
+      user_id: sessionUserId(user),
+      mobile_number: draft.mobile.trim() || null,
+      abn_number: draft.abn.trim() || null,
+    };
+    track(EVENTS.ONBD_CHOOSE_PLAN_CLICKED, {
+      ...profile,
+      business_id: activeBusinessId,
+    });
+    setUserProfile(profile, { userId: profile.user_id });
+    rememberOnboardingProfile(profile);
+  };
+
   const onNext = async () => {
     setEdited(true);
     if (issues.length > 0 || saving) return;
@@ -262,6 +386,8 @@ export function CompanyProfileStep() {
       
       await saveAccountName(draft.fullName);
       setAuthName(draft.fullName.trim());
+      // The invite has done its job; don't let it ride along on a later sign-up.
+      clearSpmReferral();
 
       await queryClient.invalidateQueries({ queryKey: ["businesses"] });
       // The country may have just changed (and GST with it), and every form reads
@@ -269,11 +395,14 @@ export function CompanyProfileStep() {
       await queryClient.invalidateQueries({ queryKey: ["country-context"] });
       // And the session, so the rail and the greeting pick the name up without
       // waiting for a reload.
-      await refreshSession();
+      const freshUser = await refreshSession();
+      reportChoosePlanClicked(freshUser, businessName);
       toast.success("Company profile saved");
-      // `replace`, so Back out of the celebration doesn't land on a form that has
-      // already been submitted.
-      router.replace(ONBOARDING_DONE_HREF);
+      // `replace`, so Back out of the plan page doesn't land on a form that has
+      // already been submitted. The plan page is where the first subscription is
+      // taken, and it forwards straight on to the celebration for an account
+      // that already has one.
+      router.replace(ONBOARDING_PLAN_HREF);
     } catch (err: unknown) {
       const msg =
         (err as { response?: { data?: { message?: string } } })?.response?.data
@@ -292,6 +421,7 @@ export function CompanyProfileStep() {
         title="Tell us about your business"
         description="This is what appears on your invoices, and what we'll shape your workspace around. Your GST registration, business structure and the rest are in Settings whenever you want them."
         onNext={() => void onNext()}
+        nextLabel="Choose your plan"
         busy={saving}
         nextDisabled={edited && issues.length > 0}
       >
@@ -450,6 +580,7 @@ export function CompanyProfileStep() {
             id="businessName"
             value={draft.businessName}
             onChange={(event) => patch({ businessName: event.target.value })}
+            onBlur={() => markTouched("businessName")}
             placeholder="Turner Consulting"
             autoComplete="organization"
             aria-invalid={!!issueFor("businessName")}
@@ -481,6 +612,7 @@ export function CompanyProfileStep() {
             id="fullName"
             value={draft.fullName}
             onChange={(event) => patch({ fullName: event.target.value })}
+            onBlur={() => markTouched("fullName")}
             placeholder="Jane Smith"
             autoComplete="name"
             aria-invalid={!!issueFor("fullName")}
@@ -513,6 +645,7 @@ export function CompanyProfileStep() {
             value={draft.mobile}
             defaultCountry={(draft.countryIso2 || "AU") as CountryCode}
             onChange={(value) => patch({ mobile: value })}
+            onBlur={() => markTouched("mobile")}
             required
             invalid={!!issueFor("mobile")}
           />

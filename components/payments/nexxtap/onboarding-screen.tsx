@@ -99,6 +99,23 @@ export function NexxtapOnboardingScreen() {
   };
 
   const readyToSubmit = Object.values(done).every(Boolean);
+
+  // Which section to do next, for the walkthrough: the first one not done,
+  // in the order the application asks for them.
+  const nextSection =
+    (
+      [
+        "business",
+        "applicant",
+        "owners",
+        "activity",
+        "facilities",
+        "bank",
+        "documents",
+      ] as const
+    ).find((id) => !done[id]) ?? null;
+  const stateOf = (id: keyof typeof done) =>
+    done[id] ? "done" : id === nextSection ? "next" : "todo";
   const sent = isWithNexxtap(meta);
 
   const submit = async () => {
@@ -181,6 +198,8 @@ export function NexxtapOnboardingScreen() {
         <SummaryCard
           icon={Building2}
           title="Business"
+          tourId="nexttap-section-business"
+          tourState={stateOf("business")}
           description="The business NextTap will be boarding."
           href={STEP_HREF.business}
           done={done.business}
@@ -226,6 +245,8 @@ export function NexxtapOnboardingScreen() {
         <SummaryCard
           icon={User}
           title="Authorised applicant"
+          tourId="nexttap-section-applicant"
+          tourState={stateOf("applicant")}
           description="Whoever signs for the business."
           href={STEP_HREF.applicant}
           done={done.applicant}
@@ -260,6 +281,8 @@ export function NexxtapOnboardingScreen() {
         <SummaryCard
           icon={Users}
           title="Beneficial owners"
+          tourId="nexttap-section-owners"
+          tourState={stateOf("owners")}
           description="Everyone who ultimately owns the business."
           href={STEP_HREF.owners}
           done={done.owners}
@@ -308,6 +331,8 @@ export function NexxtapOnboardingScreen() {
         <SummaryCard
           icon={CreditCard}
           title="Business activity"
+          tourId="nexttap-section-activity"
+          tourState={stateOf("activity")}
           description="How the business trades, and how much."
           href={STEP_HREF.activity}
           done={done.activity}
@@ -366,6 +391,8 @@ export function NexxtapOnboardingScreen() {
         <SummaryCard
           icon={WalletCards}
           title="Facilities"
+          tourId="nexttap-section-facilities"
+          tourState={stateOf("facilities")}
           description="What NextTap switches on."
           href={STEP_HREF.facilities}
           done={done.facilities}
@@ -429,6 +456,8 @@ export function NexxtapOnboardingScreen() {
         <SummaryCard
           icon={Landmark}
           title="Settlement account"
+          tourId="nexttap-section-bank"
+          tourState={stateOf("bank")}
           description="Where NextTap pays the takings."
           href={STEP_HREF.bank}
           done={done.bank}
@@ -444,10 +473,14 @@ export function NexxtapOnboardingScreen() {
         state={state}
         documents={documents}
         done={done.documents}
+        tourState={stateOf("documents")}
       />
 
       {readyToSubmit && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[14px] border border-border bg-card p-4 shadow-sm">
+        <div
+          className="flex flex-wrap items-center justify-between gap-3 rounded-[14px] border border-border bg-card p-4 shadow-sm"
+          data-usertour="nexttap-submit"
+        >
           <div className="space-y-0.5">
             <p className="text-sm font-medium">Everything&rsquo;s filled in</p>
             <p className="text-xs text-muted-foreground">
@@ -456,7 +489,11 @@ export function NexxtapOnboardingScreen() {
                 : "Submit to NextTap — they verify the details and documents above."}
             </p>
           </div>
-          <Button onClick={submit} disabled={submitting}>
+          <Button
+            onClick={submit}
+            disabled={submitting}
+            data-usertour="nexttap-submit-button"
+          >
             {submitting
               ? meta.submitted
                 ? "Updating…"
@@ -511,7 +548,7 @@ const SUMMARY_GROUP =
 /** A card's way into its step, with a "Done" badge once the step is answered. */
 function SummaryAction({ href, done }: { href: string; done: boolean }) {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-2" data-usertour="nexttap-card-action">
       {done && (
         <Badge variant="success" className="gap-1">
           <CheckCircle2 className="size-3" aria-hidden />
@@ -542,6 +579,8 @@ function SummaryCard({
   description,
   href,
   done,
+  tourId,
+  tourState,
   children,
 }: {
   icon: React.ComponentProps<typeof FormSection>["icon"];
@@ -549,12 +588,16 @@ function SummaryCard({
   description: string;
   href: string;
   done: boolean;
+  tourId?: string;
+  tourState?: string;
   children: React.ReactNode;
 }) {
   return (
     <FormSection
       icon={icon}
       title={title}
+      tourId={tourId}
+      tourState={tourState}
       description={description}
       headerClassName={SUMMARY_HEADER}
       className="space-y-3 p-4"
@@ -605,10 +648,12 @@ function DocumentsCard({
   state,
   documents,
   done,
+  tourState,
 }: {
   state: NexxtapOnboarding;
   documents: NexxtapUploadedDocument[];
   done: boolean;
+  tourState?: string;
 }) {
   const required = requiredDocumentSlots(hasTrust(state.activity));
   const slots = NEXXTAP_DOCUMENT_SLOTS.filter((slot) =>
@@ -621,6 +666,8 @@ function DocumentsCard({
     <FormSection
       icon={FileText}
       title="Documents"
+      tourId="nexttap-section-documents"
+      tourState={tourState}
       description="The paperwork that verifies everything above."
       headerClassName={SUMMARY_HEADER}
       action={

@@ -1,10 +1,13 @@
 "use client";
 
-import { Check, Play, Sparkles } from "lucide-react";
+import Link from "next/link";
+import { Check, Lock, LockOpen, Play, Sparkles } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { addonPrice, type Addon } from "@/lib/addons";
+import type { AddonBilledPrice } from "@/lib/addon-entitlements";
+import { addonPrice, addonSoldBySeat, type Addon } from "@/lib/addons";
+import { SUBSCRIPTION_SETTINGS_PATH } from "@/lib/subscription";
 import { cn } from "@/lib/utils";
 
 /**
@@ -17,17 +20,29 @@ import { cn } from "@/lib/utils";
  */
 export function AddonOverview({
   addon,
+  price,
+  recommended,
   added,
+  included,
   selected,
   onToggleSelect,
   onRemove,
+  onNavigate,
 }: {
   addon: Addon;
+  /** As charged, from the price list — the same figure the rail shows beside it. */
+  price: AddonBilledPrice;
+  /** Tagged for the active business's industry. */
+  recommended: boolean;
   added: boolean;
+  /** Unlocked by the package, not bought as an add-on — nothing to remove. */
+  included: boolean;
   /** In the cart: chosen, not yet paid for. Meaningless once `added`. */
   selected: boolean;
   onToggleSelect: () => void;
   onRemove: () => void;
+  /** Closes whatever this sits in on the way to a page. */
+  onNavigate: () => void;
 }) {
   const Icon = addon.icon;
 
@@ -56,12 +71,13 @@ export function AddonOverview({
             </h2>
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="secondary" className="font-medium tabular">
-                {addonPrice(addon)}
+                {addonPrice(addon, price.amount, price.interval)}
               </Badge>
-              {added && (
+              {recommended && <AddonRecommendedBadge />}
+              {(added || included) && (
                 <Badge variant="success" className="gap-1">
                   <Check className="size-3" aria-hidden />
-                  Added
+                  {added ? "Added" : "Unlocked"}
                 </Badge>
               )}
             </div>
@@ -69,7 +85,21 @@ export function AddonOverview({
         </div>
 
         <div className="flex shrink-0 flex-col items-end gap-1.5">
-          {added ? (
+          {included ? (
+            <Button variant="outline" disabled className="min-w-[9rem]">
+              <LockOpen aria-hidden />
+              {addonSoldBySeat(addon) ? "Seats active" : "Included in your plan"}
+            </Button>
+          ) : addonSoldBySeat(addon) ? (
+            // Seats need a count and an interval — the seat picker's job, not
+            // a cart toggle's. See `addonSoldBySeat`.
+            <Button asChild className="min-w-[9rem]">
+              <Link href={SUBSCRIPTION_SETTINGS_PATH} onClick={onNavigate}>
+                <Lock aria-hidden />
+                Enable payroll
+              </Link>
+            </Button>
+          ) : added ? (
             <>
               <Button variant="outline" disabled className="min-w-[9rem]">
                 <Check aria-hidden />
@@ -114,7 +144,7 @@ export function AddonOverview({
 
       {/* Everything below the header scrolls, and only this. */}
       <div className="min-h-0 flex-1 space-y-6 overflow-y-auto p-5 sm:p-6">
-        <VideoPoster subject={addon.video} />
+        <VideoPoster subject={addon.video} url={addon.videoUrl} />
 
         <div className="grid gap-3 sm:grid-cols-3">
           {addon.benefits.map((benefit) => (
@@ -159,6 +189,22 @@ export function AddonOverview({
   );
 }
 
+/** "Recommended for your industry" — an add-on tagged for the business's industry. */
+export function AddonRecommendedBadge({ className }: { className?: string }) {
+  return (
+    <Badge
+      variant="outline"
+      className={cn(
+        "gap-1 border-transparent bg-primary/10 font-medium text-primary",
+        className,
+      )}
+    >
+      <Sparkles className="size-3" aria-hidden />
+      Recommended for your industry
+    </Badge>
+  );
+}
+
 function Section({ title, body }: { title: string; body: string }) {
   return (
     <section className="space-y-1.5">
@@ -168,22 +214,38 @@ function Section({ title, body }: { title: string; body: string }) {
   );
 }
 
+/** Only a web link opens — a stored `javascript:` or `data:` URL must not. */
+function safeVideoUrl(url: string | undefined): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" || parsed.protocol === "http:"
+      ? parsed.href
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * The video that isn't there yet.
+ * The explainer video's poster.
  *
- * A gradient poster and a play glyph rather than an embed: it's honest about
- * being a placeholder while still holding the space the real thing will take,
- * so the panel doesn't reflow the day a video lands. Not a button — there's
- * nothing to press — so it isn't in the tab order pretending otherwise.
+ * A gradient poster and a play glyph rather than an embed, so the panel doesn't
+ * reflow whether or not a video has landed. With a `video_url` from the
+ * catalogue it's a link that opens the video in a new tab; without one it's the
+ * placeholder, and not a button — there's nothing to press — so it isn't in the
+ * tab order pretending otherwise.
  */
-function VideoPoster({ subject }: { subject: string }) {
-  return (
-    <div
-      className={cn(
-        "relative flex aspect-video w-full items-end overflow-hidden rounded-xl",
-        "bg-gradient-to-br from-primary via-primary to-[#3730A3]",
-      )}
-    >
+function VideoPoster({ subject, url }: { subject: string; url?: string }) {
+  const href = safeVideoUrl(url);
+  const className = cn(
+    "relative flex aspect-video w-full items-end overflow-hidden rounded-xl",
+    "bg-gradient-to-br from-primary via-primary to-[#3730A3]",
+    href &&
+      "outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+  );
+  const body = (
+    <>
       <div
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.22),transparent_60%)]"
         aria-hidden
@@ -198,6 +260,14 @@ function VideoPoster({ subject }: { subject: string }) {
         <Sparkles className="size-4 shrink-0" aria-hidden />
         Watch: {subject} in 90 seconds
       </p>
-    </div>
+    </>
+  );
+
+  return href ? (
+    <a href={href} target="_blank" rel="noopener noreferrer" className={className}>
+      {body}
+    </a>
+  ) : (
+    <div className={className}>{body}</div>
   );
 }

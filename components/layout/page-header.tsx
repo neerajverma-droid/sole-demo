@@ -16,6 +16,7 @@ export function PageHeader({
   titleTip,
   description,
   iconTone = "bg-primary/10 text-primary",
+  tourId,
   children,
 }: {
   icon: LucideIcon;
@@ -28,11 +29,21 @@ export function PageHeader({
    * belongs on the icon, never on the figures.
    */
   iconTone?: string;
+  /**
+   * `data-tour` for the header, for a tour to open on — the same prop
+   * `FormSection` and `FilterPills` take. It renders on first paint, before
+   * any of the screen's data, so a tour anchored here starts straight away
+   * rather than waiting on an API.
+   */
+  tourId?: string;
   /** The screen's actions, right-aligned. */
   children?: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-wrap items-start justify-between gap-4">
+    <div
+      className="flex flex-wrap items-start justify-between gap-4"
+      data-tour={tourId}
+    >
       <div className="flex min-w-0 items-center gap-3">
         <span
           className={cn(

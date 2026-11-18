@@ -840,7 +840,9 @@ export function planCommitted(plan: Pick<ExpensePlan, "lines">): number {
  * which the variance figure shows as a negative and this deliberately doesn't.
  */
 export function planGap(plan: Pick<ExpensePlan, "lines">): number {
-  return Math.max(0, planCost(plan) - planActualTotal(plan));
+  // Per line: one overspent line mustn't cancel out budget still unspent on
+  // another, or the plan reads as fully paid for when it isn't.
+  return plan.lines.reduce((sum, line) => sum + Math.max(0, lineVariance(line)), 0);
 }
 
 /**
@@ -881,23 +883,33 @@ export function planDurationMonths(
 }
 
 /**
- * Return on the plan, annualised: the expected revenue net of the planned cost
- * as a percentage of that cost, scaled from the plan's own duration up to a
- * year. A six-month plan returning 10% is a 20% p.a. plan, and that's the
- * figure the ROI column quotes.
+ * What the return is measured against: the planned cost, or what's actually
+ * been spent if that's more. An overspent plan has cost more than it said, and
+ * a plan part-way through spending hasn't cost less.
+ */
+export function planCostBasis(plan: Pick<ExpensePlan, "lines">): number {
+  return Math.max(planCost(plan), planActualTotal(plan));
+}
+
+/**
+ * Return on the plan: the expected revenue net of its cost, as a percentage of
+ * that cost.
+ *
+ * Deliberately not scaled up to a year. A cost is paid once, so multiplying a
+ * short plan's result by twelve over its length treats it as recurring, and a
+ * loss can then come out beyond -100% — more than was ever put in, which isn't
+ * possible when revenue can't be negative. The floor is that same limit.
  *
  * Null without a cost or without a revenue figure — a return on nothing isn't a
  * percentage.
  */
 export function planRoi(
-  plan: Pick<ExpensePlan, "lines" | "expectedRevenue" | "startDate" | "endDate">,
+  plan: Pick<ExpensePlan, "lines" | "expectedRevenue">,
 ): number | null {
-  const cost = planCost(plan);
+  const cost = planCostBasis(plan);
   const revenue = planExpectedRevenue(plan);
   if (revenue === null || cost <= 0) return null;
-  const raw = ((revenue - cost) / cost) * 100;
-  const months = planDurationMonths(plan);
-  return raw * (months ? 12 / months : 1);
+  return Math.max(((revenue - cost) / cost) * 100, -100);
 }
 
 /**
@@ -911,7 +923,7 @@ export function planPaybackMonths(
   const revenue = planExpectedRevenue(plan);
   const months = planDurationMonths(plan);
   if (revenue === null || revenue <= 0 || !months) return null;
-  return planCost(plan) / (revenue / months);
+  return planCostBasis(plan) / (revenue / months);
 }
 
 export function formatPayback(
@@ -984,6 +996,11 @@ export function totalGoalAllocations(goals: Goal[]): number {
   return goals.reduce((sum, goal) => sum + goalAllocated(goal), 0);
 }
 
+/**
+ * Cash still reserved for plans: the unspent part of each budget, as the API's
+ * `committed_to_plans` reads. What's been spent is already out of the bank
+ * balance, so taking it off available cash again would count it twice.
+ */
 export function totalCommitted(plans: ExpensePlan[]): number {
   return plans.reduce((sum, plan) => sum + planCommitted(plan), 0);
 }

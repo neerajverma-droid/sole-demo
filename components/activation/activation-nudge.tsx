@@ -17,7 +17,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { track } from "@/lib/analytics";
 import { firstRunOverlayOpenAtom } from "@/lib/atoms";
 import {
   FALLBACK_JOURNEY,
@@ -109,14 +108,6 @@ export function ActivationNudge() {
 
   const [modalOpen, setModalOpen] = React.useState(false);
 
-  /*
-   * A CTA press closes the modal too, and it isn't a dismissal.
-   *
-   * Radix fires `onOpenChange(false)` either way, so the two have to be told
-   * apart by something outside it. Someone who pressed "Send" and then didn't
-   * finish hasn't refused the nudge — they tried it.
-   */
-  const closingViaCta = React.useRef(false);
 
   /* ---------------------------------------------------------------- *
    * Whether anything shows at all
@@ -179,60 +170,18 @@ export function ActivationNudge() {
     setModalOpen(true);
   }, [tier, modalSeen]);
 
-  /* ---------------------------------------------------------------- *
-   * What gets reported
-   * ---------------------------------------------------------------- */
-
   const journey = journeyById(journeyId ?? FALLBACK_JOURNEY);
   const primary = journey.firstRun.primary;
 
-  /** Every event carries the same three, so the funnel can be cut by any. */
-  const eventProps = React.useMemo(
-    () => ({
-      tier: tier ?? 0,
-      journey: journey.id,
-      daysSinceOnboarding: days ?? 0,
-    }),
-    [tier, journey.id, days],
-  );
-
-  /*
-   * Shown once per surface, not once per render.
-   *
-   * Latched on the tier rather than on a boolean, so a re-render — a route
-   * change under the same mount, a store write elsewhere — can't report the
-   * same nudge twice. The clock is read once on mount, so a tab left open
-   * across midnight keeps yesterday's tier until it's reloaded; that's the
-   * right trade for a surface whose whole job is to interrupt rarely.
-   */
-  const shownFor = React.useRef<Tier | null>(null);
-  const showing = bannerVisible ? tier : modalOpen ? tier : null;
-
-  React.useEffect(() => {
-    if (showing === null || shownFor.current === showing) return;
-    shownFor.current = showing;
-    track("activation_nudge_shown", eventProps);
-  }, [showing, eventProps]);
-
   const onDismissBanner = () => {
-    track("activation_nudge_dismissed", eventProps);
     dismissBanner(new Date().toISOString());
   };
 
   const onModalOpenChange = (open: boolean) => {
     setModalOpen(open);
-    if (open) return;
-    // The X and a click outside both land here; a CTA press is excused by the
-    // latch it sets on its way past.
-    if (closingViaCta.current) {
-      closingViaCta.current = false;
-      return;
-    }
-    track("activation_nudge_dismissed", eventProps);
   };
 
-  const onCta = (cta: "primary" | "book_call") => {
-    track("activation_nudge_cta_clicked", { ...eventProps, cta });
+  const onCta = () => {
     /*
      * First value is deliberately *not* marked here. Someone who presses this
      * and doesn't finish is still stalled, and the nudge has to survive the
@@ -242,7 +191,6 @@ export function ActivationNudge() {
      * that first value happened from the editor that saved the document,
      * rather than one guessing from a click and the other not guessing at all.
      */
-    closingViaCta.current = true;
     setModalOpen(false);
   };
 

@@ -35,6 +35,7 @@ export function TopBar() {
       <button
         type="button"
         onClick={() => setCommandOpen(true)}
+        data-usertour="app-search"
         className="flex h-9 w-full max-w-[340px] items-center gap-2 rounded-md border bg-muted/50 px-3 text-sm text-muted-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       >
         <Search className="size-4 shrink-0" aria-hidden />

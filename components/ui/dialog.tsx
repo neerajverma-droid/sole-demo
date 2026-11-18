@@ -4,6 +4,7 @@ import * as React from "react"
 import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { X } from "lucide-react"
 
+import { keepOpenForTour } from "@/components/usertour/keep-open-for-tour"
 import { cn } from "@/lib/utils"
 
 const Dialog = DialogPrimitive.Root
@@ -38,7 +39,7 @@ const DialogContent = React.forwardRef<
      */
     hideClose?: boolean
   }
->(({ className, children, hideClose, ...props }, ref) => (
+>(({ className, children, hideClose, onInteractOutside, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay />
     <DialogPrimitive.Content
@@ -49,6 +50,12 @@ const DialogContent = React.forwardRef<
         "fixed left-1/2 top-1/2 z-50 grid w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-lg border bg-background p-6 shadow-lg data-[state=open]:animate-pop data-[state=closed]:animate-unpop",
         className
       )}
+      // A tour's dimming curtain lives outside the dialog; a press on it must
+      // not read as a click away.
+      onInteractOutside={(event) => {
+        keepOpenForTour(event)
+        onInteractOutside?.(event)
+      }}
       {...props}
     >
       {children}

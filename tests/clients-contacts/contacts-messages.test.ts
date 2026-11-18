@@ -111,7 +111,7 @@ describe("contactSchema error copy", () => {
     });
   });
 
-  it("refuses additional people on an Individual with one array-level message, skipping per-row checks", () => {
+  it("checks additional people on an Individual per row, same as a Business", () => {
     expect(
       issues(
         formValues({
@@ -120,7 +120,11 @@ describe("contactSchema error copy", () => {
           additionalContacts: [person({ personName: "", email: "bad", phone: "1" })],
         }),
       ),
-    ).toEqual({ additionalContacts: "An individual can only have one contact person." });
+    ).toEqual({
+      "additionalContacts.0.personName": "Enter the contact name (at least 2 characters).",
+      "additionalContacts.0.email": "Enter a valid email address.",
+      "additionalContacts.0.phone": "Enter a valid +61 phone number (9 digits).",
+    });
   });
 
   it("puts each additional person's message at its own indexed path, using that row's country", () => {

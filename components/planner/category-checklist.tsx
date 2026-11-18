@@ -24,10 +24,13 @@ export function CategoryChecklist({
   onChange,
   placeholder = "Search categories",
   invalid,
+  onTouched,
 }: {
   options: readonly string[];
   selected: string[];
   onChange: (next: string[]) => void;
+  /** Focus left the whole picker — not just moved between its own controls. */
+  onTouched?: () => void;
   placeholder?: string;
   /** Draws the error border, matching the platform's other invalid controls. */
   invalid?: boolean;
@@ -56,7 +59,14 @@ export function CategoryChecklist({
     );
 
   return (
-    <div className="space-y-2">
+    <div
+      className="space-y-2"
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          onTouched?.();
+        }
+      }}
+    >
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative min-w-0 flex-1">
           <Search

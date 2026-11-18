@@ -195,6 +195,8 @@ describe("contacts", () => {
 describe("invoices", () => {
   const base = {
     "Client name": "Williams Health",
+    "Client email": "accounts@williams.example",
+    "Mark as": "Draft",
     "Sub total": "1200",
     "Total GST": "120",
   };

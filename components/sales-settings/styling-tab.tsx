@@ -154,7 +154,7 @@ export function StylingTab({
 
   return (
     <div className="space-y-4">
-      {groups.map((entry) => {
+      {groups.map((entry, groupIndex) => {
         const groupTemplates = templatesFor(templates, entry.group, kind.toLowerCase() as "invoice" | "quote");
         const selected = selectedId(entry.group);
 
@@ -163,6 +163,7 @@ export function StylingTab({
             key={entry.label}
             icon={LayoutTemplate}
             title={entry.label}
+            tourId={groupIndex === 0 ? "sales-styles" : undefined}
             description={
               loading
                 ? "Loading templates…"
@@ -262,6 +263,7 @@ function StyleCard({
 }) {
   return (
     <div
+      data-tour={active ? "sales-style-selected" : undefined}
       className={cn(
         "space-y-3 rounded-lg border p-3 shadow-sm transition-colors",
         active ? "border-primary/40 bg-primary/[0.02]" : "border-border bg-card",

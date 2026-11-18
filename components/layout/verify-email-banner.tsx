@@ -8,9 +8,10 @@ import { useSession } from "@/components/auth/session-provider";
 
 /**
  * Strip for an account that signed in without ever confirming its address —
- * same shape as `TrialBanner`, stacked above it. Visiting `/auth/verify-email`
- * with the address on the URL sends a fresh code straight away, the same path
- * an unverified password sign-in lands on.
+ * same shape as `TrialBanner`, stacked above it. `send=1` tells
+ * `/auth/verify-email` that nothing has been emailed yet, so it sends a fresh
+ * verification link on arrival — an unverified password sign-in lands there
+ * too, but the backend has already sent its link by then.
  */
 export function VerifyEmailBanner() {
   const { user } = useSession();
@@ -29,7 +30,7 @@ export function VerifyEmailBanner() {
         Please verify your email address to keep full access to your account.
       </p>
       <Button size="sm" asChild className="shrink-0">
-        <Link href={`/auth/verify-email?email=${encodeURIComponent(email)}`}>
+        <Link href={`/auth/verify-email?email=${encodeURIComponent(email)}&send=1`}>
           Verify email
         </Link>
       </Button>

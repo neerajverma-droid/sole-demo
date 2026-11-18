@@ -17,12 +17,15 @@ import { cn } from "@/lib/utils";
 import { useCaptureStore } from "@/stores/capture";
 import { useCountryContext } from "@/hooks/use-country-context";
 import { taxWord } from "@/lib/country-context";
+import { EVENTS } from "@/lib/analytics-events";
+import { useTrackOnce } from "@/hooks/use-track-once";
 
 /**
  * Same two-tier chooser as Create invoice, with only the first tier — an
  * inline page, never a modal.
  */
 export function CreateExpenseChooser() {
+  useTrackOnce(EVENTS.ADD_EXPENSE_INITIATED);
   const router = useRouter();
   const captureRef = React.useRef<DocumentCaptureHandle>(null);
   const setCapturedExpense = useCaptureStore((state) => state.setExpense);
@@ -99,7 +102,8 @@ export function CreateExpenseChooser() {
   );
 }
 
-function MethodCard({
+/** Also the Add bill chooser's cards. */
+export function MethodCard({
   href,
   title,
   tag,

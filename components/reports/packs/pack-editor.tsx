@@ -63,6 +63,7 @@ import {
   useSendPack,
   useUploadAttachment,
 } from "@/hooks/use-report-packs";
+import { useFiscalYearStart } from "@/hooks/use-fiscal-year-start";
 import { apiErrorMessage } from "@/lib/api-error";
 import { sendReportOpenAtom } from "@/lib/atoms";
 import {
@@ -131,6 +132,7 @@ export function PackEditor({
   const router = useRouter();
   const templates = usePackTemplates();
   const generate = useGeneratePack();
+  const fiscalYearStart = useFiscalYearStart();
   const download = useOpenPackDownload();
   const changeStatus = useChangePackStatus();
   const duplicate = useDuplicatePack();
@@ -183,7 +185,7 @@ export function PackEditor({
       set("period_preset", null);
       return;
     }
-    const range = presetRange(next);
+    const range = presetRange(next, fiscalYearStart);
     updateDraft((current) => ({
       ...current,
       period_preset: next,

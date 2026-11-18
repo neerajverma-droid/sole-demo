@@ -10,6 +10,7 @@
  */
 import * as React from "react";
 import { useAtom } from "jotai";
+import { usePathname } from "next/navigation";
 import { MessageCircle, Paperclip, Send, X } from "lucide-react";
 import { toast } from "sonner";
 
@@ -42,6 +43,53 @@ const DEFAULT_POSITION = { x: 24, y: 24 };
 const DRAG_MARGIN = 12;
 const TEXTAREA_MAX_HEIGHT = 96;
 
+/** Anything a person can press or type into — what the launcher steps aside for. */
+const INTERACTIVE_SELECTOR =
+  'button, a[href], input:not([type="hidden"]), select, textarea, [role="button"], [role="link"], [tabindex]:not([tabindex="-1"])';
+/** How often to look again, for controls that mount without a scroll or resize (a save bar appearing). */
+const COVERAGE_POLL_MS = 600;
+
+/**
+ * Whether a real control sits anywhere under the launcher — sole-webapp's
+ * `checkCoverage`. The bottom-right corner is where screens put their Save,
+ * Create or Send, sometimes in a sticky bar and sometimes just at the end of
+ * the form, and the launcher was painted over them. Nine points across its
+ * box go through `elementsFromPoint`, which returns the whole stack at each
+ * pixel whoever is on top, so a control under the launcher still shows up.
+ */
+function coversControl(launcher: HTMLElement, widget: HTMLElement): boolean {
+  const rect = launcher.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) return false;
+
+  const inset = 4;
+  const midX = (rect.left + rect.right) / 2;
+  const midY = (rect.top + rect.bottom) / 2;
+  const points = [
+    [rect.left + inset, rect.top + inset],
+    [rect.right - inset, rect.top + inset],
+    [rect.left + inset, rect.bottom - inset],
+    [rect.right - inset, rect.bottom - inset],
+    [midX, rect.top + inset],
+    [midX, rect.bottom - inset],
+    [rect.left + inset, midY],
+    [rect.right - inset, midY],
+    [midX, midY],
+  ];
+
+  return points.some(([x, y]) => {
+    if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) return false;
+    return document
+      .elementsFromPoint(x, y)
+      .some(
+        (el) =>
+          !widget.contains(el) &&
+          el !== document.documentElement &&
+          el !== document.body &&
+          el.closest(INTERACTIVE_SELECTOR) !== null,
+      );
+  });
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
@@ -51,7 +99,11 @@ function userInitialFrom(user: { first_name?: string; email?: string } | null): 
   return source[0]?.toUpperCase() ?? "U";
 }
 
+/** Pages where the floating button would sit over the page's own controls. */
+const HIDDEN_ON_PATHS = ["/sales/settings"];
+
 export function SupportChat() {
+  const pathname = usePathname();
   const { user } = useSession();
   const { on } = useSSE();
 
@@ -76,6 +128,8 @@ export function SupportChat() {
   const [position, setPosition] = React.useState(DEFAULT_POSITION);
   const [isDragging, setIsDragging] = React.useState(false);
   const wrapperRef = React.useRef<HTMLDivElement>(null);
+  const launcherRef = React.useRef<HTMLButtonElement>(null);
+  const [isCovered, setIsCovered] = React.useState(false);
   const dragStartRef = React.useRef<{ offsetX: number; offsetY: number } | null>(null);
   const hasDraggedRef = React.useRef(false);
 
@@ -402,12 +456,42 @@ export function SupportChat() {
     };
   }, [isDragging, handleDragMove]);
 
+  /*
+   * Steps the closed launcher out of the way of whatever it's sitting on —
+   * see `coversControl`. It fades back once the page scrolls the control
+   * clear, and an open panel always stays.
+   */
+  React.useEffect(() => {
+    if (typeof document.elementsFromPoint !== "function") return;
+    const check = () => {
+      const launcher = launcherRef.current;
+      const widget = wrapperRef.current;
+      if (launcher && widget) setIsCovered(coversControl(launcher, widget));
+    };
+    check();
+    window.addEventListener("scroll", check, true);
+    window.addEventListener("resize", check);
+    const interval = window.setInterval(check, COVERAGE_POLL_MS);
+    return () => {
+      window.removeEventListener("scroll", check, true);
+      window.removeEventListener("resize", check);
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  // Never mid-drag: the launcher is in the person's hand, wherever it is.
+  const stepAside = !open && !isDragging && isCovered;
+
   const userInitial = userInitialFrom(user);
+
+  // After every hook above, so the rules of hooks hold; the chat's listeners
+  // keep running, only the launcher and its window are left out.
+  if (HIDDEN_ON_PATHS.some((path) => pathname?.startsWith(path))) return null;
 
   return (
     <div
       ref={wrapperRef}
-      className="fixed z-[45] select-none"
+      className={cn("fixed z-[45] select-none", stepAside && "pointer-events-none")}
       style={{ right: `${position.x}px`, bottom: `${position.y}px` }}
       onMouseDown={(event) => {
         if (event.button !== 0) return;
@@ -605,21 +689,28 @@ export function SupportChat() {
       )}
 
       <button
+        ref={launcherRef}
         type="button"
         onClick={toggleOpen}
         aria-label={open ? "Close support chat" : "Open support chat"}
         aria-expanded={open}
+        // Out of the tab order while it's faded, so focus can't land on
+        // something invisible.
+        aria-hidden={stepAside || undefined}
+        tabIndex={stepAside ? -1 : undefined}
         className={cn(
           // Soft lit, like the portal's blue buttons (`ask-sole-lit`); the
           // float, glow and ping below are the launcher's own and unchanged.
           "ask-sole-lit relative z-10 flex items-center justify-center gap-1.5 rounded-full bg-primary text-white transition-all duration-300",
           !open ? "h-10 pl-3 pr-3.5" : "size-11",
           isDragging ? "scale-95 cursor-grabbing" : "cursor-pointer hover:scale-105 active:scale-95",
+          stepAside && "scale-90 opacity-0",
         )}
         style={{
           // A tighter shadow while it's being dragged; otherwise the class's.
           boxShadow: isDragging ? "0 4px 20px hsl(var(--primary) / 0.4)" : undefined,
-          animation: isDragging ? undefined : "soleFloat 3.2s ease-in-out infinite",
+          // The float animates transform too, which would hold the scale-down.
+          animation: isDragging || stepAside ? undefined : "soleFloat 3.2s ease-in-out infinite",
         }}
       >
         {!open && (

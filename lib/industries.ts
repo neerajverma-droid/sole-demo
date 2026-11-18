@@ -7,6 +7,7 @@
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
 import { NDIS_INDUSTRY } from "@/lib/settings";
+import { hasFeature, type CountryContext } from "@/lib/country-context";
 
 export type IndustryOption = { id: string; name: string };
 
@@ -52,4 +53,21 @@ export async function fetchIndustries(): Promise<IndustryOption[]> {
       name: entry.name || entry.title || "Industry",
     })),
   );
+}
+
+/**
+ * The list a picker offers, minus NDIS for a country whose registry doesn't
+ * turn it on — a super admin's `ndis` feature flag, the same one that 404s
+ * the NDIS routes server-side, rather than a second opinion hardcoded here.
+ *
+ * Only filters the picker: resolving an existing business's `industryId`
+ * against the raw list (e.g. `useActiveBusinessIndustry`) must keep working
+ * even if the flag is later switched off under it.
+ */
+export function industriesForCountry(
+  industries: IndustryOption[],
+  ctx: CountryContext,
+): IndustryOption[] {
+  if (hasFeature(ctx, "ndis")) return industries;
+  return industries.filter((entry) => entry.name !== NDIS_INDUSTRY);
 }

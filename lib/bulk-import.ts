@@ -15,12 +15,32 @@
  */
 import { autoMapColumns, csvRow } from "@/lib/file-parser";
 import { FALLBACK_CONTACT_FORM, type FormField } from "@/lib/country-forms";
+import type { AiFormatType } from "@/lib/ai-format";
 import type { MigrationStepId } from "@/lib/migrations";
 
 /** How a field is edited in the Review table, when it's shown there at all. */
 export type BulkFieldEditor =
   | { kind: "text"; inputMode?: "text" | "tel" | "decimal" | "email" }
-  | { kind: "select"; options: readonly string[]; placeholder?: string };
+  | { kind: "select"; options: readonly string[]; placeholder?: string }
+  | {
+      /**
+       * A searchable pick from records with an id — the chart of accounts. The
+       * row holds the *id* (what the backend wants, and what the AI formatter
+       * answers with); the cell and the error CSV show the name.
+       */
+      kind: "choice";
+      options: readonly BulkChoice[];
+      placeholder?: string;
+      /**
+       * Turns what a file carried into an id, for rows that didn't come through
+       * the AI formatter (its fallback is a plain parse, so the cell holds
+       * whatever the file said). Without it only an id or an exact name matches.
+       */
+      resolve?: (raw: string) => string;
+    };
+
+/** One option of a `choice` editor. */
+export type BulkChoice = { value: string; label: string };
 
 export type BulkField = {
   /**
@@ -49,12 +69,36 @@ export type BulkField = {
    * still import — they're carried, just not shown, because a table with
    * twenty columns is a table nobody reads.
    */
-  review?: { heading: string; editor: BulkFieldEditor; mono?: boolean };
+  review?: {
+    heading: string;
+    editor: BulkFieldEditor;
+    mono?: boolean;
+    /**
+     * A Tailwind min-width class for the column while its row is being edited
+     * ("min-w-40"). Editors fill their cell, so without it a narrow column
+     * clips what's typed — a date or an amount cut off mid-value.
+     */
+    editWidth?: string;
+    /**
+     * What an empty cell says, instead of a dash — "auto" for an invoice
+     * number the server will generate. Also the editor's placeholder, so a
+     * blank there isn't read as a missing value.
+     */
+    empty?: string;
+  };
 };
 
 /** One way a row can be wrong. `summary` is the plural phrasing for the group. */
 export type BulkIssue = {
   message: string;
+  /**
+   * What the field's own cell says about it — "Required", "Use DD/MM/YYYY".
+   * Short, because it sits under a value in a narrow table column; `message`
+   * is the full sentence for the summary and the error CSV.
+   */
+  hint?: string;
+  /** The label of the field at fault, so Review can mark its cell. */
+  field?: string;
   summary: string;
   test: (values: BulkValues) => boolean;
 };
@@ -85,8 +129,14 @@ export type BulkImportSpec = {
   /** "invoice" / "invoices" — used throughout the copy. */
   noun: string;
   nounPlural: string;
-  /** Which Data Migration Center step a finished import ticks off. */
-  migrationStep: MigrationStepId;
+  /**
+   * Which Data Migration Center step a finished import ticks off. Absent for an
+   * importer that isn't one of the five steps (Products & services), which then
+   * names itself to the AI formatter through `aiType`.
+   */
+  migrationStep?: MigrationStepId;
+  /** What the AI formatter is told this file is, where `migrationStep` isn't it. */
+  aiType?: AiFormatType;
   fields: readonly BulkField[];
   /** The template's columns, in order — a subset of the field labels. */
   templateColumns: readonly string[];
@@ -120,6 +170,68 @@ export function labelDisplay(spec: BulkImportSpec, label: string): string {
 /** Only the fields that get a column in the Review table, in order. */
 export function reviewFields(spec: BulkImportSpec): BulkField[] {
   return spec.fields.filter((field) => field.review);
+}
+
+/** A `choice` value's id, from an id, a name or — via `resolve` — whatever the file said. "" when it's none of them. */
+function resolveChoice(
+  editor: Extract<BulkFieldEditor, { kind: "choice" }>,
+  raw: string,
+): string {
+  const text = raw.trim();
+  if (!text) return "";
+  const resolved = editor.resolve?.(text);
+  if (resolved !== undefined) return resolved;
+  const needle = text.toLowerCase();
+  const match = editor.options.find(
+    (option) => option.value === text || option.label.toLowerCase() === needle,
+  );
+  return match ? match.value : "";
+}
+
+/**
+ * What a cell reads as on screen and in the error CSV: a `choice` field's
+ * name rather than its id, everything else as it is. An id the options don't
+ * know is shown as typed — better a raw value than a blank that hides it.
+ */
+export function bulkCellText(
+  spec: BulkImportSpec,
+  values: BulkValues,
+  label: string,
+): string {
+  const value = values[label] ?? "";
+  const editor = spec.fields.find((field) => field.label === label)?.review?.editor;
+  if (editor?.kind !== "choice") return value;
+  return editor.options.find((option) => option.value === value)?.label ?? value;
+}
+
+/**
+ * The value an editor opens with. A select or choice whose value isn't one of
+ * its options would render blank and then silently write that blank back on
+ * save, so an unrecognised value becomes "" up front and the placeholder
+ * shows. A Yes/No select still accepts the other spellings a sheet carries
+ * ("TRUE", "paid", "0") — they pass validation, so opening Edit on such a row
+ * must not turn them into an error.
+ */
+export function bulkEditorSeed(field: BulkField, raw: string): string {
+  const editor = field.review?.editor;
+  const value = raw ?? "";
+  if (editor?.kind === "choice") {
+    return editor.options.some((option) => option.value === value) ? value : "";
+  }
+  if (editor?.kind !== "select") return value;
+
+  const exact = editor.options.find(
+    (option) => option.toLowerCase() === value.trim().toLowerCase(),
+  );
+  if (exact) return exact;
+
+  const yes = editor.options.find((option) => option.toLowerCase() === "yes");
+  const no = editor.options.find((option) => option.toLowerCase() === "no");
+  if (yes && no && editor.options.length === 2) {
+    const flag = parseBulkBoolean(value);
+    if (flag !== null) return flag ? yes : no;
+  }
+  return "";
 }
 
 function aliasMap(spec: BulkImportSpec): Record<string, readonly string[]> {
@@ -222,13 +334,45 @@ export function buildBulkRows(
     const values: BulkValues = {};
     for (const field of spec.fields) {
       const column = sourceColumns.get(field.label);
-      values[field.label] = column ? (sheetRow[column]?.trim() ?? "") : "";
+      const raw = column ? (sheetRow[column]?.trim() ?? "") : "";
+      const editor = field.review?.editor;
+      values[field.label] = editor?.kind === "choice" ? resolveChoice(editor, raw) : raw;
     }
     return { index, values, issues: bulkRowIssues(spec, values) };
   });
 }
 
+/** The field labels a row's current issues point at. */
+export function bulkIssueFields(spec: BulkImportSpec, row: BulkRow): Set<string> {
+  const fields = new Set<string>();
+  for (const issue of spec.issues) {
+    if (issue.field && row.issues.includes(issue.message)) fields.add(issue.field);
+  }
+  return fields;
+}
+
+/**
+ * What each field of a row is wrong with, as the short text its cell shows —
+ * keyed by field label, only for fields that are wrong. A field with several
+ * problems gets the first, in the order the spec lists them, so the most basic
+ * one ("Required") reads before the finer ones.
+ */
+export function bulkFieldErrors(
+  spec: BulkImportSpec,
+  values: BulkValues,
+): Record<string, string> {
+  const errors: Record<string, string> = {};
+  for (const issue of spec.issues) {
+    if (issue.field && !errors[issue.field] && issue.test(values)) {
+      errors[issue.field] = issue.hint ?? issue.message;
+    }
+  }
+  return errors;
+}
+
 export type BulkIssueGroup = {
+  /** The field the group's rows are wrong in, where the issue names one. */
+  field?: string;
   message: string;
   /** e.g. "12 rows are missing a valid Date" */
   headline: string;
@@ -244,6 +388,7 @@ export function groupBulkIssues(
     .map((issue) => {
       const matching = rows.filter((row) => row.issues.includes(issue.message));
       return {
+        field: issue.field,
         message: issue.message,
         headline: `${matching.length} ${
           matching.length === 1 ? "row is" : "rows are"
@@ -277,7 +422,7 @@ export function bulkErrorRowsCsv(spec: BulkImportSpec, rows: BulkRow[]): string 
     csvRow([...spec.templateColumns.map((column) => labelDisplay(spec, column)), "Error"]),
     ...failing.map((row) =>
       csvRow([
-        ...spec.templateColumns.map((column) => row.values[column] ?? ""),
+        ...spec.templateColumns.map((column) => bulkCellText(spec, row.values, column)),
         row.issues.join("; "),
       ]),
     ),
@@ -300,12 +445,17 @@ export type BulkResultRow = {
   message?: string;
 };
 
-/** What an import reports back. `skipped` covers rows the server already had. */
+/**
+ * What an import reports back. `skipped` covers rows the server already had;
+ * `invalid` is the rows the wizard left out itself because they still had
+ * errors on Review — never sent, so nothing about them "already existed".
+ */
 export type BulkImportResult = {
   created: number;
   failed: number;
   skipped: number;
   rows?: BulkResultRow[];
+  invalid?: number;
 };
 
 /* ------------------------------------------------------------------ *

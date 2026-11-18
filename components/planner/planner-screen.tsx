@@ -10,22 +10,30 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   DeleteBudgetDialog,
+  DeleteGoalDialog,
   DeletePlanDialog,
 } from "@/components/planner/planner-dialogs";
 import { PLANNER_ROOT } from "@/components/planner/planner-detail";
+import {
+  usePlannerPageState,
+  usePlannerPaging,
+} from "@/components/planner/planner-pagination";
 import { PlannerBudgets } from "@/components/planner/planner-budgets";
+import { PlannerTabHeader } from "@/components/planner/planner-bulk";
 import { PlannerGoals } from "@/components/planner/planner-goals";
 import {
-  PlannerFirstStep,
   PlannerOverview,
 } from "@/components/planner/planner-overview";
 import { PlannerPlans } from "@/components/planner/planner-plans";
 import {
   useCashWalletQuery,
   usePlannerBankAccountsQuery,
+  usePlannerBudgetsPageQuery,
   usePlannerBudgetsQuery,
+  usePlannerGoalsPageQuery,
   usePlannerGoalsQuery,
   usePlannerOverviewQuery,
+  usePlannerPlansPageQuery,
   usePlannerPlansQuery,
 } from "@/hooks/use-planner-query";
 import { plannerHintSeenAtom, plannerTabAtom } from "@/lib/atoms";
@@ -70,13 +78,45 @@ export function PlannerScreen() {
 
   const today = toIsoDate(new Date());
 
+  /*
+   * What each table shows: one page of its list, asked of the server. The full
+   * lists above stay — the Overview and the detail pages read the whole list —
+   * but a table pages on its own, and only asks while its tab is open.
+   */
+  const goalsState = usePlannerPageState();
+  const goalsPage = usePlannerGoalsPageQuery(
+    goalsState.page,
+    goalsState.pageSize,
+    tab === "Goals",
+  );
+  const goalsPaging = usePlannerPaging(goalsState, goalsPage.data);
+
+  const budgetsState = usePlannerPageState();
+  const budgetsPage = usePlannerBudgetsPageQuery(
+    budgetsState.page,
+    budgetsState.pageSize,
+    tab === "Budget",
+  );
+  const budgetsPaging = usePlannerPaging(budgetsState, budgetsPage.data);
+
+  const plansState = usePlannerPageState();
+  const plansPage = usePlannerPlansPageQuery(
+    plansState.page,
+    plansState.pageSize,
+    tab === "Business planner",
+  );
+  const plansPaging = usePlannerPaging(plansState, plansPage.data);
+
   const goals = stored.goals;
   const budgets = stored.budgets;
   const plans = stored.plans;
 
-  const loadingGoals = goalsQuery.isLoading;
-  const loadingBudgets = budgetsQuery.isLoading;
-  const loadingPlans = plansQuery.isLoading;
+  // `isFetching`, not `isLoading`: a list that's reloading after a goal, budget
+  // or plan was saved has data, but it's the stale data — shimmering until the
+  // fetch lands is what shows the new record arriving.
+  const loadingGoals = goalsQuery.isFetching;
+  const loadingBudgets = budgetsQuery.isFetching;
+  const loadingPlans = plansQuery.isFetching;
   const loadingAny = loadingGoals || loadingBudgets || loadingPlans;
 
   // A failed fetch leaves its list empty too, but that's not "nothing yet" —
@@ -84,8 +124,8 @@ export function PlannerScreen() {
   const failedAny =
     goalsQuery.isError || budgetsQuery.isError || plansQuery.isError;
 
-  // An untouched planner: the header and the first step, nothing else — no
-  // tabs over sections that would each say "nothing here" in turn.
+  // An untouched planner. The tabs and overview stay, as on Invoices; the
+  // overview's goals card carries the first step in place of its list.
   const nothingYet =
     !loadingAny &&
     !failedAny &&
@@ -94,112 +134,167 @@ export function PlannerScreen() {
     plans.length === 0;
   const showHint = !seen && !nothingYet && !loadingAny;
 
+  /*
+   * The tiles read the server's roll-up, which carries every figure they show
+   * apart from cash on hand — so they wait for that, not for the goal, budget
+   * and plan lists, which only matter here as a fallback. Without the roll-up
+   * (it failed, or hasn't come back) the lists are what's left to count from.
+   */
+  const tilesLoading =
+    overviewQuery.isLoading || (!overviewQuery.data && loadingAny);
+
   return (
-    <div className="space-y-[15px]">
+    <div className="space-y-4">
       <PageHeader
         icon={Target}
         title="Business planner"
         description="Set savings goals, track category budgets, plan business expenses for ROI and payback, and spot funding gaps."
-      >
-        {/* Ranked, not three equal buttons: a goal is where a new planner
-            starts, so it's the only filled one. */}
-        <Button asChild data-usertour="planner-create-goal">
-          <Link href={`${PLANNER_ROOT}/goals/new`}>
-            <Plus />
-            Create goal
-          </Link>
-        </Button>
-        <Button variant="outline" asChild>
-          <Link href={`${PLANNER_ROOT}/plans/new`}>New expense plan</Link>
-        </Button>
-        <Button variant="outline" asChild data-usertour="planner-wallet">
-          <Link href={`${PLANNER_ROOT}/wallet`}>
-            <Wallet />
-            Cash wallet
-          </Link>
-        </Button>
-      </PageHeader>
+      />
 
       {/* The one-off explainer, after the first goal, budget or plan exists. */}
       {showHint && <PlannerHint onDismiss={() => setSeen(true)} />}
 
-      {nothingYet ? (
-        <PlannerFirstStep />
-      ) : (
-        <>
-          <Tabs value={tab} onValueChange={(next) => setTab(next as PlannerTab)}>
-            <TabsList aria-label="Planner sections" data-usertour="planner-tabs">
-              {PLANNER_TABS.map((option) => (
-                <TabsTrigger key={option} value={option}>
-                  {option}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
+      {/* The tabs on the left; the three actions on the right, on the same line. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Tabs value={tab} onValueChange={(next) => setTab(next as PlannerTab)}>
+          <TabsList aria-label="Planner sections" data-usertour="planner-tabs">
+            {PLANNER_TABS.map((option) => (
+              <TabsTrigger key={option} value={option}>
+                {option}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+        {/* One wrapper so the planner tours can highlight the three actions together. */}
+        <div
+          className="flex flex-wrap items-center gap-3"
+          data-usertour="planner-actions"
+        >
+          {/* Ranked, not three equal buttons: a goal is where a new planner
+              starts, so it's the only filled one. */}
+          <Button asChild data-usertour="planner-create-goal">
+            <Link href={`${PLANNER_ROOT}/goals/new`}>
+              <Plus />
+              Create goal
+            </Link>
+          </Button>
+          <Button variant="outline" asChild data-usertour="planner-new-plan">
+            <Link href={`${PLANNER_ROOT}/plans/new`}>New expense plan</Link>
+          </Button>
+          <Button variant="outline" asChild data-usertour="planner-wallet">
+            <Link href={`${PLANNER_ROOT}/wallet`}>
+              <Wallet />
+              Cash wallet
+            </Link>
+          </Button>
+        </div>
+      </div>
 
-          {tab === "Overview" && (
-            <PlannerOverview
-              goals={goals}
-              plans={plans}
-              wallet={wallet}
-              today={today}
-              banks={banksQuery.data ?? []}
-              overview={overviewQuery.data ?? null}
-              // The bank balances are part of cash on hand, so the tiles wait for
-              // them too — reporting "$0 on hand" while that request is still out
-              // states a figure the screen doesn't have yet.
-              loading={
-                loadingAny || overviewQuery.isLoading || banksQuery.isLoading
-              }
-            />
-          )}
-
-          {tab === "Goals" && (
-            <PlannerGoals goals={goals} today={today} loading={loadingGoals} />
-          )}
-
-          {tab === "Budget" && (
-            <div className="space-y-4">
-              {/* The header's actions aren't repeated here; this row is the tab's
-                  own New Budget, which the header doesn't carry. */}
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <p className="text-sm text-muted-foreground">
-                  Envelopes for recurring costs, tracked against your expenses.
-                </p>
-                {budgets.length > 0 && (
-                  <Button variant="outline" size="sm" asChild>
-                    <Link href={`${PLANNER_ROOT}/budgets/new`}>
-                      <Plus />
-                      New Budget
-                    </Link>
-                  </Button>
-                )}
-              </div>
-              <PlannerBudgets
-                budgets={budgets}
-                expenses={expenses}
-                today={today}
-                loading={loadingBudgets}
-              />
-            </div>
-          )}
-
-          {tab === "Business planner" && (
-            <div className="space-y-4">
-              <p className="text-sm text-muted-foreground">
-                Planned spending with the case for it — cost, actual activity, ROI
-                and payback.
-              </p>
-              <PlannerPlans plans={plans} loading={loadingPlans} />
-            </div>
-          )}
-        </>
+      {tab === "Overview" && (
+        <PlannerOverview
+          goals={goals}
+          plans={plans}
+          wallet={wallet}
+          today={today}
+          banks={banksQuery.data ?? []}
+          overview={overviewQuery.data ?? null}
+          loading={tilesLoading}
+          // The bank balances are part of cash on hand, so the available-cash
+          // tile alone waits for them — reporting "$0 on hand" while that
+          // request is out states a figure the screen doesn't have yet. The
+          // other tiles don't read them, so they aren't held up behind the
+          // slowest request on the page.
+          loadingBanks={banksQuery.isLoading}
+          banksFailed={banksQuery.isError}
+          firstStep={nothingYet}
+        />
       )}
 
-      {/* Budgets can be deleted from their card menu here, and from the detail
+      {/* The tab tours anchor on these wrappers, which render with or without
+          records; `data-usertour-loading` holds a tour until the list is in. */}
+      {tab === "Goals" && (
+        <div className="space-y-4">
+          <PlannerTabHeader
+            description="Savings you're setting aside, tracked against a target and a date."
+            action={
+              goals.length > 0
+                ? { label: "New Goal", href: `${PLANNER_ROOT}/goals/new` }
+                : undefined
+            }
+          />
+          <div
+            data-usertour="planner-goals"
+            data-usertour-loading={goalsPage.isFetching || undefined}
+          >
+            <PlannerGoals
+              goals={goalsPage.data?.rows ?? []}
+              today={today}
+              loading={goalsPage.isFetching}
+              paging={goalsPaging}
+            />
+          </div>
+        </div>
+      )}
+
+      {tab === "Budget" && (
+        <div className="space-y-4">
+          <PlannerTabHeader
+            description="Envelopes for recurring costs, tracked against your expenses."
+            action={
+              budgets.length > 0
+                ? {
+                    label: "New Budget",
+                    href: `${PLANNER_ROOT}/budgets/new`,
+                    usertour: "budget-new",
+                  }
+                : undefined
+            }
+          />
+          <div
+            data-usertour="planner-budgets"
+            data-usertour-loading={budgetsPage.isFetching || undefined}
+          >
+            <PlannerBudgets
+              budgets={budgetsPage.data?.rows ?? []}
+              expenses={expenses}
+              today={today}
+              loading={budgetsPage.isFetching}
+              paging={budgetsPaging}
+            />
+          </div>
+        </div>
+      )}
+
+      {tab === "Business planner" && (
+        <div className="space-y-4">
+          <PlannerTabHeader
+            description="Planned spending with the case for it — cost, actual activity, ROI and payback."
+            action={
+              plans.length > 0
+                ? { label: "New Plan", href: `${PLANNER_ROOT}/plans/new` }
+                : undefined
+            }
+          />
+          <div
+            data-usertour="planner-plans"
+            data-usertour-loading={plansPage.isFetching || undefined}
+          >
+            <PlannerPlans
+              plans={plansPage.data?.rows ?? []}
+              loading={plansPage.isFetching}
+              paging={plansPaging}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Goals can be deleted from their row here, and from the detail page,
+          which mounts its own copy — never both at once. */}
+      <DeleteGoalDialog />
+      {/* Budgets can be deleted from their row here, and from the detail
           page, which mounts its own copy — never both at once. */}
       <DeleteBudgetDialog />
-      {/* Plans can be deleted from their row menu here, and from the detail
+      {/* Plans can be deleted from their row here, and from the detail
           page, which mounts its own copy — never both at once. */}
       <DeletePlanDialog />
     </div>

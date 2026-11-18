@@ -1,6 +1,11 @@
+import type { Metadata } from "next";
 import { Suspense } from "react";
 
 import { TransactionsScreen } from "@/components/transactions/transactions-screen";
+
+export const metadata: Metadata = {
+  title: "Transactions · Sole",
+};
 
 /**
  * Suspense because the screen reads `?status=` — the deep link from the

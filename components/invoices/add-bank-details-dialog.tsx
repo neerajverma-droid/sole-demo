@@ -67,12 +67,17 @@ export function AddBankDetailsDialog({
   const [accountNumber, setAccountNumber] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const [submitted, setSubmitted] = React.useState(false);
+  // Fields the person has been in and left: their problems show straight away,
+  // rather than only after Save, so a typo is caught where it was made.
+  const [touched, setTouched] = React.useState<Record<string, boolean>>({});
+  const touch = (key: string) => setTouched((current) => ({ ...current, [key]: true }));
 
   const hydrated = React.useRef(false);
   React.useEffect(() => {
     if (!open) {
       hydrated.current = false;
       setSubmitted(false);
+      setTouched({});
       return;
     }
     if (hydrated.current || !detailQuery.data || !industriesQuery.data) return;
@@ -106,7 +111,8 @@ export function AddBankDetailsDialog({
   const holderIssue = !accountHolder.trim() ? "Account name is required." : undefined;
   const bankNameIssue = !bankName.trim() ? "Bank name is required." : undefined;
   const blocked = !!branchIssue || !!accountIssue || !!holderIssue || !!bankNameIssue;
-  const issueFor = (issue: string | undefined) => (submitted ? issue : undefined);
+  const issueFor = (key: string, issue: string | undefined) =>
+    submitted || touched[key] ? issue : undefined;
 
   const loading = detailQuery.isLoading || industriesQuery.isLoading || !detail;
 
@@ -156,14 +162,16 @@ export function AddBankDetailsDialog({
           <p className="text-sm text-muted-foreground">Loading…</p>
         ) : (
           <div className="space-y-4">
-            <Field label="Account name" required error={issueFor(holderIssue)}>
+            <Field label="Account name" required error={issueFor("holder", holderIssue)}>
               <Input
                 value={accountHolder}
+                maxLength={255}
                 onChange={(event) => setAccountHolder(event.target.value)}
+                onBlur={() => touch("holder")}
                 placeholder="Your business name"
-                aria-invalid={!!issueFor(holderIssue)}
+                aria-invalid={!!issueFor("holder", holderIssue)}
                 className={cn(
-                  issueFor(holderIssue) &&
+                  issueFor("holder", holderIssue) &&
                     "border-destructive focus-visible:ring-destructive",
                 )}
               />
@@ -174,18 +182,20 @@ export function AddBankDetailsDialog({
                 <Field
                   label={branch.label}
                   required
-                  error={issueFor(branchIssue)}
+                  error={issueFor("branch", branchIssue)}
                   hint={bankFieldHelp(country, branch.key) ?? undefined}
                 >
                   <Input
                     value={bsb}
                     inputMode="numeric"
                     placeholder={branch.mask?.replace(/9/g, "0") ?? undefined}
+                    maxLength={20}
                     onChange={(event) => setBsb(event.target.value)}
-                    aria-invalid={!!issueFor(branchIssue)}
+                    onBlur={() => touch("branch")}
+                    aria-invalid={!!issueFor("branch", branchIssue)}
                     className={cn(
                       "tabular",
-                      issueFor(branchIssue) &&
+                      issueFor("branch", branchIssue) &&
                         "border-destructive focus-visible:ring-destructive",
                     )}
                   />
@@ -195,32 +205,36 @@ export function AddBankDetailsDialog({
               <Field
                 label={accountLabel}
                 required
-                error={issueFor(accountIssue)}
+                error={issueFor("account", accountIssue)}
                 hint={bankFieldHelp(country, "account_number") ?? undefined}
               >
                 <Input
                   value={accountNumber}
                   inputMode="numeric"
                   placeholder={account?.mask?.replace(/9/g, "0") ?? "12345678"}
+                  maxLength={50}
                   onChange={(event) => setAccountNumber(event.target.value)}
-                  aria-invalid={!!issueFor(accountIssue)}
+                  onBlur={() => touch("account")}
+                  aria-invalid={!!issueFor("account", accountIssue)}
                   className={cn(
                     "tabular",
-                    issueFor(accountIssue) &&
+                    issueFor("account", accountIssue) &&
                       "border-destructive focus-visible:ring-destructive",
                   )}
                 />
               </Field>
             </div>
 
-            <Field label="Bank name" required error={issueFor(bankNameIssue)}>
+            <Field label="Bank name" required error={issueFor("bankName", bankNameIssue)}>
               <Input
                 value={bankName}
+                maxLength={255}
                 onChange={(event) => setBankName(event.target.value)}
+                onBlur={() => touch("bankName")}
                 placeholder="Your bank"
-                aria-invalid={!!issueFor(bankNameIssue)}
+                aria-invalid={!!issueFor("bankName", bankNameIssue)}
                 className={cn(
-                  issueFor(bankNameIssue) &&
+                  issueFor("bankName", bankNameIssue) &&
                     "border-destructive focus-visible:ring-destructive",
                 )}
               />

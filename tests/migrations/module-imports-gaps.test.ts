@@ -40,7 +40,13 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("invoice rules", () => {
-  const base = { "Client name": "Williams Health", "Sub total": "100", "Total GST": "10" };
+  const base = {
+    "Client name": "Williams Health",
+    "Client email": "accounts@williams.example",
+    "Mark as": "Draft",
+    "Sub total": "100",
+    "Total GST": "10",
+  };
   const issues = (overrides: BulkValues) =>
     bulkRowIssues(INVOICE_IMPORT_SPEC, values(INVOICE_IMPORT_SPEC, { ...base, ...overrides }));
 
@@ -61,12 +67,15 @@ describe("invoice rules", () => {
 
   it("refuses Overdue with a due date of today itself", () => {
     expect(issues({ "Mark as": "Overdue", "Due date": "21/09/2025" })).toEqual([
-      "An invoice marked Overdue needs a Due date in the past",
+      "Due date must be in the past when the status is Overdue",
     ]);
     expect(issues({ "Mark as": "Overdue", "Due date": "20/09/2025" })).toEqual([]);
+    // A blank due date is derived by the server, so it isn't an error.
+    expect(issues({ "Mark as": "Overdue", "Due date": "" })).toEqual([]);
   });
 
-  it("checks client email and phone only when present", () => {
+  it("requires a client email, checks its format, and checks the phone only when present", () => {
+    expect(issues({ "Client email": "" })).toEqual(["Client email is required"]);
     expect(issues({ "Client email": "not-an-email", "Client phone": "123" })).toEqual([
       "Invalid client email",
       "Invalid client phone",
@@ -96,10 +105,10 @@ describe("invoice rules", () => {
     });
     expect(
       invoicePayload(values(INVOICE_IMPORT_SPEC, { ...base, "Payment terms": "0" })).payment_term,
-    ).toBe(30);
+    ).toBeNull();
     expect(
       invoicePayload(values(INVOICE_IMPORT_SPEC, { ...base, "Payment terms": "net" })).payment_term,
-    ).toBe(30);
+    ).toBeNull();
   });
 
   it("maps every row of a batch through invoicePayload", () => {
@@ -119,14 +128,14 @@ describe("expense rules", () => {
     Date: "20/09/2025",
     "Total amount": "110",
     "GST included": "Yes",
-    Category: "Office supplies",
+    Category: "72",
     Paid: "Yes",
   };
   const issues = (overrides: BulkValues) =>
     bulkRowIssues(spec, values(spec, { ...base, ...overrides }));
 
   it("requires a readable date — unlike invoices, blank fails", () => {
-    expect(issues({ Date: "" })).toEqual(["Date must be DD/MM/YYYY"]);
+    expect(issues({ Date: "" })).toEqual(["Date is required (DD/MM/YYYY)"]);
     expect(issues({ Date: "31/02/2025" })).toEqual(["Date must be DD/MM/YYYY"]);
   });
 
@@ -186,7 +195,7 @@ describe("asset rules", () => {
   const spec = assetImportSpec([{ id: "80", name: "Office equipment" }]);
   const base = {
     "Asset name": "Laptop",
-    Category: "Office equipment",
+    Category: "80",
     "Purchase date": "01/06/2025",
     "Purchase price": "2349.00",
     Paid: "Yes",
@@ -208,13 +217,13 @@ describe("asset rules", () => {
     expect(issues({ "Supplier phone": "+61 411 111 111" })).toEqual([]);
   });
 
-  it("suppresses the unknown-category rule while the category list is empty", () => {
+  it("asks for no category while the category list is empty", () => {
     const loading = assetImportSpec([]);
     expect(
-      bulkRowIssues(loading, values(loading, { ...base, Category: "Anything" })),
+      bulkRowIssues(loading, values(loading, { ...base, Category: "" })),
     ).toEqual([]);
-    expect(issues({ Category: "Vehicles" })).toEqual([
-      "Category doesn't match one of your asset accounts",
+    expect(issues({ Category: "999" })).toEqual([
+      "Category isn't one of your asset accounts",
     ]);
   });
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   canEdit,
@@ -569,6 +569,20 @@ describe("period helpers", () => {
     const range = presetRange("Last month");
     expect(range.from).toMatch(/^\d{4}-\d{2}-01$/);
     expect(range.to > range.from).toBe(true);
+  });
+
+  it("runs a financial-year preset over the business's own year", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 10, 12)); // 12 Nov 2026
+    try {
+      // Australia (the default): 1 July – 30 June.
+      expect(presetRange("This financial year")).toEqual({ from: "2026-07-01", to: "2027-06-30" });
+      // New Zealand: 1 April – 31 March.
+      expect(presetRange("This financial year", { month: 4, day: 1 })).toEqual({ from: "2026-04-01", to: "2027-03-31" });
+      expect(presetRange("Last financial year", { month: 4, day: 1 })).toEqual({ from: "2025-04-01", to: "2026-03-31" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("formats a range the way the report screens do", () => {

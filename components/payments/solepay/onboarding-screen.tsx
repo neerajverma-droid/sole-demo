@@ -88,6 +88,19 @@ export function SolePayOnboardingScreen() {
 
   const readyToSubmit = entityOk && directorOk && accountsOk && documentsOk;
 
+  // Which section to do next, for the walkthrough: the first one not done.
+  const nextSection =
+    (
+      [
+        ["entity", entityOk],
+        ["director", directorOk],
+        ["accounts", accountsOk],
+        ["documents", documentsOk],
+      ] as const
+    ).find(([, ok]) => !ok)?.[0] ?? null;
+  const stateOf = (id: string, ok: boolean) =>
+    ok ? "done" : id === nextSection ? "next" : "todo";
+
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [authorizedByName, setAuthorizedByName] = React.useState("");
   const [authorizationConfirmed, setAuthorizationConfirmed] = React.useState(false);
@@ -143,6 +156,8 @@ export function SolePayOnboardingScreen() {
         <SummaryCard
           icon={Building2}
           title="Entity"
+          tourId="solepay-section-entity"
+          tourState={stateOf("entity", entityOk)}
           description="The business SolePay settles to."
           href={STEP_HREF.entity}
           done={entityOk}
@@ -198,6 +213,8 @@ export function SolePayOnboardingScreen() {
         <SummaryCard
           icon={Users}
           title="Director"
+          tourId="solepay-section-director"
+          tourState={stateOf("director", directorOk)}
           description="Whoever signs for the business."
           href={STEP_HREF.directors}
           done={directorOk}
@@ -238,6 +255,8 @@ export function SolePayOnboardingScreen() {
         <SummaryCard
           icon={Landmark}
           title="Bank accounts"
+          tourId="solepay-section-accounts"
+          tourState={stateOf("accounts", accountsOk)}
           description="Where takings land, and where fees come out."
           href={STEP_HREF.accounts}
           done={accountsOk}
@@ -268,17 +287,25 @@ export function SolePayOnboardingScreen() {
         documents={state.documents}
         requiredSlots={requiredSlots}
         done={documentsOk}
+        tourState={stateOf("documents", documentsOk)}
       />
 
       {readyToSubmit && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[14px] border border-border bg-card p-4 shadow-sm">
+        <div
+          className="flex flex-wrap items-center justify-between gap-3 rounded-[14px] border border-border bg-card p-4 shadow-sm"
+          data-usertour="solepay-submit"
+        >
           <div className="space-y-0.5">
             <p className="text-sm font-medium">Everything&rsquo;s filled in</p>
             <p className="text-xs text-muted-foreground">
               Submit for review — Worldpay verifies the details and documents above.
             </p>
           </div>
-          <Button onClick={openConfirm} disabled={submitting}>
+          <Button
+            onClick={openConfirm}
+            disabled={submitting}
+            data-usertour="solepay-submit-button"
+          >
             Submit for review
           </Button>
         </div>
@@ -479,7 +506,7 @@ const SUMMARY_GROUP =
 /** A card's way into its step, with a "Done" badge once the step is answered. */
 function SummaryAction({ href, done }: { href: string; done: boolean }) {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-2" data-usertour="solepay-card-action">
       {done && (
         <Badge variant="success" className="gap-1">
           <CheckCircle2 className="size-3" aria-hidden />
@@ -510,6 +537,8 @@ function SummaryCard({
   description,
   href,
   done,
+  tourId,
+  tourState,
   children,
 }: {
   icon: React.ComponentProps<typeof FormSection>["icon"];
@@ -517,12 +546,16 @@ function SummaryCard({
   description: string;
   href: string;
   done: boolean;
+  tourId?: string;
+  tourState?: string;
   children: React.ReactNode;
 }) {
   return (
     <FormSection
       icon={icon}
       title={title}
+      tourId={tourId}
+      tourState={tourState}
       description={description}
       headerClassName={SUMMARY_HEADER}
       className="space-y-3 p-4"
@@ -591,10 +624,12 @@ function DocumentsCard({
   documents,
   requiredSlots,
   done,
+  tourState,
 }: {
   documents: SolePayDocuments;
   requiredSlots: readonly string[];
   done: boolean;
+  tourState?: string;
 }) {
   const slots = SOLEPAY_DOCUMENT_SLOTS.filter((slot) =>
     requiredSlots.includes(slot.id),
@@ -605,6 +640,8 @@ function DocumentsCard({
     <FormSection
       icon={FileText}
       title="Documents"
+      tourId="solepay-section-documents"
+      tourState={tourState}
       description="The paperwork that verifies everything above."
       headerClassName={SUMMARY_HEADER}
       action={

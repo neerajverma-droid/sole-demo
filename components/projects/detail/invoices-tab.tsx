@@ -202,30 +202,42 @@ export function ProjectInvoicesTab({ project }: { project: Project }) {
   }
 
   if (total === 0) {
+    // The figures still show, at zero, with the empty state beneath them.
     return (
-      <>
-        <Empty>
+      <div className="space-y-[15px]">
+        <div data-usertour="project-invoices-stats">
+          <StatCards stats={stats} loading={summaryQuery.isLoading} className="gap-[15px]" />
+        </div>
+        <Empty data-usertour="project-invoices-list">
           <EmptyMedia>
             <FileText aria-hidden />
           </EmptyMedia>
           <div className="space-y-1">
             <EmptyTitle>No invoices yet</EmptyTitle>
-            <EmptyDescription>Invoices created for this project will appear here.</EmptyDescription>
+            <EmptyDescription>
+              Invoices created for this project will appear here. Create one from a job in the
+              Jobs tab, or from an expense in the Expenses tab.
+            </EmptyDescription>
           </div>
         </Empty>
         {dialogs}
-      </>
+      </div>
     );
   }
 
 
   return (
     <div className="space-y-[15px]">
-      <StatCards stats={stats} loading={summaryQuery.isLoading} className="gap-[15px]" />
+      <div data-usertour="project-invoices-stats">
+        <StatCards stats={stats} loading={summaryQuery.isLoading} className="gap-[15px]" />
+      </div>
 
       {/* The Expenses tab's frame: a title bar, the table edge to edge, and
           the rows-per-page bar at the foot — so the two tabs read as one set. */}
-      <section className="rounded-lg border border-border bg-card shadow-sm">
+      <section
+        className="rounded-lg border border-border bg-card shadow-sm"
+        data-usertour="project-invoices-list"
+      >
         <div className="flex items-center justify-between gap-3 px-[15px] py-3">
           <h3 className="font-semibold">
             Invoices <span className="font-normal text-muted-foreground tabular">({total})</span>

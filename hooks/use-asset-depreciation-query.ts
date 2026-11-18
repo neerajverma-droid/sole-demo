@@ -8,6 +8,7 @@ import {
   saveAssetDepreciationApi,
   type AssetDepreciation,
 } from "@/lib/assets";
+import { invalidateAssetQueries } from "@/hooks/use-assets-query";
 
 /** One asset's depreciation record, or `null` if it's never been set up. */
 export function useAssetDepreciationQuery(assetId: string | undefined) {
@@ -24,23 +25,23 @@ export function useSaveAssetDepreciationMutation(assetId: string) {
   return useMutation({
     mutationFn: (values: AssetDepreciation) =>
       saveAssetDepreciationApi(assetId, values),
+    // The record, its schedule, the asset, the register and the FY report —
+    // refetched behind the caller, not awaited.
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["asset-depreciation", assetId] });
-      queryClient.invalidateQueries({ queryKey: ["asset", assetId] });
-      queryClient.invalidateQueries({ queryKey: ["assets"] });
+      void invalidateAssetQueries(queryClient);
     },
   });
 }
 
+/** Removes the asset's active depreciation — the endpoint is keyed by asset id. */
 export function useDeleteAssetDepreciationMutation(assetId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (depreciationId: string) =>
-      deleteAssetDepreciationApi(depreciationId),
+    mutationFn: () => deleteAssetDepreciationApi(assetId),
+    // The record, its schedule, the asset, the register and the FY report —
+    // refetched behind the caller, not awaited.
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["asset-depreciation", assetId] });
-      queryClient.invalidateQueries({ queryKey: ["asset", assetId] });
-      queryClient.invalidateQueries({ queryKey: ["assets"] });
+      void invalidateAssetQueries(queryClient);
     },
   });
 }

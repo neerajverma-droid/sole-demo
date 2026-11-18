@@ -58,8 +58,10 @@ import {
 import { invoiceMoney } from "@/lib/invoices";
 import {
   formatTransactionDate,
+  isEntryId,
   matchedAmount,
   signedAmount,
+  undoModeFor,
   type Transaction,
   type TransactionSplit,
 } from "@/lib/transactions";
@@ -68,11 +70,6 @@ import {
   useBulkUnmatch,
   useUndoMatchEntry,
 } from "@/hooks/use-bank-transactions-query";
-
-/** A real journal entry id — the per-line Undo needs one to point at. */
-function isEntryId(id: string): boolean {
-  return /^\d+$/.test(id);
-}
 
 /**
  * The Matched tab — sole-webapp's matched `TransactionList`, with its own
@@ -242,7 +239,6 @@ export function MatchedTransactionsTable({
                 const open = expanded.includes(row.id);
                 const chosen = selected.includes(row.id);
                 const lines = row.splits.length;
-                const marked = row.personal || !!row.transfer;
 
                 return (
                   <React.Fragment key={row.id}>
@@ -345,7 +341,7 @@ export function MatchedTransactionsTable({
                         {/* sole-webapp: a mark or a single-line match undoes
                             from the row; a multi-line one undoes line by line
                             in its accordion. */}
-                        {marked || lines <= 1 ? (
+                        {undoModeFor(row) === "whole" ? (
                           <Button
                             variant="ghost"
                             size="sm"

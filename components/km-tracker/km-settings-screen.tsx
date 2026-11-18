@@ -40,6 +40,7 @@ import {
 } from "@/components/ui/empty";
 import { FormSection } from "@/components/ui/form-section";
 import { Input } from "@/components/ui/input";
+import { PrefixInput } from "@/components/ui/prefix-input";
 import {
   Select,
   SelectContent,
@@ -57,8 +58,11 @@ import {
   useKmRules,
   useKmSettingsQuery,
   useSaveKmSettingsMutation,
+  useSaveKmVehiclesMutation,
   type KmFormat,
 } from "@/hooks/use-km-tracker-query";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
 import { apiErrorMessage } from "@/lib/api-error";
 import {
   DEFAULT_KM_FILTERS,
@@ -72,6 +76,7 @@ import {
   kmSettingsIssues,
   kmVehicleIssues,
   kmVehicleLabel,
+  type KmVehicle,
   kmVehicleTypeLabel,
   type KmBusinessUseBasis,
   type KmRules,
@@ -87,11 +92,11 @@ type Tab = "method" | "vehicles";
  * KM Tracker settings: how trips are claimed, and the vehicles they're
  * claimed against.
  *
- * The server keeps both in one record and saves them in one request, so the
- * page edits a single draft and saves it as a whole. That's made obvious
- * rather than left to be discovered: Save and Discard sit in the header and
- * again in a bar that follows the page once anything has changed, each tab
- * marks itself when it holds unsaved edits, and leaving with edits asks first.
+ * The two halves save differently. The method and rates are a draft: Save and
+ * Discard appear in a bar that follows the page, on that tab only, once
+ * something has changed, and leaving with edits asks first. Vehicles aren't
+ * drafted at all — the vehicle dialog and Remove store the change the moment
+ * it's confirmed, so there's nothing on the Vehicles tab left to save.
  */
 export function KmSettingsScreen() {
   const settingsQuery = useKmSettingsQuery();
@@ -154,13 +159,20 @@ function KmSettingsForm({ saved, rules }: { saved: KmSettings; rules: KmRules })
   const router = useRouter();
   const searchParams = useSearchParams();
   const save = useSaveKmSettingsMutation();
+  const saveVehicles = useSaveKmVehiclesMutation();
   const format = useKmFormat();
 
   const [baseline, setBaseline] = React.useState<KmSettingsDraft>(() => kmSettingsDraft(saved, rules));
   const [draft, setDraft] = React.useState<KmSettingsDraft>(baseline);
-  const [tab, setTab] = React.useState<Tab>(() =>
-    searchParams?.get("tab") === "vehicles" ? "vehicles" : "method",
-  );
+  /** Stored vehicles — the dialog and Remove write to the server directly. */
+  const vehicles = saved.vehicles;
+  // A first-time setup opens on Vehicles: the method and rates already have
+  // sensible defaults, so the vehicle is the one thing that has to be filled in.
+  const [tab, setTab] = React.useState<Tab>(() => {
+    const requested = searchParams?.get("tab");
+    if (requested === "vehicles" || requested === "method") return requested;
+    return saved.isSetupComplete ? "method" : "vehicles";
+  });
   const [touched, setTouched] = React.useState<Record<string, boolean>>({});
   const [attempted, setAttempted] = React.useState(false);
 
@@ -175,14 +187,14 @@ function KmSettingsForm({ saved, rules }: { saved: KmSettings; rules: KmRules })
     draft.billableRatePerKm !== baseline.billableRatePerKm ||
     draft.businessUseBasis !== baseline.businessUseBasis ||
     draft.businessUsePercentage !== baseline.businessUsePercentage;
-  const vehiclesDirty =
-    JSON.stringify(draft.vehicles) !== JSON.stringify(baseline.vehicles);
-  const dirty = methodDirty || vehiclesDirty;
+  const dirty = methodDirty;
   const firstSetup = !saved.isSetupComplete;
 
   const { guardNavigate, dialog: unsavedDialog } = useUnsavedChanges(dirty && !save.isPending);
 
-  const issues = kmSettingsIssues(draft, rules);
+  // The draft only owns the method and rates; the vehicles are whatever is stored.
+  const current: KmSettingsDraft = { ...draft, vehicles };
+  const issues = kmSettingsIssues(current, rules);
   const issueFor = (key: string) =>
     attempted || touched[key] ? issues.find((issue) => issue.key === key)?.message : undefined;
   const vehicleProblems = issues.filter(
@@ -247,23 +259,16 @@ function KmSettingsForm({ saved, rules }: { saved: KmSettings; rules: KmRules })
       return;
     }
 
-    save.mutate(applyKmSettingsDraft(saved, draft, rules), {
+    save.mutate(applyKmSettingsDraft(saved, current, rules), {
       onSuccess: (next) => {
         const fresh = kmSettingsDraft(next, rules);
         setBaseline(fresh);
         setDraft(fresh);
         setTouched({});
         setAttempted(false);
-        if (firstSetup) {
-          toast.success("KM Tracker is ready", {
-            description: "Log your first trip whenever you're on the road.",
-          });
-          router.push(KM_ROOT);
-        } else {
-          toast.success("Settings saved", {
-            description: "New trips will use these settings.",
-          });
-        }
+        toast.success("Settings saved", {
+          description: "New trips will use these settings.",
+        });
       },
       onError: (error) =>
         toast.error(apiErrorMessage(error, "Couldn't save KM Tracker settings.")),
@@ -273,22 +278,78 @@ function KmSettingsForm({ saved, rules }: { saved: KmSettings; rules: KmRules })
   const claimRules = kmExpenseRules(rules, draft.calculationMethod);
   const selectedMethod = rules.methods.find((method) => method.key === draft.calculationMethod);
   const otherLabels = (except: number | null) =>
-    draft.vehicles
+    vehicles
       .filter((_, index) => index !== except)
       .map(kmVehicleLabel)
       .filter(Boolean);
 
   const editingVehicle =
     vehicleDialog?.index !== null && vehicleDialog?.index !== undefined
-      ? draft.vehicles[vehicleDialog.index]
+      ? vehicles[vehicleDialog.index]
       : null;
+
+  const saveVehicle = (vehicle: KmVehicle) => {
+    const index = vehicleDialog?.index ?? null;
+    const next =
+      index === null
+        ? [...vehicles, vehicle]
+        : vehicles.map((existing, position) => (position === index ? vehicle : existing));
+    saveVehicles.mutate(next, {
+      onSuccess: () => {
+        setVehicleDialog(null);
+        if (index === null) {
+          track(EVENTS.VEHICLE_ADDED, {
+            calculation_method: draft.calculationMethod,
+            is_first_setup: firstSetup,
+          });
+        }
+        // The first vehicle is the last thing setup was waiting for — unless
+        // there are method edits on the page, which a redirect would lose.
+        if (index === null && firstSetup && !dirty) {
+          toast.success("KM Tracker is ready", {
+            description: "Log your first trip whenever you're on the road.",
+          });
+          router.push(KM_ROOT);
+        } else {
+          toast.success(index === null ? "Vehicle added" : "Vehicle updated");
+        }
+      },
+      onError: (error) =>
+        toast.error(apiErrorMessage(error, "Couldn't save the vehicle.")),
+    });
+  };
+
+  const askRemove = (index: number) => {
+    if (vehicles.length <= 1) {
+      toast.error("Keep at least one vehicle", {
+        description: "Add another vehicle before removing this one.",
+      });
+      return;
+    }
+    setRemoving(index);
+  };
+
+  const removeVehicle = () => {
+    if (removing === null) return;
+    saveVehicles.mutate(
+      vehicles.filter((_, index) => index !== removing),
+      {
+        onSuccess: () => {
+          setRemoving(null);
+          toast.success("Vehicle removed");
+        },
+        onError: (error) =>
+          toast.error(apiErrorMessage(error, "Couldn't remove the vehicle.")),
+      },
+    );
+  };
 
   const actions = (
     <>
       <Button variant="ghost" onClick={discard} disabled={!dirty || save.isPending}>
         Discard changes
       </Button>
-      <Button onClick={onSave} disabled={(!dirty && !firstSetup) || save.isPending}>
+      <Button onClick={onSave} disabled={!dirty || save.isPending}>
         {save.isPending && <Loader2 className="animate-spin" />}
         Save settings
       </Button>
@@ -310,24 +371,21 @@ function KmSettingsForm({ saved, rules }: { saved: KmSettings; rules: KmRules })
               to new trips — saved trips keep the method they were logged with.
             </p>
           </div>
-          {/* <div
-            className="flex shrink-0 items-center gap-2"
-            data-usertour="km-settings-save-actions"
-          >
-            {actions}
-          </div> */}
         </div>
       </div>
 
       {firstSetup && (
-        <div className="flex items-start gap-3 rounded-lg border border-primary/30 bg-primary/[0.05] p-4 text-sm">
+        <div
+          className="flex items-start gap-3 rounded-lg border border-primary/30 bg-primary/[0.05] p-4 text-sm"
+          data-usertour="km-settings-first-setup"
+        >
           <ShieldCheck className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden />
           <div className="space-y-1">
             <p className="font-medium">Two steps before your first trip</p>
             <ol className="list-inside list-decimal text-muted-foreground">
               <li>Confirm your calculation method and rates.</li>
               <li>
-                Add at least one vehicle — then <strong>Save settings</strong>.
+                Add at least one vehicle — it&apos;s saved as soon as you add it.
               </li>
             </ol>
           </div>
@@ -349,9 +407,8 @@ function KmSettingsForm({ saved, rules }: { saved: KmSettings; rules: KmRules })
             <Car className="size-4" aria-hidden />
             Vehicles
             <Badge variant="secondary" className="px-1.5 py-0 text-[11px]">
-              {draft.vehicles.length}
+              {vehicles.length}
             </Badge>
-            {vehiclesDirty && <DirtyDot />}
             {attempted && vehicleProblems.length > 0 && (
               <span className="size-1.5 rounded-full bg-destructive" aria-label="Needs attention" />
             )}
@@ -545,6 +602,7 @@ function KmSettingsForm({ saved, rules }: { saved: KmSettings; rules: KmRules })
           <FormSection
             icon={ShieldCheck}
             title="What you can claim"
+            tourId="km-settings-claims"
             description={`The expense rules for ${selectedMethod?.label.toLowerCase()}. They follow the method and can't be changed separately.`}
           >
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
@@ -562,14 +620,21 @@ function KmSettingsForm({ saved, rules }: { saved: KmSettings; rules: KmRules })
         </TabsContent>
 
         <TabsContent value="vehicles" className="mt-4 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div
+            className="flex flex-wrap items-center justify-between gap-3"
+            data-usertour="km-settings-vehicles"
+          >
             <div>
               <h2 className="text-base font-semibold">Vehicles</h2>
               <p className="text-sm text-muted-foreground">
-                Every trip is logged against one. Additions and edits are kept when you save settings.
+                Every trip is logged against one. Changes here are saved straight away.
               </p>
             </div>
-            <Button variant="outline" onClick={() => setVehicleDialog({ index: null })}>
+            <Button
+              variant="outline"
+              onClick={() => setVehicleDialog({ index: null })}
+              data-usertour="km-settings-add-vehicle"
+            >
               <Plus />
               Add vehicle
             </Button>
@@ -579,7 +644,7 @@ function KmSettingsForm({ saved, rules }: { saved: KmSettings; rules: KmRules })
             <p className="text-sm text-destructive">{issueFor("vehicles")}</p>
           )}
 
-          {draft.vehicles.length === 0 ? (
+          {vehicles.length === 0 ? (
             <Empty>
               <EmptyMedia>
                 <Car aria-hidden />
@@ -600,12 +665,9 @@ function KmSettingsForm({ saved, rules }: { saved: KmSettings; rules: KmRules })
             </Empty>
           ) : (
             <ul className="grid gap-3 md:grid-cols-2">
-              {draft.vehicles.map((vehicle, index) => {
+              {vehicles.map((vehicle, index) => {
                 const label = kmVehicleLabel(vehicle) || `Vehicle ${index + 1}`;
                 const incomplete = kmVehicleIssues(vehicle, [], rules).length > 0;
-                const unsaved = !baseline.vehicles.some(
-                  (other) => JSON.stringify(other) === JSON.stringify(vehicle),
-                );
                 return (
                   <li
                     key={`${label}-${index}`}
@@ -630,11 +692,6 @@ function KmSettingsForm({ saved, rules }: { saved: KmSettings; rules: KmRules })
                                 Default
                               </Badge>
                             )}
-                            {unsaved && (
-                              <Badge variant="warning" className="px-1.5 py-0 text-[11px]">
-                                Unsaved
-                              </Badge>
-                            )}
                           </div>
                           <p className="text-xs text-muted-foreground">
                             {vehicle.registrationNumber || "No registration"}
@@ -656,7 +713,7 @@ function KmSettingsForm({ saved, rules }: { saved: KmSettings; rules: KmRules })
                           size="icon"
                           className="size-8 text-destructive hover:text-destructive"
                           aria-label={`Remove ${label}`}
-                          onClick={() => setRemoving(index)}
+                          onClick={() => askRemove(index)}
                         >
                           <Trash2 className="size-4" />
                         </Button>
@@ -698,7 +755,7 @@ function KmSettingsForm({ saved, rules }: { saved: KmSettings; rules: KmRules })
               })}
             </ul>
           )}
-          {draft.vehicles.length > 1 && (
+          {vehicles.length > 1 && (
             <p className="text-xs text-muted-foreground">
               The first vehicle is preselected on new trips.
             </p>
@@ -709,15 +766,16 @@ function KmSettingsForm({ saved, rules }: { saved: KmSettings; rules: KmRules })
       {/* Pinned to the bottom edge while there's something to save — the same
           footer bar the asset screens use — so the actions are never a scroll
           away from the field that was just changed. */}
-      {dirty && (
-        <div className="sticky bottom-0 z-20 -mx-4 flex flex-wrap items-center justify-between gap-3 border-t border-border bg-background/95 px-4 py-3 backdrop-blur">
+      {tab === "method" && dirty && (
+        <div
+          className="sticky bottom-0 z-20 -mx-4 flex flex-wrap items-center justify-between gap-3 border-t border-border bg-background/95 px-4 py-3 backdrop-blur"
+          data-usertour="km-settings-save-actions"
+        >
           <p className="text-sm">
             <span className="font-medium">Unsaved changes</span>
             <span className="text-muted-foreground">
               {" "}
-              — {[methodDirty && "calculation method", vehiclesDirty && "vehicles"]
-                .filter(Boolean)
-                .join(" and ")}
+              — calculation method and rates
             </span>
           </p>
           <div className="flex items-center gap-2">{actions}</div>
@@ -729,50 +787,34 @@ function KmSettingsForm({ saved, rules }: { saved: KmSettings; rules: KmRules })
         vehicle={editingVehicle}
         rules={rules}
         otherLabels={otherLabels(vehicleDialog?.index ?? null)}
-        odometerLocked={
-          !!editingVehicle &&
-          lockedLabels.has(kmVehicleLabel(editingVehicle)) &&
-          baseline.vehicles.some((other) => kmVehicleLabel(other) === kmVehicleLabel(editingVehicle))
-        }
+        odometerLocked={!!editingVehicle && lockedLabels.has(kmVehicleLabel(editingVehicle))}
+        saving={saveVehicles.isPending}
         onOpenChange={(open) => !open && setVehicleDialog(null)}
-        onSave={(vehicle) => {
-          const index = vehicleDialog?.index ?? null;
-          patch("vehicles", {
-            vehicles:
-              index === null
-                ? [...draft.vehicles, vehicle]
-                : draft.vehicles.map((existing, position) => (position === index ? vehicle : existing)),
-          });
-          setVehicleDialog(null);
-          toast(index === null ? "Vehicle added" : "Vehicle updated", {
-            description: "Save settings to keep it.",
-          });
-        }}
+        onSave={saveVehicle}
       />
 
       <AlertDialog open={removing !== null} onOpenChange={(open) => !open && setRemoving(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Remove {removing !== null ? kmVehicleLabel(draft.vehicles[removing]) || "this vehicle" : "vehicle"}?
+              Remove {removing !== null ? kmVehicleLabel(vehicles[removing]) || "this vehicle" : "vehicle"}?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              Trips already logged against it keep its name. It&apos;s only removed once you
-              save settings, and Discard brings it back.
+              Trips already logged against it keep its name. It&apos;s removed straight away.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Keep it</AlertDialogCancel>
+            <AlertDialogCancel disabled={saveVehicles.isPending}>Keep it</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => {
-                if (removing === null) return;
-                patch("vehicles", {
-                  vehicles: draft.vehicles.filter((_, index) => index !== removing),
-                });
-                setRemoving(null);
+              disabled={saveVehicles.isPending}
+              onClick={(event) => {
+                // Stay open until the server has removed it.
+                event.preventDefault();
+                removeVehicle();
               }}
             >
+              {saveVehicles.isPending && <Loader2 className="animate-spin" />}
               Remove
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -824,26 +866,16 @@ function RateInput({
   onChange: (value: string) => void;
 }) {
   return (
-    <div className="relative">
-      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-        {prefix}
-      </span>
-      <Input
-        id={id}
-        inputMode="decimal"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        aria-invalid={invalid}
-        className={cn(
-          prefix.length <= 1 ? "pl-7" : prefix.length === 2 ? "pl-9" : "pl-11",
-          "pr-12 tabular",
-          invalid && "border-destructive focus-visible:ring-destructive",
-        )}
-      />
-      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
-        / km
-      </span>
-    </div>
+    <PrefixInput
+      prefix={prefix}
+      suffix={<span className="text-xs text-muted-foreground">/ km</span>}
+      id={id}
+      inputMode="decimal"
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      aria-invalid={invalid}
+      className="tabular"
+    />
   );
 }
 

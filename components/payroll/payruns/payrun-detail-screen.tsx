@@ -260,6 +260,7 @@ export function PayrunDetailScreen({ runId }: { runId: string }) {
         <Button
           variant="outline"
           disabled={payslips.length === 0}
+          data-usertour="payrun-download"
           onClick={() => actions.downloadPayslips({ mkRunId: runId, mkYear: year })}
         >
           <Download />
@@ -373,7 +374,7 @@ export function PayrunDetailScreen({ runId }: { runId: string }) {
 
         <Tabs value={tab} onValueChange={(value) => setTab(value as DetailTab)} className="min-w-0">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <TabsList>
+            <TabsList data-usertour="payrun-tabs">
               <TabsTrigger value="summary">Summary</TabsTrigger>
               <TabsTrigger value="payslips" className="gap-1.5">
                 Payslips

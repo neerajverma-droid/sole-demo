@@ -14,6 +14,8 @@
  * `setMultipleEquity` — genuinely different endpoints and field names from
  * expense/asset, not just a wider union.
  */
+import type { QueryClient, QueryKey } from "@tanstack/react-query";
+
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
@@ -36,7 +38,7 @@ export type MatchCandidate = {
   availableAmount: number;
 };
 
-type ApiMatchCandidate = {
+export type ApiMatchCandidate = {
   id: string | number;
   transaction_date: string;
   description: string;
@@ -45,7 +47,7 @@ type ApiMatchCandidate = {
   available_amount: string | number;
 };
 
-function mapApiMatchCandidate(raw: ApiMatchCandidate): MatchCandidate {
+export function mapApiMatchCandidate(raw: ApiMatchCandidate): MatchCandidate {
   return {
     id: String(raw.id),
     date: raw.transaction_date,
@@ -94,6 +96,46 @@ export async function fetchPossibleMatches(
     candidates: (data?.list ?? []).map(mapApiMatchCandidate),
     remainingAmount: remaining != null ? Number(remaining) : 0,
   };
+}
+
+/**
+ * The match dialogs' query for possible matches — one tab's candidates and
+ * what's still left to match. "Assign to multiple" is a genuinely different
+ * server query, so each tab has its own key.
+ *
+ * Fetched fresh on every opening and dropped once the dialog closes. The app's
+ * default five-minute cache would otherwise reopen a partly matched entry on
+ * the remaining amount and candidates from before that match — a stale query
+ * still renders its cached rows straight away while refetching behind them.
+ */
+export function possibleMatchesQuery(
+  type: BankMatchType,
+  entryId: string,
+  multiple: boolean,
+) {
+  return {
+    queryKey: ["possible-matches", type, entryId, multiple] as const,
+    queryFn: () => fetchPossibleMatches(type, entryId, { multiple }),
+    staleTime: 0,
+    gcTime: 0,
+  };
+}
+
+/**
+ * What a successful match does on its way out: close the dialog first, then
+ * refresh the owning screen's queries — not awaited — so that screen shows
+ * its own loading state while its list and cards refetch, rather than the
+ * refetch hiding behind the modal.
+ */
+export function refreshAfterMatch(
+  queryClient: QueryClient,
+  invalidateQueryKeys: QueryKey[],
+  onClose: () => void,
+): void {
+  onClose();
+  invalidateQueryKeys.forEach((queryKey) => {
+    void queryClient.invalidateQueries({ queryKey });
+  });
 }
 
 /**

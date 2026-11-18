@@ -22,7 +22,6 @@
 import {
   ALL_EVENT_NAMES,
   REQUIRED_PROPS,
-  type EventName,
 } from "@/lib/analytics-events";
 
 /* ──────────────────────────── keeping it separable ────────────────────── */
@@ -38,7 +37,7 @@ import {
 export const SMOKE_ENV = "smoke";
 
 export type SmokeEvent = {
-  event: EventName;
+  event: string;
   properties: Record<string, string | number | boolean>;
 };
 

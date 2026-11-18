@@ -18,8 +18,6 @@
  */
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
 import type { ExpenseReceipt } from "@/lib/expenses";
 import { formatInvoiceDate, invoiceMoney } from "@/lib/invoices";
@@ -382,7 +380,6 @@ export async function createEquityApi(
   if (!response.data?.success) {
     throw new Error(response.data?.message || "Failed to create equity entry.");
   }
-  track(EVENTS.EQUITY_RECORDED, { amount: draft.amount });
   const id = response.data.data?.id;
   return { id: id != null ? String(id) : "" };
 }

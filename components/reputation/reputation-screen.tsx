@@ -165,7 +165,11 @@ export function ReputationScreen() {
         title="Reputation & client experience"
         description="Measure client experience across each job and turn happy clients into public reviews."
       >
-        <Button variant="outline" onClick={() => setPreviewOpen(true)}>
+        <Button
+          variant="outline"
+          onClick={() => setPreviewOpen(true)}
+          data-usertour="reputation-preview"
+        >
           <Eye />
           Preview client experience
         </Button>
@@ -183,7 +187,7 @@ export function ReputationScreen() {
 
       <Tabs value={tab} onValueChange={(next) => setTab(next as Tab)}>
         <div className="overflow-x-auto">
-          <TabsList aria-label="Reputation">
+          <TabsList aria-label="Reputation" data-usertour="reputation-tabs">
             {TABS.map((item) => (
               <TabsTrigger key={item.id} value={item.id}>
                 {item.label}

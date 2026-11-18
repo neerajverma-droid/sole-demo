@@ -29,6 +29,9 @@ export type PublicQuoteItem = {
   price?: number;
   qty?: number;
   qty_type?: string;
+  /** NDIS quotes only — the catalogue support item and the claim type quoted. */
+  item_support_no?: string | null;
+  claim_type?: string | null;
   gst?: boolean;
   gst_percentage?: string | number;
   gst_amount?: number;
@@ -109,6 +112,9 @@ export type QuoteRespondItem = {
   qtyType: string;
   gst: number;
   total: number;
+  /** NDIS quotes only — shown under the item's name so the customer sees what is being quoted. */
+  supportItemNumber?: string;
+  claimType?: string;
 };
 
 /* ------------------------------------------------------------------ *
@@ -302,6 +308,8 @@ export function normalizeQuoteItems(quote: PublicQuote | null | undefined): Quot
       qtyType: firstText(item?.qty_type, item?.quantity_type) || "items",
       gst: getConvertedAmount(quote, gst, item?.exchange_gst_amount),
       total: getConvertedAmount(quote, total, item?.exchange_total),
+      supportItemNumber: firstText(item?.item_support_no) || undefined,
+      claimType: firstText(item?.claim_type) || undefined,
     };
   });
 }

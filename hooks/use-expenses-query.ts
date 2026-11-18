@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 
 import {
   createExpenseApi,
@@ -80,17 +80,67 @@ export function useExpenseSummaryQuery(period: ExpensePeriod) {
 
 export function useInvalidateExpenses() {
   const queryClient = useQueryClient();
+  // Resolves once whatever is on screen has refetched. Most callers fire and
+  // forget; the bulk import waits on it.
+  return () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["expenses"] }),
+      // A bare prefix — matches every page/size/filter combination cached
+      // under it, same as invalidating ["expenses"] above matches every period.
+      queryClient.invalidateQueries({ queryKey: ["expenses-page"] }),
+      queryClient.invalidateQueries({ queryKey: ["expense-summary"] }),
+      // Each expense's own detail too — the view dialog and the edit form read
+      // it, and it carries what the list doesn't (attachments, the GST split).
+      queryClient.invalidateQueries({ queryKey: ["expense"] }),
+    ]);
+}
+
+/**
+ * An attachment added to or removed from an expense being edited. Those save
+ * straight away rather than on Save, so going back without saving must still
+ * find the expense changed: its detail is marked stale (not refetched — the
+ * open form has already taken its copy, and keeps its own attachment rows),
+ * and the Expenses screen behind the form reloads fresh.
+ */
+export function markExpenseChanged(queryClient: QueryClient, expenseId: string) {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: ["expense", expenseId], refetchType: "none" }),
+    resetExpensesListCache(queryClient),
+  ]);
+}
+
+/**
+ * After a create or edit on the full-page form, the list is cleared rather
+ * than just marked stale. Marked stale, the list came back showing the page it
+ * had before — no new row, no sign it was loading — until a background
+ * refetch quietly swapped it. Cleared, it has nothing to show and loads
+ * fresh, under its skeleton. In-place actions on the list itself (delete,
+ * match) keep the quiet invalidate, so a row action doesn't blank the table.
+ */
+export function resetExpensesListCache(queryClient: QueryClient) {
+  // Only what's off screen — the Expenses screen, while the form is open — so
+  // nothing currently visible ever blanks. The list's two queries (the page,
+  // and the complete list it switches to for a supplier sort or filter) and
+  // the stat cards' summary, so the cards load under their skeleton with the
+  // list rather than showing the totals from before the save.
+  return Promise.all([
+    queryClient.resetQueries({ queryKey: ["expenses-page"], type: "inactive" }),
+    queryClient.resetQueries({ queryKey: ["expenses"], type: "inactive" }),
+    queryClient.resetQueries({ queryKey: ["expense-summary"], type: "inactive" }),
+  ]);
+}
+
+function useResetExpensesList() {
+  const queryClient = useQueryClient();
+  const invalidate = useInvalidateExpenses();
   return () => {
-    queryClient.invalidateQueries({ queryKey: ["expenses"] });
-    // A bare prefix — matches every page/size/filter combination cached
-    // under it, same as invalidating ["expenses"] above matches every period.
-    queryClient.invalidateQueries({ queryKey: ["expenses-page"] });
-    queryClient.invalidateQueries({ queryKey: ["expense-summary"] });
+    invalidate();
+    return resetExpensesListCache(queryClient);
   };
 }
 
 export function useCreateExpenseMutation() {
-  const invalidate = useInvalidateExpenses();
+  const invalidate = useResetExpensesList();
   return useMutation({
     mutationFn: ({ draft, files }: { draft: ExpenseDraft; files?: File[] }) =>
       createExpenseApi(draft, files),
@@ -99,7 +149,7 @@ export function useCreateExpenseMutation() {
 }
 
 export function useUpdateExpenseMutation() {
-  const invalidate = useInvalidateExpenses();
+  const invalidate = useResetExpensesList();
   return useMutation({
     mutationFn: ({ id, draft }: { id: string; draft: ExpenseDraft }) =>
       updateExpenseApi(id, draft),
@@ -111,12 +161,16 @@ export function useUpdateExpenseMutation() {
 export function useBulkCreateExpensesMutation(
   categories: readonly ExpenseCategoryOption[],
 ) {
+  const queryClient = useQueryClient();
   const invalidate = useInvalidateExpenses();
   // The import splits GST out itself, so it needs the business's rate per row date.
   const { country } = useCountryContext();
   return useMutation({
     mutationFn: (rows: BulkRow[]) =>
       createBulkExpenses(expensePayloads(rows, categories, (date) => documentTax(country, date).rate)),
-    onSuccess: invalidate,
+    // Held until the list behind the dialog has reloaded, so the wizard only
+    // reports Done once the imported expenses are actually in the table and
+    // the stat cards — not a beat before, with the old page still showing.
+    onSuccess: () => Promise.all([invalidate(), resetExpensesListCache(queryClient)]),
   });
 }

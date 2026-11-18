@@ -36,6 +36,7 @@ import { useSalesSettings } from "@/lib/use-sales-settings";
 import { useCountryContext } from "@/hooks/use-country-context";
 import { documentTax } from "@/lib/country-context";
 import { cn } from "@/lib/utils";
+import { useKnownInvoice } from "@/hooks/use-invoices-query";
 import { useInvoicesStore } from "@/stores/invoices";
 
 /**
@@ -54,11 +55,12 @@ import { useInvoicesStore } from "@/stores/invoices";
 export function InvoiceQuickEditDialog() {
   const router = useRouter();
   const [invoiceId, setInvoiceId] = useAtom(quickEditInvoiceIdAtom);
-  const invoices = useInvoicesStore((state) => state.invoices);
   const updateInvoice = useInvoicesStore((state) => state.updateInvoice);
   const { settings: sales } = useSalesSettings();
 
-  const invoice = invoices.find((entry) => entry.id === invoiceId);
+  // From the page the list is showing, or fetched by id when this opens from
+  // the Quotes screen, which has no invoice list of its own.
+  const invoice = useKnownInvoice(invoiceId);
 
   const [draft, setDraft] = React.useState<InvoiceDraft | null>(null);
   const [edited, setEdited] = React.useState(false);
@@ -94,7 +96,9 @@ export function InvoiceQuickEditDialog() {
   // The business's rate on the issue date (custom, or its country's) — not a fixed 10%.
   const { country } = useCountryContext();
   const docTax = documentTax(country, draft?.issued);
-  const showGst = docTax.offered && sales.invoiceFields.gst;
+  // Whether GST is offered at all — Sales settings' GST switch only controls the
+  // printed column, not what an invoice charges.
+  const showGst = docTax.offered;
   const issues = draft ? documentIssues(draft) : [];
   const issueFor = (key: string) =>
     edited ? issues.find((issue) => issue.key === key)?.message : undefined;

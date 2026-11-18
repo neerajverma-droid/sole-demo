@@ -33,6 +33,8 @@ const {
   toPlan,
   budgetPayload,
   fetchGoals,
+  fetchGoalsPage,
+  fetchPlansPage,
   fetchPlans,
   savePlan,
   addGoalAllocation,
@@ -47,6 +49,9 @@ const {
   fetchAvailableBudgetExpenses,
   attachBudgetExpense,
   detachBudgetExpense,
+  bulkDeleteGoals,
+  bulkDeleteBudgets,
+  bulkDeletePlans,
 } = await import("@/lib/planner-api");
 
 /**
@@ -157,6 +162,78 @@ describe("fetchGoals", () => {
   it("returns nothing rather than throwing on an unexpected shape", async () => {
     apiMock.get.mockResolvedValue({ data: { success: true } });
     expect(await fetchGoals()).toEqual([]);
+  });
+});
+
+describe("paged lists", () => {
+  const goalRows = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => ({
+      id: from + i,
+      name: `Goal ${from + i}`,
+    }));
+
+  it("asks the server for the page and its size", async () => {
+    apiMock.get.mockResolvedValue({
+      data: { data: goalRows(11, 20), meta: { total: 42, page: 2, limit: 10 } },
+    });
+    await fetchGoalsPage(2, 10);
+    expect(apiMock.get).toHaveBeenCalledWith(apiRoutes.plannerGoal.list, {
+      params: { page: 2, limit: 10 },
+    });
+  });
+
+  it("takes the total from the server's meta, not from the rows it was sent", async () => {
+    apiMock.get.mockResolvedValue({
+      data: { data: goalRows(11, 20), meta: { total: 42, page: 2, limit: 10 } },
+    });
+    const page = await fetchGoalsPage(2, 10);
+    expect(page.rows).toHaveLength(10);
+    expect(page).toMatchObject({
+      page: 2,
+      pageCount: 5,
+      total: 42,
+      from: 11,
+      to: 20,
+    });
+  });
+
+  it("reports the last page's short row count honestly", async () => {
+    apiMock.get.mockResolvedValue({
+      data: { data: goalRows(41, 42), meta: { total: 42, page: 5, limit: 10 } },
+    });
+    const page = await fetchGoalsPage(5, 10);
+    expect(page).toMatchObject({ page: 5, pageCount: 5, from: 41, to: 42 });
+  });
+
+  it("keeps the page it was asked for when that page is past the end", async () => {
+    apiMock.get.mockResolvedValue({
+      data: { data: [], meta: { total: 10, page: 3, limit: 10 } },
+    });
+    const page = await fetchGoalsPage(3, 10);
+    // Not clamped: the screen has to see it is past the end to step back.
+    expect(page).toMatchObject({ rows: [], page: 3, pageCount: 1, total: 10 });
+    expect(page.from).toBe(0);
+  });
+
+  it("pages the whole list itself when the server answers without meta", async () => {
+    // A backend that predates paging ignores page/limit and sends everything.
+    apiMock.get.mockResolvedValue({ data: { data: goalRows(1, 25) } });
+    const page = await fetchGoalsPage(2, 10);
+    expect(page.rows.map((goal) => goal.name)).toEqual(
+      goalRows(11, 20).map((goal) => goal.name),
+    );
+    expect(page).toMatchObject({ page: 2, pageCount: 3, total: 25, from: 11, to: 20 });
+  });
+
+  it("pages expense plans the same way", async () => {
+    apiMock.get.mockResolvedValue({
+      data: { data: [{ id: 9, name: "Van" }], meta: { total: 11, page: 2, limit: 10 } },
+    });
+    const page = await fetchPlansPage(2, 10);
+    expect(apiMock.get).toHaveBeenCalledWith(apiRoutes.expensePlan.list, {
+      params: { page: 2, limit: 10 },
+    });
+    expect(page).toMatchObject({ total: 11, pageCount: 2, from: 11, to: 11 });
   });
 });
 
@@ -418,9 +495,43 @@ describe("plan maths", () => {
     endDate: "2026-07-01",
   };
 
-  it("annualises ROI from the plan's own window", () => {
-    // 20% over six months is 40% a year.
-    expect(planRoi(plan)).toBeCloseTo(40, 6);
+  it("reads ROI as revenue less cost over cost, without scaling it to a year", () => {
+    // $12k back on $10k is 20%, however long the plan runs.
+    expect(planRoi(plan)).toBeCloseTo(20, 6);
+  });
+
+  it("never reports a loss beyond the whole cost", () => {
+    // $1,000 back on $1,700 over three months: -41.2%. The old annualised
+    // figure was -165%, more than was ever spent.
+    const short = {
+      lines: [
+        { id: "1", name: "Land", planned: "200", actual: "200", ledgerSource: "", status: "Confirmed" as const },
+        { id: "2", name: "Equipment", planned: "500", actual: "400", ledgerSource: "", status: "Planned" as const },
+        { id: "3", name: "Salary", planned: "1000", actual: "1000", ledgerSource: "", status: "Planned" as const },
+      ],
+      expectedRevenue: "1000",
+      startDate: "2026-11-01",
+      endDate: "2027-02-01",
+    };
+    expect(planRoi(short)).toBeCloseTo(-41.18, 2);
+    expect(planRoi({ ...short, expectedRevenue: "0" })).toBe(-100);
+  });
+
+  it("measures an overspent plan against what it actually cost", () => {
+    // Planned $1,700 but $2,600 spent: 1000 back on 2600 is -61.5%, and at
+    // $1,000 over three months it takes 7.8 months to cover.
+    const overspent = {
+      lines: [
+        { id: "1", name: "Land", planned: "200", actual: "200", ledgerSource: "", status: "Confirmed" as const },
+        { id: "2", name: "Equipment", planned: "500", actual: "400", ledgerSource: "", status: "Planned" as const },
+        { id: "3", name: "Salary", planned: "1000", actual: "2000", ledgerSource: "", status: "Planned" as const },
+      ],
+      expectedRevenue: "1000",
+      startDate: "2026-11-01",
+      endDate: "2027-02-01",
+    };
+    expect(planRoi(overspent)).toBeCloseTo(-61.54, 2);
+    expect(planPaybackMonths(overspent)).toBeCloseTo(7.8, 1);
   });
 
   it("pays back at the rate the window implies", () => {
@@ -642,7 +753,9 @@ describe("fetchPlannerBankAccounts", () => {
 
     // No userId: the endpoint takes the owner from the session. Sending one
     // was how any caller could read another user's balances.
-    expect(apiMock.get).toHaveBeenCalledWith(apiRoutes.bankAccounts.list);
+    expect(apiMock.get).toHaveBeenCalledWith(apiRoutes.bankAccounts.list, {
+      timeout: 10_000,
+    });
     expect(accounts).toEqual([
       { id: "8", name: "ANZ Business", detail: "•••• 4821", balance: 31240 },
     ]);
@@ -675,9 +788,10 @@ describe("fetchPlannerBankAccounts", () => {
     apiMock.get.mockResolvedValue({ data: { data: { accounts: [] } } });
     await fetchPlannerBankAccounts();
 
-    // Exactly one argument — the URL. No params object at all, so there is no
-    // id for a caller to tamper with.
-    expect(apiMock.get.mock.calls[0]).toHaveLength(1);
+    // The URL and a timeout, nothing else. No params object at all, so there is
+    // no id for a caller to tamper with.
+    expect(apiMock.get.mock.calls[0]).toHaveLength(2);
+    expect(apiMock.get.mock.calls[0][1]).toEqual({ timeout: 10_000 });
   });
 });
 
@@ -1011,5 +1125,44 @@ describe("attachBudgetExpense / detachBudgetExpense", () => {
     expect(apiMock.delete).toHaveBeenCalledWith(
       apiRoutes.budget.expense("7", "88"),
     );
+  });
+});
+
+describe("bulk delete", () => {
+  const answer = { data: { data: { deleted_ids: [1, 2], not_found_ids: [3] } } };
+
+  it.each([
+    ["goals", bulkDeleteGoals, apiRoutes.plannerGoal.bulkDelete],
+    ["budgets", bulkDeleteBudgets, apiRoutes.budget.bulkDelete],
+    ["expense plans", bulkDeletePlans, apiRoutes.expensePlan.bulkDelete],
+  ])("posts the ticked %s as numeric ids to the bulk endpoint", async (_label, run, route) => {
+    apiMock.post.mockResolvedValue(answer);
+    await run(["1", "2", "3"]);
+
+    const [url, body] = apiMock.post.mock.calls[0];
+    expect(url).toBe(route);
+    // The server validates positive integers; the app holds ids as strings.
+    expect(sentFields(body)).toEqual({ ids: [1, 2, 3] });
+  });
+
+  it("reports which ids went and which the server did not recognise", async () => {
+    apiMock.post.mockResolvedValue(answer);
+    await expect(bulkDeleteGoals(["1", "2", "3"])).resolves.toEqual({
+      deletedIds: ["1", "2"],
+      notFoundIds: ["3"],
+    });
+  });
+
+  it("reads a malformed answer as nothing deleted rather than guessing", async () => {
+    apiMock.post.mockResolvedValue({ data: {} });
+    await expect(bulkDeleteBudgets(["1"])).resolves.toEqual({
+      deletedIds: [],
+      notFoundIds: [],
+    });
+  });
+
+  it("lets a refused request reject, so the rows stay ticked", async () => {
+    apiMock.post.mockRejectedValue(new Error("nope"));
+    await expect(bulkDeletePlans(["1"])).rejects.toThrow("nope");
   });
 });

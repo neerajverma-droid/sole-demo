@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useAtom } from "jotai";
+import { usePathname } from "next/navigation";
 import {
   MapPin,
   Pencil,
@@ -10,10 +11,17 @@ import {
   UserRound,
   type LucideIcon,
 } from "lucide-react";
-import { useFieldArray, useForm, type FieldPath } from "react-hook-form";
+import {
+  useFieldArray,
+  useForm,
+  type FieldErrors,
+  type FieldPath,
+} from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import type { CountryCode } from "libphonenumber-js";
 import { toast } from "sonner";
 
+import { AddressAutocomplete } from "@/components/documents/address-autocomplete";
 import { Button } from "@/components/ui/button";
 import { FormSection } from "@/components/ui/form-section";
 import {
@@ -26,6 +34,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { CountryCodePicker } from "@/components/ui/phone-input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
@@ -37,26 +46,20 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { CurrencySelect } from "@/components/ui/currency-select";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { keepOpenForTour } from "@/components/usertour/keep-open-for-tour";
 import { useCountryContext } from "@/hooks/use-country-context";
+import { contactDefaultDialCode } from "@/lib/country-context";
 import {
   useContactDetailQuery,
   useCreateContactMutation,
   useUpdateContactMutation,
 } from "@/hooks/use-contacts-query";
 import { apiErrorMessage } from "@/lib/api-error";
+import { dialCodeFor, pickerCountryFor } from "@/lib/phone";
 import { contactDrawerAtom } from "@/lib/atoms";
 import {
-  COUNTRY_CODES,
   EMPTY_CONTACT_PERSON,
   contactFormDefaults,
   contactPeople,
@@ -66,6 +69,9 @@ import {
 } from "@/lib/contacts";
 import { maskExample } from "@/lib/business-identifier";
 import { cn } from "@/lib/utils";
+import { EVENTS } from "@/lib/analytics-events";
+import { moduleNameForPath } from "@/lib/nav";
+import { useTrackOnOpen } from "@/hooks/use-track-once";
 
 const TYPE_CHOICES = [
   { value: "Client" as const, label: "Client", hint: "You invoice them" },
@@ -145,6 +151,12 @@ export function ContactDrawer() {
   // ids — the edit drawer needs the real detail fetch, not the summary row.
   const detailQuery = useContactDetailQuery(drawer.editId);
   const editing = drawer.editId ? detailQuery.data : undefined;
+  const pathname = usePathname();
+  useTrackOnOpen(
+    EVENTS.CONTACT_CREATION_INITIATED,
+    drawer.open && !drawer.editId,
+    { module_name: moduleNameForPath(pathname) },
+  );
   const createContact = useCreateContactMutation();
   const updateContact = useUpdateContactMutation();
   const saving = createContact.isPending || updateContact.isPending;
@@ -158,10 +170,16 @@ export function ContactDrawer() {
   const numberField = contactForm?.fields.find((f) => f.key === "ABN") ?? null;
   const currencyField = contactForm?.fields.find((f) => f.key === "currency") ?? null;
   const defaultCurrency = currencyField?.default || country.currency;
+  // A new contact's phone starts on the business's own dial code (+61, +64).
+  const defaultDialCode = contactDefaultDialCode(country);
   const schema = React.useMemo(() => contactSchemaFor(contactForm), [contactForm]);
   const createDefaults = React.useMemo(
-    () => ({ ...contactFormDefaults, currency: defaultCurrency }),
-    [defaultCurrency],
+    () => ({
+      ...contactFormDefaults,
+      currency: defaultCurrency,
+      countryCode: defaultDialCode,
+    }),
+    [defaultCurrency, defaultDialCode],
   );
 
   const form = useForm<ContactFormValues>({
@@ -260,6 +278,16 @@ export function ContactDrawer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultCurrency]);
 
+  // The same for the phone's dial code, until a code is picked or a number typed.
+  React.useEffect(() => {
+    if (!drawer.open || drawer.editId) return;
+    if (form.getFieldState("countryCode").isDirty || form.getValues("phone")) {
+      return;
+    }
+    form.setValue("countryCode", defaultDialCode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [defaultDialCode]);
+
   // A detail fetch that comes back an error means the linked record no
   // longer exists (or never did) — closing here beats leaving an edit
   // drawer open on a blank form pretending to be a real contact. This is
@@ -274,17 +302,6 @@ export function ContactDrawer() {
 
   const values = form.watch();
   const isBusiness = values.businessType === "Business";
-
-  /*
-   * Validated as it will be submitted, not as it is typed.
-   *
-   * `withPrimaryFirst` is what the store will receive, and the primary's email
-   * is the required one — so a person flagged primary from the list has to be
-   * checked in the position they're about to occupy. Parsing the raw values
-   * would pass a promoted contact with no email straight through.
-   */
-  // Computed rather than read from formState so the button is correct on open.
-  const canSave = schema.safeParse(withPrimaryFirst(values)).success;
 
   /** Which card the switch is currently lit on. */
   const primaryIndex = values.additionalContacts?.findIndex(
@@ -316,6 +333,23 @@ export function ContactDrawer() {
   };
 
   /**
+   * Turning the lit switch off hands the flag to someone else.
+   *
+   * There is always exactly one primary, so "off" can't mean "nobody": it means
+   * "somebody other than this person". The anchor passes it to the first
+   * additional contact, and an additional contact passes it back to the anchor.
+   * The switch is disabled when there is no one to hand it to.
+   */
+  const unsetPrimaryPerson = (target: "anchor" | number) => {
+    if (target === "anchor") {
+      if (form.getValues("additionalContacts").length === 0) return;
+      setPrimaryPerson(0);
+    } else {
+      setPrimaryPerson("anchor");
+    }
+  };
+
+  /**
    * Nobody left holding it, so the anchor takes it back.
    *
    * Removing the person who was primary would otherwise leave every switch off,
@@ -337,7 +371,7 @@ export function ContactDrawer() {
 
   /** Appended blank and opened, because there is nothing to summarise yet. */
   const addPerson = () => {
-    additional.append({ ...EMPTY_CONTACT_PERSON });
+    additional.append({ ...EMPTY_CONTACT_PERSON, countryCode: defaultDialCode });
     restore.current = null;
     setEditingIndex(additional.fields.length);
   };
@@ -352,7 +386,7 @@ export function ContactDrawer() {
    *
    * A row added and then cancelled is removed rather than left blank: reverting
    * it to its opening values would leave an empty summary card that fails
-   * validation, so Save would be disabled by a row nobody meant to keep.
+   * validation, so Save would be blocked by a row nobody meant to keep.
    */
   const cancelPerson = (index: number) => {
     if (restore.current) {
@@ -373,6 +407,38 @@ export function ContactDrawer() {
       setEditingIndex(null);
     }
     restorePrimaryIfOrphaned();
+  };
+
+  const formRef = React.useRef<HTMLFormElement>(null);
+
+  /*
+   * Save is always pressable; a failed submit says what's wrong instead.
+   *
+   * Every error is already on screen by now (handleSubmit marks them all), so
+   * this only has to get the first one into view. A collapsed person card
+   * can't show its own errors, so the first one carrying any is opened first —
+   * unless the card already open is itself wrong, which is the one to fix.
+   */
+  const onInvalid = (errors: FieldErrors<ContactFormValues>) => {
+    const people = errors.additionalContacts;
+    if (Array.isArray(people)) {
+      const openHasErrors = editingIndex !== null && !!people[editingIndex];
+      const firstWrong = people.findIndex(Boolean);
+      if (!openHasErrors && firstWrong !== -1 && firstWrong !== editingIndex) {
+        restore.current = form.getValues("additionalContacts")[firstWrong] ?? null;
+        setEditingIndex(firstWrong);
+      }
+    }
+
+    // After the card (if any) has rendered its fields and their messages.
+    window.requestAnimationFrame(() => {
+      const target = formRef.current?.querySelector<HTMLElement>(
+        '[aria-invalid="true"]',
+      );
+      if (!target) return;
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      target.focus({ preventScroll: true });
+    });
   };
 
   const onSubmit = async (submitted: ContactFormValues) => {
@@ -419,7 +485,9 @@ export function ContactDrawer() {
 
         <Form {...form}>
           <form
-            onSubmit={form.handleSubmit(onSubmit)}
+            ref={formRef}
+            noValidate
+            onSubmit={form.handleSubmit(onSubmit, onInvalid)}
             className="flex min-h-0 flex-1 flex-col"
           >
             <div className="min-h-0 flex-1 space-y-6 overflow-y-auto p-6">
@@ -490,25 +558,6 @@ export function ContactDrawer() {
                             type="button"
                             onClick={() => {
                               field.onChange(option);
-                              /*
-                               * An individual is one person, so the list goes
-                               * with the switch. Cleared here rather than left
-                               * for the schema to reject, because the list is
-                               * hidden in this mode — an error nobody can see
-                               * on a field nobody can reach would just be a
-                               * Save button that stopped working.
-                               */
-                              if (option === "Individual") {
-                                additional.replace([]);
-                                restore.current = null;
-                                setEditingIndex(null);
-                                // The list took the flag with it if one of its
-                                // people held it, and the one card left has to
-                                // be the primary.
-                                form.setValue("isPrimary", true, {
-                                  shouldDirty: true,
-                                });
-                              }
                             }}
                             aria-pressed={field.value === option}
                             className={cn(
@@ -613,78 +662,113 @@ export function ContactDrawer() {
                   emailPlaceholder="michael.turner@email.com"
                   emailRequired={anchorIsPrimary}
                   onSetPrimary={() => setPrimaryPerson("anchor")}
+                  onUnsetPrimary={() => unsetPrimaryPerson("anchor")}
+                  primaryLocked={additional.fields.length === 0}
                 />
 
                 {/*
-                  Everyone else at the business. Hidden outright for an
-                  Individual rather than shown empty: there is no second person
-                  at a sole trader, so an empty list with an Add button would be
-                  offering something that can't be saved.
-
-                  No "set as primary" toggle any more. It was a switch that
-                  claimed to nominate a primary while there was only ever one
-                  person to nominate — and now that there are several, which one
-                  is primary is answered by which block you typed them into.
+                  Everyone else at this contact, for Business and Individual
+                  alike. The old app let any contact hold several people (and
+                  defaulted them all to "individual"), so hiding the list for
+                  an Individual would hide, and on save delete, people that
+                  already exist.
                 */}
-                {isBusiness && (
-                  <div className="space-y-3">
-                    <div className="space-y-1">
-                      <p className="text-sm font-medium">Additional contacts</p>
-                      <p className="text-xs text-muted-foreground">
-                        Anyone else at this business worth having on file.
-                      </p>
-                    </div>
-
-                    {additional.fields.length > 0 && (
-                      <ul className="space-y-2">
-                        {additional.fields.map((row, index) => (
-                          <li key={row.id}>
-                            {editingIndex === index ? (
-                              <PersonEditor
-                                form={form}
-                                index={index}
-                                emailRequired={primaryIndex === index}
-                                onSetPrimary={() => setPrimaryPerson(index)}
-                                onDone={donePerson}
-                                onCancel={() => cancelPerson(index)}
-                              />
-                            ) : (
-                              <PersonSummary
-                                form={form}
-                                names={personNamesAt(index)}
-                                person={values.additionalContacts?.[index]}
-                                onSetPrimary={() => setPrimaryPerson(index)}
-                                onEdit={() => openPerson(index)}
-                                onRemove={() => removePerson(index)}
-                              />
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={addPerson}
-                    >
-                      <Plus className="size-4" />
-                      Add contact person
-                    </Button>
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">Additional contacts</p>
+                    <p className="text-xs text-muted-foreground">
+                      Anyone else worth having on file for this contact.
+                    </p>
                   </div>
-                )}
+
+                  {additional.fields.length > 0 && (
+                    <ul className="space-y-2">
+                      {additional.fields.map((row, index) => (
+                        <li key={row.id}>
+                          {editingIndex === index ? (
+                            <PersonEditor
+                              form={form}
+                              index={index}
+                              emailRequired={primaryIndex === index}
+                              onSetPrimary={() => setPrimaryPerson(index)}
+                              onUnsetPrimary={() => unsetPrimaryPerson(index)}
+                              onDone={donePerson}
+                              onCancel={() => cancelPerson(index)}
+                            />
+                          ) : (
+                            <PersonSummary
+                              form={form}
+                              names={personNamesAt(index)}
+                              person={values.additionalContacts?.[index]}
+                              onSetPrimary={() => setPrimaryPerson(index)}
+                              onUnsetPrimary={() => unsetPrimaryPerson(index)}
+                              onEdit={() => openPerson(index)}
+                              onRemove={() => removePerson(index)}
+                            />
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={addPerson}
+                  >
+                    <Plus className="size-4" />
+                    Add contact person
+                  </Button>
+                </div>
               </Section>
 
-              <Section icon={MapPin} title="Address">
-                <TextField
-                  form={form}
+              <Section icon={MapPin} title="Address" tourId="contact-address">
+                {/* Same Places search the business profile uses. The payload
+                    only carries line 1, city and country, so those are the
+                    parts of a picked place that land in the form. */}
+                <FormField
+                  control={form.control}
                   name="addressLine1"
-                  label="Address line 1"
+                  render={({ field, fieldState }) => (
+                    <FormItem>
+                      <FormLabel>Address line 1</FormLabel>
+                      <FormControl>
+                        <AddressAutocomplete
+                          id="contact-addressLine1"
+                          value={field.value}
+                          placeholder="Start typing an address"
+                          ariaInvalid={!!fieldState.error}
+                          className={cn(
+                            fieldState.error &&
+                              "border-destructive focus-visible:ring-destructive",
+                          )}
+                          onChange={field.onChange}
+                          onSelect={(place) => {
+                            const opts = { shouldDirty: true, shouldValidate: true };
+                            form.setValue("addressLine1", place.addressLine1, opts);
+                            form.setValue("city", place.city, opts);
+                            form.setValue("country", place.country, opts);
+                          }}
+                        />
+                      </FormControl>
+                      <FormMessage className="text-xs" />
+                    </FormItem>
+                  )}
                 />
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <TextField form={form} name="city" label="City" />
-                  <TextField form={form} name="country" label="Country" />
+                  <TextField
+                    form={form}
+                    name="city"
+                    label="City"
+                    placeholder="Sydney"
+                  />
+                  <TextField
+                    form={form}
+                    name="country"
+                    label="Country"
+                    placeholder="Australia"
+                  />
                 </div>
               </Section>
 
@@ -695,23 +779,31 @@ export function ContactDrawer() {
                   <FormItem>
                     <FormLabel>Notes</FormLabel>
                     <FormControl>
-                      <Textarea rows={3} {...field} />
+                      <Textarea
+                        rows={3}
+                        placeholder="Anything worth remembering about this contact"
+                        {...field}
+                      />
                     </FormControl>
                   </FormItem>
                 )}
               />
             </div>
 
-            <SheetFooter
-              className="flex-row justify-end gap-2 border-t p-4"
-              data-usertour="contact-save-actions"
-            >
-              <Button type="button" variant="outline" onClick={close}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={!canSave || saving}>
-                {saving ? "Saving…" : "Save contact"}
-              </Button>
+            <SheetFooter className="flex-row justify-end gap-2 border-t p-4">
+              {/* The tour anchors on this wrapper, not the footer, so only the
+                  buttons are highlighted rather than the full-width bar. */}
+              <div
+                className="flex items-center gap-2"
+                data-usertour="contact-save-actions"
+              >
+                <Button type="button" variant="outline" onClick={close}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={saving}>
+                  {saving ? "Saving…" : "Save contact"}
+                </Button>
+              </div>
             </SheetFooter>
           </form>
         </Form>
@@ -735,10 +827,20 @@ function Section({
   tourId?: string;
   children: React.ReactNode;
 }) {
-  return (
+  const section = (
     <FormSection icon={icon} title={title} tourId={tourId}>
       {children}
     </FormSection>
+  );
+  if (!tourId) return section;
+
+  // A section the tour points at is scrolled to the top of the drawer, so the
+  // card beside its header has the whole section under it (see
+  // `scrollWithinDialog`).
+  return (
+    <div data-tour-scroll="start" className="scroll-mt-4">
+      {section}
+    </div>
   );
 }
 
@@ -764,6 +866,7 @@ function PersonSummary({
   names,
   person,
   onSetPrimary,
+  onUnsetPrimary,
   onEdit,
   onRemove,
 }: {
@@ -771,6 +874,7 @@ function PersonSummary({
   names: PersonNames;
   person: ContactPerson | undefined;
   onSetPrimary: () => void;
+  onUnsetPrimary: () => void;
   onEdit: () => void;
   onRemove: () => void;
 }) {
@@ -822,6 +926,7 @@ function PersonSummary({
         form={form}
         name={names.isPrimary}
         onSelect={onSetPrimary}
+        onDeselect={onUnsetPrimary}
       />
     </div>
   );
@@ -878,11 +983,11 @@ function personNamesAt(index: number): PersonNames {
 /**
  * Who to treat as the main contact, one card at a time.
  *
- * A switch rather than a label, because it's a choice and not a status — and it
- * only ever turns something *on*. Off is not a state anyone can select: a
- * contact with no primary has no name for the table to show, so the one that's
- * on stays on until another is chosen. Clicking the lit switch does nothing,
- * which is the honest response to "make this the primary" when it already is.
+ * A switch rather than a label, because it's a choice and not a status. Turning
+ * one on makes that person the primary and turns the others off. Turning the lit
+ * one off hands the flag to someone else (a contact with no primary has no name
+ * for the table to show), and with nobody else to hand it to the switch is
+ * disabled.
  *
  * A ruled row rather than the bordered box this control used to sit in. It's
  * inside a card now, and a bordered box inside a bordered card inside a
@@ -892,10 +997,16 @@ function PrimaryToggle({
   form,
   name,
   onSelect,
+  onDeselect,
+  locked,
 }: {
   form: FormType;
   name: FieldName;
   onSelect: () => void;
+  /** Turning the lit switch off — hands the flag to someone else. */
+  onDeselect: () => void;
+  /** Nobody else to hand it to, so the only person stays primary. */
+  locked?: boolean;
 }) {
   return (
     <FormField
@@ -907,8 +1018,10 @@ function PrimaryToggle({
           <FormControl>
             <Switch
               checked={!!field.value}
+              disabled={locked}
               onCheckedChange={(next) => {
                 if (next) onSelect();
+                else onDeselect();
               }}
             />
           </FormControl>
@@ -938,6 +1051,8 @@ function PersonCard({
   emailPlaceholder,
   emailRequired,
   onSetPrimary,
+  onUnsetPrimary,
+  primaryLocked,
   actions,
 }: {
   form: FormType;
@@ -947,6 +1062,9 @@ function PersonCard({
   /** Follows the switch: the primary's email is required, a second's isn't. */
   emailRequired?: boolean;
   onSetPrimary: () => void;
+  onUnsetPrimary: () => void;
+  /** True when this is the only person, so the switch can't be turned off. */
+  primaryLocked?: boolean;
   /** The card's own buttons, for a row that can be closed or discarded. */
   actions?: React.ReactNode;
 }) {
@@ -977,14 +1095,26 @@ function PersonCard({
       />
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <TextField form={form} name={names.division} label="Division" />
-        <TextField form={form} name={names.position} label="Position" />
+        <TextField
+          form={form}
+          name={names.division}
+          label="Division"
+          placeholder="Finance"
+        />
+        <TextField
+          form={form}
+          name={names.position}
+          label="Position"
+          placeholder="Accounts manager"
+        />
       </div>
 
       <PrimaryToggle
         form={form}
         name={names.isPrimary}
         onSelect={onSetPrimary}
+        onDeselect={onUnsetPrimary}
+        locked={primaryLocked}
       />
 
       {actions}
@@ -1004,6 +1134,7 @@ function PersonEditor({
   index,
   emailRequired,
   onSetPrimary,
+  onUnsetPrimary,
   onDone,
   onCancel,
 }: {
@@ -1011,6 +1142,7 @@ function PersonEditor({
   index: number;
   emailRequired?: boolean;
   onSetPrimary: () => void;
+  onUnsetPrimary: () => void;
   onDone: () => void;
   onCancel: () => void;
 }) {
@@ -1022,6 +1154,7 @@ function PersonEditor({
       emailPlaceholder="sarah.chen@email.com"
       emailRequired={emailRequired}
       onSetPrimary={onSetPrimary}
+      onUnsetPrimary={onUnsetPrimary}
       actions={
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
@@ -1056,6 +1189,8 @@ function PhoneField({
   codeName: FieldName;
   phoneName: FieldName;
 }) {
+  const [pickedCountry, setPickedCountry] = React.useState<CountryCode>();
+
   return (
     <FormField
       control={form.control}
@@ -1067,29 +1202,26 @@ function PhoneField({
             <FormField
               control={form.control}
               name={codeName}
-              render={({ field: codeField }) => (
-                <Select
-                  value={String(codeField.value ?? "")}
-                  onValueChange={(value) => {
-                    codeField.onChange(value);
-                    void form.trigger(phoneName);
-                  }}
-                >
-                  <SelectTrigger
-                    className="w-[116px] shrink-0"
-                    aria-label="Country code"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {COUNTRY_CODES.map((entry) => (
-                      <SelectItem key={entry.code} value={entry.code}>
-                        {entry.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
+              render={({ field: codeField }) => {
+                // Only the dial code is stored, so the flag picked is
+                // remembered here — see `pickerCountryFor`.
+                const country = pickerCountryFor(
+                  String(codeField.value ?? ""),
+                  pickedCountry,
+                );
+                return (
+                  <CountryCodePicker
+                    country={country}
+                    invalid={!!fieldState.error}
+                    onCloseFocus={() => form.setFocus(phoneName)}
+                    onSelect={(next) => {
+                      setPickedCountry(next);
+                      codeField.onChange(`+${dialCodeFor(next)}`);
+                      void form.trigger(phoneName);
+                    }}
+                  />
+                );
+              }}
             />
             <FormControl>
               <Input

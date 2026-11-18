@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import { useAtom, useSetAtom } from "jotai";
 import { Mail, Plus, Receipt, Upload } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -21,20 +21,13 @@ import {
 } from "@/components/expenses/expense-dialogs";
 import { ConvertToInvoiceDialog } from "@/components/expenses/convert-to-invoice-dialog";
 import { ExpensesSummary } from "@/components/expenses/expenses-summary";
-import {
-  DEFAULT_PAGE_SIZE,
-  ExpensesTable,
-} from "@/components/expenses/expenses-table";
+import { ExpensesTable } from "@/components/expenses/expenses-table";
 import { MatchDialog } from "@/components/expenses/match-dialog";
 import { ShiftFinanceBanner } from "@/components/expenses/shift-finance-banner";
-import {
-  useExpenseSummaryQuery,
-  useExpensesListQuery,
-} from "@/hooks/use-expenses-query";
+import { useExpenseSummaryQuery } from "@/hooks/use-expenses-query";
 import {
   expenseBulkOpenAtom,
   expensePeriodAtom,
-  expenseSortAtom,
   expensesQueryAtom,
 } from "@/lib/atoms";
 import { EXPENSE_PERIODS, type ExpensePeriod } from "@/lib/expenses";
@@ -51,32 +44,22 @@ export function ExpensesScreen() {
   // Deep link from the BAS review: land on the list already searched for the
   // expense a finding is about. The search box shows it, so it can be cleared.
   const setExpenseQuery = useSetAtom(expensesQueryAtom);
-  const searchParam = useSearchParams()?.get("search");
+  const searchParams = useSearchParams();
+  const searchParam = searchParams?.get("search");
   React.useEffect(() => {
     if (searchParam?.trim()) setExpenseQuery(searchParam.trim());
   }, [searchParam, setExpenseQuery]);
   const router = useRouter();
+
+  // Bills used to be a tab here. Old links and bookmarks still land somewhere.
+  const legacyBillsTab = searchParams?.get("tab") === "bills";
+  React.useEffect(() => {
+    if (legacyBillsTab) router.replace("/expenses/bills");
+  }, [legacyBillsTab, router]);
   const createIntent = useCreateIntent();
   const [period, setPeriod] = useAtom(expensePeriodAtom);
   const summaryQuery = useExpenseSummaryQuery(period);
 
-  /*
-   * The table's own unfiltered first page — same key, so it's the cached
-   * response rather than a second fetch. Once it has genuinely loaded with
-   * nothing in it, the period tabs, stat cards and banner all go, leaving
-   * just the header and the table's own empty state. A search still in the
-   * box keeps them, so it can be cleared.
-   */
-  const query = useAtomValue(expensesQueryAtom);
-  const sort = useAtomValue(expenseSortAtom);
-  const firstPageQuery = useExpensesListQuery(1, DEFAULT_PAGE_SIZE, {
-    search: "",
-    sort,
-  });
-  const hasNoExpenses =
-    firstPageQuery.isSuccess &&
-    firstPageQuery.data.total === 0 &&
-    !query.trim();
 
   // Deep-linked from a "New expense" entry point: open the chooser directly.
   React.useEffect(() => {
@@ -101,43 +84,43 @@ export function ExpensesScreen() {
           <Upload />
           Bulk upload
         </Button>
-        <Button asChild data-tour="add-expense">
-          <Link href="/expenses/new">
-            <Plus />
-            New expense
-          </Link>
-        </Button>
+        <div
+          className="flex flex-wrap items-center gap-3"
+          data-usertour="expense-add-actions"
+        >
+          <Button asChild data-tour="add-expense">
+            <Link href="/expenses/new">
+              <Plus />
+              New expense
+            </Link>
+          </Button>
+        </div>
       </PageHeader>
 
-      {!hasNoExpenses && (
-        <>
-          {/* The period only re-queries the analytics cards below — the
-              table stays on its own real, paginated listing, same as
-              sole-webapp's own screen. */}
-          <Tabs
-            value={period}
-            onValueChange={(next) => setPeriod(next as ExpensePeriod)}
-          >
-            <TabsList
-              aria-label="Summary period"
-              data-usertour="expense-period"
-            >
-              {EXPENSE_PERIODS.map((option) => (
-                <TabsTrigger key={option} value={option}>
-                  {option}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
+      {/* Stays for an account with no expenses yet too, as on Invoices: the
+          same screen it will have later, zeroes and all. */}
+      {/* The period only re-queries the analytics cards below — the
+          table stays on its own real, paginated listing, same as
+          sole-webapp's own screen. */}
+      <Tabs
+        value={period}
+        onValueChange={(next) => setPeriod(next as ExpensePeriod)}
+      >
+        <TabsList aria-label="Summary period" data-usertour="expense-period">
+          {EXPENSE_PERIODS.map((option) => (
+            <TabsTrigger key={option} value={option}>
+              {option}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
 
-          <ExpensesSummary
-            period={period}
-            summary={summaryQuery.data}
-            loading={summaryQuery.isLoading}
-          />
-          <ShiftFinanceBanner />
-        </>
-      )}
+      <ExpensesSummary
+        period={period}
+        summary={summaryQuery.data}
+        loading={summaryQuery.isLoading}
+      />
+      <ShiftFinanceBanner />
 
       <ExpensesTable />
 
@@ -152,9 +135,8 @@ export function ExpensesScreen() {
       <MatchExpenseDialog />
       <UnmatchExpenseDialog />
       <MatchDialog />
-      {/* Opened by the row menu's Convert to invoice, with the expense
-          prefilled — the list stays put behind it, same as sole-webapp's own
-          drawer. */}
+      {/* Opened by the row menu's Convert to invoice: checks for drafts, then
+          opens the invoice on its own page with the expense prefilled. */}
       <ConvertToInvoiceDialog />
       {/* Opened by the invoice badge on an on-charged expense. */}
       <InvoicePreviewDialog />

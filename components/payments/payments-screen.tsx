@@ -246,30 +246,6 @@ export function PaymentsScreen() {
     total: 0,
   };
 
-  /*
-   * A gateway that has never taken a payment shows its empty state alone, not
-   * under four zeroed stat cards. Only a settled, successful answer counts — a
-   * failed load or one still in flight isn't "none". The pills stay either
-   * way: they're how the Gateways tab (where a provider is connected) and the
-   * other provider's payments are reached, so an empty SolePay can't hide
-   * Stripe's.
-   */
-  const worldpayEmpty =
-    worldpayQuery.isSuccess &&
-    !worldpayQuery.isFetching &&
-    worldpayPayments.length === 0 &&
-    worldpayPagination.total === 0;
-  const stripeEmpty =
-    stripeQuery.isSuccess &&
-    !stripeQuery.isFetching &&
-    stripePayments.length === 0 &&
-    stripePagination.total === 0;
-  const nexxtapEmpty =
-    nexxtapQuery.isSuccess &&
-    !nexxtapQuery.isFetching &&
-    nexxtapPayments.length === 0 &&
-    nexxtapPagination.total === 0;
-
   // NextTap only once a Merchant ID is linked — same as sole-webapp, where
   // the tab is spread in behind `nexxtapConnected`.
   const visibleTabs: GatewayTab[] = [
@@ -303,7 +279,6 @@ export function PaymentsScreen() {
         <SolePayTransactions
           payments={worldpayPayments}
           loading={worldpayQuery.isLoading || worldpayQuery.isFetching}
-          empty={worldpayEmpty}
           pagination={worldpayPagination}
           onPageChange={(page) => setWorldpayPage(page)}
           onPageSizeChange={(size) => {
@@ -317,7 +292,6 @@ export function PaymentsScreen() {
           summary={nexxtapQuery.data?.summary ?? null}
           merchantId={nexxtapMerchantId}
           loading={nexxtapQuery.isLoading || nexxtapQuery.isFetching}
-          empty={nexxtapEmpty}
           pagination={nexxtapPagination}
           onPageChange={(page) => setNexxtapPage(page)}
           onPageSizeChange={(size) => {
@@ -330,7 +304,6 @@ export function PaymentsScreen() {
           payments={stripePayments}
           stats={stripeStatsQuery.data ?? null}
           loading={stripeQuery.isLoading || stripeQuery.isFetching}
-          empty={stripeEmpty}
           pagination={stripePagination}
           onPageChange={(page) => setStripePage(page)}
           onPageSizeChange={(size) => {

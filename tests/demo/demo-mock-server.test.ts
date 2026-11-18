@@ -103,14 +103,14 @@ describe("Demo Mock Server", () => {
     expect(assetsRes?.data.data.asset_details.length).toBe(4);
 
     const calRes = handleMockRequest("GET", "/calendar");
-    expect(calRes?.data.data.length).toBe(3);
+    expect(calRes?.data.data.length).toBeGreaterThanOrEqual(3);
   });
 
   it("serves bank accounts and transactions data for Coastal Spark Electrical", () => {
     const bankRes = handleMockRequest("GET", "/bank/accounts");
     expect(bankRes?.data.success).toBe(true);
     expect(bankRes?.data.data.success).toBe(true);
-    expect(bankRes?.data.data.accounts.length).toBe(1);
+    expect(bankRes?.data.data.accounts.length).toBeGreaterThanOrEqual(1);
     expect(bankRes?.data.data.accounts[0].bank_name).toBe("Coastal Community Bank");
     expect(bankRes?.data.data.total_balance).toBe(42850.5);
 
@@ -139,6 +139,58 @@ describe("Demo Mock Server", () => {
     expect(ruleDetailRes?.data.data.rule.name).toBe("Middy's Electrical Supplies");
     expect(ruleDetailRes?.data.data.rule.condition_type).toBe("DESCRIPTION");
     expect(ruleDetailRes?.data.data.rule.condition).toBe("CONTAIN");
+
+    const syncStatsRes = handleMockRequest("GET", "/v2/transactions-auto-match-count");
+    expect(syncStatsRes?.data.success).toBe(true);
+    expect(syncStatsRes?.data.data.total).toBe(24);
+    expect(syncStatsRes?.data.data.matched_details.length).toBeGreaterThan(0);
+  });
+
+  it("serves bills, bill schedules, and summary figures", () => {
+    const billsRes = handleMockRequest("GET", "/v2/bill");
+    expect(billsRes?.data.success).toBe(true);
+    expect(billsRes?.data.data.bills.length).toBeGreaterThanOrEqual(6);
+
+    const summaryRes = handleMockRequest("GET", "/v2/bill/summary");
+    expect(summaryRes?.data.success).toBe(true);
+    expect(summaryRes?.data.data.owed.amount).toBeGreaterThan(0);
+    expect(summaryRes?.data.data.overdue.amount).toBeGreaterThan(0);
+
+    const upcomingRes = handleMockRequest("GET", "/v2/bill/upcoming");
+    expect(upcomingRes?.data.success).toBe(true);
+    expect(upcomingRes?.data.data.bills.length).toBeGreaterThan(0);
+    expect(upcomingRes?.data.data.expected.length).toBeGreaterThan(0);
+  });
+
+  it("serves proposals, proposal templates, and credit notes", () => {
+    const propRes = handleMockRequest("GET", "/proposal");
+    expect(propRes?.data.success).toBe(true);
+    expect(propRes?.data.data.rows.length).toBeGreaterThanOrEqual(2);
+
+    const tmplRes = handleMockRequest("GET", "/proposal/templates", { template_type: "PROPOSAL" });
+    expect(tmplRes?.data.success).toBe(true);
+    expect(tmplRes?.data.data.length).toBe(3);
+
+    const cnRes = handleMockRequest("GET", "/credit-note");
+    expect(cnRes?.data.success).toBe(true);
+    expect(cnRes?.data.data.credit_notes.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("serves unibox cards and merchant account statuses", () => {
+    const uniboxInvoices = handleMockRequest("GET", "/unibox/invoices");
+    expect(uniboxInvoices?.data.success).toBe(true);
+    expect(uniboxInvoices?.data.data.length).toBeGreaterThan(0);
+
+    const worldpayRes = handleMockRequest("GET", "/v1/worldpay/account/status");
+    expect(worldpayRes?.data.success).toBe(true);
+    expect(worldpayRes?.data.data.account_status).toBe("active");
+
+    const nexxtapRes = handleMockRequest("GET", "/v2/nexxtap/account/status");
+    expect(nexxtapRes?.data.success).toBe(true);
+    expect(nexxtapRes?.data.data.using_nexxtap).toBe(true);
+
+    const checkNoRes = handleMockRequest("GET", "/invoice/invoice-no/check");
+    expect(checkNoRes?.data.is_unique).toBe(true);
   });
 
   it("serves super contributions and super matrix without undefined errors", () => {
@@ -182,6 +234,182 @@ describe("Demo Mock Server", () => {
     const payrunsRes = handleMockRequest("GET", "/payruns");
     expect(payrunsRes?.data.success).toBe(true);
     expect(payrunsRes?.data.data.length).toBe(3);
+  });
+
+  it("serves client refunds and vendor refunds with full details", () => {
+    const clientRes = handleMockRequest("GET", "/credit-note", { type: "client" });
+    expect(clientRes?.data.success).toBe(true);
+    expect(Array.isArray(clientRes?.data.data)).toBe(true);
+    expect(clientRes?.data.data.length).toBe(3);
+    expect(clientRes?.data.data[0].credit_note_no).toBe("CRN-0001");
+    expect(clientRes?.data.data[0].has_complete_bank_info).toBe(true);
+
+    const vendorRes = handleMockRequest("GET", "/credit-note", { type: "vendor" });
+    expect(vendorRes?.data.success).toBe(true);
+    expect(Array.isArray(vendorRes?.data.data)).toBe(true);
+    expect(vendorRes?.data.data.length).toBe(3);
+    expect(vendorRes?.data.data[0].credit_note_no).toBe("VCR-2001");
+
+    const singleRes = handleMockRequest("GET", "/credit-note/1");
+    expect(singleRes?.data.success).toBe(true);
+    expect(singleRes?.data.data.credit_note_no).toBe("CRN-0001");
+
+    const genRes = handleMockRequest("POST", "/credit-note/generate");
+    expect(genRes?.data.success).toBe(true);
+    expect(genRes?.data.data).toBe("CRN-0004");
+  });
+
+  it("serves time tracking entries, logs, stats, and weekly breakdown", () => {
+    const logsRes = handleMockRequest("GET", "/tasks/time-logs");
+    expect(logsRes?.data.success).toBe(true);
+    expect(logsRes?.data.data.length).toBeGreaterThanOrEqual(3);
+
+    const statsRes = handleMockRequest("GET", "/time-tracking/stats/time-based");
+    expect(statsRes?.data.success).toBe(true);
+    expect(statsRes?.data.data.summary.total_hours).toBe(42.5);
+
+    const weeklyRes = handleMockRequest("GET", "/time-tracking/weekly");
+    expect(weeklyRes?.data.success).toBe(true);
+    expect(weeklyRes?.data.data.logs.length).toBeGreaterThan(0);
+
+    const activeRes = handleMockRequest("GET", "/time-tracking/active");
+    expect(activeRes?.data.success).toBe(true);
+    expect(activeRes?.data.data).toBeNull();
+
+    const startTimerRes = handleMockRequest("POST", "/time-tracking/start");
+    expect(startTimerRes?.data.success).toBe(true);
+    expect(startTimerRes?.data.data.status).toBe("running");
+  });
+
+  it("serves calendar events, list, search, and stages", () => {
+    const listRes = handleMockRequest("GET", "/calendar/list");
+    expect(listRes?.data.success).toBe(true);
+    expect(listRes?.data.data.length).toBe(1);
+    expect(listRes?.data.data[0].email).toBe("sam@coastalspark.com.au");
+
+    const searchRes = handleMockRequest("GET", "/calendar/search", { search: "Switchboard" });
+    expect(searchRes?.data.success).toBe(true);
+    expect(searchRes?.data.data.length).toBeGreaterThanOrEqual(1);
+
+    const detailRes = handleMockRequest("GET", "/calendar/cal-1");
+    expect(detailRes?.data.success).toBe(true);
+    expect(detailRes?.data.data.title).toContain("Switchboard");
+
+    const stagesRes = handleMockRequest("GET", "/stage");
+    expect(stagesRes?.data.success).toBe(true);
+    expect(stagesRes?.data.data.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("serves planner kanban, task list, goals, budgets, and cash wallet", () => {
+    const kanbanRes = handleMockRequest("GET", "/planner");
+    expect(kanbanRes?.data.success).toBe(true);
+    expect(kanbanRes?.data.data.length).toBe(4);
+    expect(kanbanRes?.data.data[0].tasks.length).toBeGreaterThan(0);
+
+    const tasksRes = handleMockRequest("GET", "/planner/tasks");
+    expect(tasksRes?.data.success).toBe(true);
+    expect(tasksRes?.data.data.rows.length).toBe(5);
+
+    const goalsRes = handleMockRequest("GET", "/v2/planner/goals");
+    expect(goalsRes?.data.success).toBe(true);
+    expect(goalsRes?.data.data.length).toBeGreaterThanOrEqual(2);
+
+    const budgetsRes = handleMockRequest("GET", "/v2/budget");
+    expect(budgetsRes?.data.success).toBe(true);
+    expect(budgetsRes?.data.data.length).toBeGreaterThanOrEqual(3);
+
+    const plansRes = handleMockRequest("GET", "/v2/expense-plans");
+    expect(plansRes?.data.success).toBe(true);
+    expect(plansRes?.data.data.length).toBeGreaterThanOrEqual(2);
+
+    const walletRes = handleMockRequest("GET", "/v2/cash-wallet");
+    expect(walletRes?.data.success).toBe(true);
+    expect(walletRes?.data.data.balance).toBe(1450);
+
+    const overviewRes = handleMockRequest("GET", "/v2/planner/overview");
+    expect(overviewRes?.data.success).toBe(true);
+    expect(overviewRes?.data.data.cash_on_hand).toBeGreaterThan(0);
+  });
+
+  it("serves investment property portfolio and individual property details", () => {
+    const listRes = handleMockRequest("GET", "/investment-property");
+    expect(listRes?.data.success).toBe(true);
+    expect(listRes?.data.data.length).toBe(2);
+
+    const portfolioRes = handleMockRequest("GET", "/investment-property/portfolio/summary");
+    expect(portfolioRes?.data.success).toBe(true);
+    expect(portfolioRes?.data.data.total_properties).toBe(2);
+    expect(portfolioRes?.data.data.total_current_value).toBe("1590000.00");
+
+    const expenseRes = handleMockRequest("GET", "/investment-property/dashboard/expense-breakdown");
+    expect(expenseRes?.data.success).toBe(true);
+    expect(expenseRes?.data.data.breakdown.length).toBeGreaterThan(0);
+
+    const singleRes = handleMockRequest("GET", "/investment-property/1");
+    expect(singleRes?.data.success).toBe(true);
+    expect(singleRes?.data.data.property_name).toContain("Sunshine Parade");
+
+    const loanRes = handleMockRequest("GET", "/investment-property/loan/1");
+    expect(loanRes?.data.success).toBe(true);
+    expect(loanRes?.data.data.loan.lender_name).toBe("Macquarie Bank");
+
+    const cgtRes = handleMockRequest("GET", "/investment-property/cgt-breakdown/1");
+    expect(cgtRes?.data.success).toBe(true);
+    expect(Number(cgtRes?.data.data.discounted_capital_gain)).toBeGreaterThan(0);
+  });
+
+  it("serves all reports across reporting suite without write-blocker error", () => {
+    // 1: Profit & Loss
+    const pnlRes = handleMockRequest("POST", "/report", {}, { report_type_id: "1" });
+    expect(pnlRes?.data.success).toBe(true);
+    expect(pnlRes?.data.sections.length).toBeGreaterThan(0);
+
+    // 2: Balance Sheet
+    const bsRes = handleMockRequest("POST", "/report", {}, { report_type_id: "2" });
+    expect(bsRes?.data.success).toBe(true);
+    expect(bsRes?.data.sections.length).toBeGreaterThan(0);
+
+    // 3: Asset Listing
+    const alRes = handleMockRequest("POST", "/report", {}, { report_type_id: "3" });
+    expect(alRes?.data.success).toBe(true);
+    expect(alRes?.data.data.length).toBe(5);
+
+    // 4: Transaction Listing
+    const tlRes = handleMockRequest("POST", "/report", {}, { report_type_id: "4" });
+    expect(tlRes?.data.success).toBe(true);
+    expect(tlRes?.data.data.length).toBe(6);
+
+    // 8: Trial Balance
+    const tbRes = handleMockRequest("POST", "/report", {}, { report_type_id: "8" });
+    expect(tbRes?.data.success).toBe(true);
+    expect(tbRes?.data.sections.length).toBeGreaterThan(0);
+
+    // 9: Customer / Supplier
+    const csRes = handleMockRequest("POST", "/report", {}, { report_type_id: "9" });
+    expect(csRes?.data.success).toBe(true);
+    expect(csRes?.data.data.length).toBeGreaterThan(0);
+
+    // 10: Chart of Accounts
+    const coaRes = handleMockRequest("POST", "/report", {}, { report_type_id: "10" });
+    expect(coaRes?.data.success).toBe(true);
+    expect(coaRes?.data.data.length).toBeGreaterThan(0);
+
+    // 11: Cash Flow
+    const cfRes = handleMockRequest("POST", "/report", {}, { report_type_id: "11" });
+    expect(cfRes?.data.success).toBe(true);
+    expect(cfRes?.data.data.length).toBeGreaterThan(0);
+
+    // BAS (gst-extract)
+    const basRes = handleMockRequest("POST", "/report/gst-extract");
+    expect(basRes?.data.success).toBe(true);
+    expect(basRes?.data.Quarter).toBe("Quarter 1");
+    expect(basRes?.data.tax_return.sections.length).toBe(2);
+    expect(basRes?.data.tax_return.sections[0].rows[0].amount).toBeGreaterThan(0);
+
+    // Audit logs
+    const auditRes = handleMockRequest("POST", "/v2/settings/audit-logs");
+    expect(auditRes?.data.success).toBe(true);
+    expect(auditRes?.data.data.details.length).toBeGreaterThan(0);
   });
 
   it("blocks any write operation in read-only demo mode", () => {

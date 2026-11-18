@@ -3,15 +3,18 @@
 import { DollarSign, Landmark, Percent, Receipt } from "lucide-react";
 
 import { StatCards, type StatCard } from "@/components/ui/stat-cards";
-import { useFiscalYearStart } from "@/hooks/use-fiscal-year-start";
+import { useDashboardPeriod } from "@/hooks/use-dashboard-period";
 import { assetStats } from "@/lib/assets";
 import { money } from "@/lib/dashboard-data";
 import { expenseTotal } from "@/lib/expenses";
-import { currentFinancialYear, financialYearRevenue } from "@/lib/invoices";
+import { inWindow } from "@/lib/dashboard-period";
+import { financialYearRevenue } from "@/lib/invoices";
 import { reportPercent } from "@/lib/reports";
-import { useAssetsStore } from "@/stores/assets";
-import { useExpensesStore } from "@/stores/expenses";
-import { useInvoicesStore } from "@/stores/invoices";
+import {
+  useDashboardAssets,
+  useDashboardExpenses,
+  useDashboardInvoices,
+} from "@/hooks/use-dashboard-source";
 
 /**
  * What net profit is, and what it isn't.
@@ -46,17 +49,14 @@ const ASSETS_TIP =
  * delta against a seeded baseline would be a made-up figure dressed as a fact.
  */
 export function BusinessSnapshot() {
-  const invoices = useInvoicesStore((state) => state.invoices);
-  const invoicesHydrated = useInvoicesStore((state) => state.hydrated);
-  const expenses = useExpensesStore((state) => state.expenses);
-  const expensesHydrated = useExpensesStore((state) => state.hydrated);
-  const assets = useAssetsStore((state) => state.assets);
-  const assetsHydrated = useAssetsStore((state) => state.hydrated);
+  const { invoices, hydrated: invoicesHydrated } = useDashboardInvoices();
+  const { expenses, hydrated: expensesHydrated } = useDashboardExpenses();
+  const { assets, hydrated: assetsHydrated } = useDashboardAssets();
   const loading = !invoicesHydrated || !expensesHydrated || !assetsHydrated;
 
-  // The business's own year — 1 April in New Zealand — not Australia's.
-  const fiscalYearStart = useFiscalYearStart();
-  const year = currentFinancialYear(new Date(), fiscalYearStart);
+  // The period the header's dropdown picks — this month, this financial year
+  // or last — on the business's own year (1 April in New Zealand).
+  const { window: year } = useDashboardPeriod();
 
   const revenue = financialYearRevenue(invoices, year).amount;
 
@@ -69,7 +69,7 @@ export function BusinessSnapshot() {
    */
   const totalExpenses = expenses
     .filter(
-      (expense) => expense.date >= year.startIso && expense.date <= year.endIso,
+      (expense) => inWindow(expense.date, year),
     )
     .reduce((sum, expense) => sum + expenseTotal(expense), 0);
 

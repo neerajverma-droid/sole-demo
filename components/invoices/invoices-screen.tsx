@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import { useAtom, useSetAtom } from "jotai";
 import { FileText, Plus, Upload } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -22,43 +22,28 @@ import {
 import { InvoicesSummary } from "@/components/invoices/invoices-summary";
 import { InvoicesTable } from "@/components/invoices/invoices-table";
 import { useContactsQuery } from "@/hooks/use-contacts-query";
-import { useInvoicesQuery } from "@/hooks/use-invoices-query";
+import { useInvoiceSummaryStatsQuery } from "@/hooks/use-invoice-summary-stats-query";
 import {
   invoiceBulkOpenAtom,
-  invoicesQueryAtom,
   invoicesTabAtom,
 } from "@/lib/atoms";
 import { INVOICE_STATUSES } from "@/lib/invoices";
-import { useAreaFilter } from "@/components/documents/area-filter";
-import { useInvoicesStore } from "@/stores/invoices";
 
 export function InvoicesScreen() {
   const setBulkOpen = useSetAtom(invoiceBulkOpenAtom);
-  const query = useInvoicesQuery();
+  // The card's figures come from the server's stats and the table loads its own
+  // page. The row dialogs use that page's rows (`listedInvoicesAtom`), so this
+  // screen no longer fetches the 200-invoice list at all.
+  const statsQuery = useInvoiceSummaryStatsQuery();
   // Hydrates the shared contacts store so the "Filter invoices" panel's
   // Clients picker has options the moment this screen loads, rather than
   // only once the Contacts page happens to have been visited first —
   // sole-webapp's own InvoiceList.js fetches its client list the same way,
   // unconditionally on mount (`?filter_by[type]=client&page_size=1000`).
   useContactsQuery("Client", 1, 1000, "");
-  const invoices = useInvoicesStore((state) => state.invoices);
-  const hydrated = useInvoicesStore((state) => state.hydrated);
-  const [tab, setTab] = useAtom(invoicesTabAtom);
-  const search = useAtomValue(invoicesQueryAtom);
-  const area = useAreaFilter();
+  const [, setTab] = useAtom(invoicesTabAtom);
 
-  const loading = !hydrated && query.isLoading;
-  /*
-   * The account genuinely has no invoices — loaded, not errored, and not
-   * narrowed by a tab, search or area link — so the summary goes and the
-   * table is left showing only its own empty state.
-   */
-  const hasNoInvoices =
-    query.isSuccess &&
-    query.data.length === 0 &&
-    tab === "All" &&
-    !search.trim() &&
-    !area;
+  const loading = statsQuery.isLoading;
   const searchParams = useSearchParams();
 
   // Deep link from the Dashboard's "N invoices overdue" row.
@@ -94,14 +79,13 @@ export function InvoicesScreen() {
       </PageHeader>
 
       {/*
-        Each half loads on its own: the summary's own `fetchInvoices()` call
+        Each half loads on its own: the summary's server-side stats request
         and the table's own paginated fetch fire together rather than one
         waiting on the other, so a slow summary can't hold up rows whose
-        request already finished.
+        request already finished. It stays for an account with no invoices
+        yet too, its zeroes the first thing to fill in.
       */}
-      {!hasNoInvoices && (
-        <InvoicesSummary invoices={invoices} loading={loading} />
-      )}
+      <InvoicesSummary stats={statsQuery.data} loading={loading} />
       <InvoicesTable />
       <InvoicePreviewDialog />
       <AttachInvoiceDialog />

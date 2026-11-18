@@ -18,11 +18,7 @@ const apiMock = {
 
 vi.mock("@/utils/axiosInstance", () => ({ default: apiMock }));
 
-const trackMock = vi.fn();
-vi.mock("@/lib/analytics", () => ({ track: (...args: unknown[]) => trackMock(...args) }));
-
 const tt = await import("@/lib/time-tracker");
-const { EVENTS } = await import("@/lib/analytics-events");
 
 function decryptBody(body: unknown): Record<string, unknown> {
   const envelope = body as { data?: unknown };
@@ -89,18 +85,6 @@ describe("the running timer", () => {
 });
 
 describe("manual log", () => {
-  it("counts a logged entry for analytics, in minutes", async () => {
-    apiMock.post.mockResolvedValue({ data: { success: true } });
-    await tt.createManualLogApi({
-      ...tt.emptyManualLog(new Date(2026, 9, 22)),
-      description: "x",
-      startTime: "09:00",
-      endTime: "10:30",
-      client: CLIENT,
-    });
-    expect(trackMock).toHaveBeenCalledWith(EVENTS.TIME_ENTRY_LOGGED, { duration_minutes: 90, source: "manual" });
-  });
-
   it("sends the project and job only when assigned", async () => {
     apiMock.post.mockResolvedValue({ data: { success: true } });
     await tt.createManualLogApi({
@@ -126,12 +110,6 @@ describe("manual log", () => {
     await expect(
       tt.createManualLogApi({ ...tt.emptyManualLog(), description: "x", client: CLIENT }),
     ).rejects.toThrow("hours_logged is required");
-    expect(trackMock).not.toHaveBeenCalled();
-  });
-
-  it("counts a saved timer session the same way", () => {
-    tt.trackTimerEntryLogged(150);
-    expect(trackMock).toHaveBeenCalledWith(EVENTS.TIME_ENTRY_LOGGED, { duration_minutes: 3, source: "timer" });
   });
 });
 

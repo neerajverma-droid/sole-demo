@@ -6,9 +6,9 @@ import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowLeft,
-  Clock,
   FileText,
   HeartHandshake,
+  LayoutTemplate,
   Search,
   Upload,
 } from "lucide-react";
@@ -43,16 +43,20 @@ import {
   useActiveBusiness,
 } from "@/hooks/use-active-business";
 import { formatInvoiceDate, invoiceMoney } from "@/lib/invoices";
+import { useBulkImportCountry } from "@/hooks/use-bulk-import-country";
 import { extractInvoiceApi, invoiceCaptureEditor } from "@/lib/ocr-capture";
 import { cn } from "@/lib/utils";
 import { useCaptureStore } from "@/stores/capture";
 import { useInvoicesStore } from "@/stores/invoices";
+import { EVENTS } from "@/lib/analytics-events";
+import { useTrackOnce } from "@/hooks/use-track-once";
 
 /**
  * The canonical chooser pattern from the design: an inline page, never a modal.
  * Two tiers — the quick paths as action cards, then templates as a gallery.
  */
 export function CreateInvoiceChooser() {
+  useTrackOnce(EVENTS.INVOICE_CREATION_INITIATED);
   const router = useRouter();
   const captureRef = React.useRef<DocumentCaptureHandle>(null);
   const setCapturedInvoice = useCaptureStore((state) => state.setInvoice);
@@ -77,6 +81,8 @@ export function CreateInvoiceChooser() {
     ready: businessReady,
     error: businessError,
   } = useActiveBusiness();
+  // The business's own word for its tax ("GST", "VAT"), for the read GST row.
+  const country = useBulkImportCountry();
   const industryId = business?.industryId ?? null;
 
   const ndisReady = isNdisBusinessProfile(business);
@@ -97,26 +103,22 @@ export function CreateInvoiceChooser() {
   }, [templatesQuery.data, setFavourites]);
 
   const templates = templatesQuery.data?.templates ?? [];
-  const filters = filtersForTemplates(templates);
-  // A pill can vanish under you when the industry changes — fall back to All
-  // rather than showing an empty grid for a category this set doesn't have.
+  const filters = filtersForTemplates();
+  // A pill can vanish under you when the industry changes — fall back to
+  // All rather than showing an empty grid for a view this set doesn't have.
   const active = filters.includes(filter) ? filter : "All";
 
   const results = filterTemplates(templates, active, query, favourites);
-  const recent = templates.filter((template) => template.recentlyUsed);
-  // Recently used is a landing affordance; once you filter or search, the one
-  // filtered grid is the answer and repeating those cards above it is noise.
-  const showRecent = active === "All" && !query.trim();
 
   return (
     <div className="mx-auto max-w-full space-y-[15px]">
-      <div>
-        <Button variant="ghost" size="sm" asChild className="-ml-2 gap-3">
-          <Link href="/invoices">
+      <div className="flex items-center gap-2">
+        <Button variant="ghost" size="icon" asChild className="-ml-2">
+          <Link href="/invoices" aria-label="Back">
             <ArrowLeft />
-            Create invoice
           </Link>
         </Button>
+        <h1 className="text-sm font-medium">Create invoice</h1>
       </div>
 
       {/* Tier 1 — the quick paths. NDIS sits in the middle when it's on. */}
@@ -177,6 +179,22 @@ export function CreateInvoiceChooser() {
             label: "Due date",
             value: fields.due ? formatInvoiceDate(fields.due) : "",
           },
+          // The tax apart from what it was charged on, and only when the
+          // document charges any — no GST row for one that doesn't.
+          ...(fields.tax
+            ? [
+                {
+                  label: "Subtotal",
+                  value: fields.subtotal
+                    ? invoiceMoney(Number(fields.subtotal))
+                    : "",
+                },
+                {
+                  label: country.taxWord,
+                  value: invoiceMoney(Number(fields.tax)),
+                },
+              ]
+            : []),
           {
             label: "Total amount",
             value: fields.total ? invoiceMoney(Number(fields.total)) : "",
@@ -223,23 +241,28 @@ export function CreateInvoiceChooser() {
             <h2 className="text-lg font-semibold tracking-tight">
               Start from a template
             </h2>
-            <span className="text-sm text-muted-foreground tabular">
-              {templates.length} templates
-            </span>
+            {templates.length > 0 && (
+              <span className="text-sm text-muted-foreground tabular">
+                {templates.length} templates
+              </span>
+            )}
           </div>
-          <div className="relative w-full sm:w-64">
-            <Search
-              className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-              aria-hidden
-            />
-            <Input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search templates"
-              aria-label="Search templates"
-              className="pl-9"
-            />
-          </div>
+          {/* Nothing to search until there's something to find. */}
+          {templates.length > 0 && (
+            <div className="relative w-full sm:w-64">
+              <Search
+                className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+                aria-hidden
+              />
+              <Input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search templates"
+                aria-label="Search templates"
+                className="pl-9"
+              />
+            </div>
+          )}
         </div>
 
         {loadingTemplates ? (
@@ -248,6 +271,43 @@ export function CreateInvoiceChooser() {
             <Skeleton className="h-48 w-full rounded-lg" aria-hidden />
             <Skeleton className="h-48 w-full rounded-lg" aria-hidden />
           </TemplateGrid>
+        ) : templatesQuery.isError ? (
+          /* A failed load isn't "no templates" — say so, and offer the retry. */
+          <Empty>
+            <EmptyMedia>
+              <LayoutTemplate aria-hidden />
+            </EmptyMedia>
+            <div className="space-y-1">
+              <EmptyTitle>Couldn&apos;t load templates</EmptyTitle>
+              <EmptyDescription>
+                Something went wrong fetching them. You can still create an
+                invoice from scratch above.
+              </EmptyDescription>
+            </div>
+            <EmptyActions>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => templatesQuery.refetch()}
+              >
+                Try again
+              </Button>
+            </EmptyActions>
+          </Empty>
+        ) : templates.length === 0 ? (
+          /* Nothing exists, so there's nothing to filter or clear. */
+          <Empty>
+            <EmptyMedia>
+              <LayoutTemplate aria-hidden />
+            </EmptyMedia>
+            <div className="space-y-1">
+              <EmptyTitle>No templates yet</EmptyTitle>
+              <EmptyDescription>
+                Templates you save while building an invoice show up here.
+                Create one manually to get started.
+              </EmptyDescription>
+            </div>
+          </Empty>
         ) : (
           <>
             <FilterPills
@@ -256,23 +316,6 @@ export function CreateInvoiceChooser() {
               value={active}
               onChange={setFilter}
             />
-
-            {showRecent && recent.length > 0 && (
-              <div className="space-y-3">
-                <SubHeading icon={<Clock className="size-4" aria-hidden />}>
-                  Recently used
-                </SubHeading>
-                <TemplateGrid>
-                  {recent.map((template) => (
-                    <InvoiceTemplateCard
-                      key={template.id}
-                      template={template}
-                      onPreview={setPreviewing}
-                    />
-                  ))}
-                </TemplateGrid>
-              </div>
-            )}
 
             <div className="space-y-3">
               <SubHeading>
@@ -286,24 +329,31 @@ export function CreateInvoiceChooser() {
                     <Search aria-hidden />
                   </EmptyMedia>
                   <div className="space-y-1">
-                    <EmptyTitle>No templates match</EmptyTitle>
+                    <EmptyTitle>
+                      {active === "Created by you" && !query.trim()
+                        ? "No templates created yet"
+                        : "No templates match"}
+                    </EmptyTitle>
                     <EmptyDescription>
-                      Try a different search or clear the filters to see all{" "}
-                      {templates.length} templates.
+                      {active === "Created by you" && !query.trim()
+                        ? "Templates you save while building an invoice show up here."
+                        : "Try a different search, or go back to all templates."}
                     </EmptyDescription>
                   </div>
-                  <EmptyActions>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        setQuery("");
-                        setFilter("All");
-                      }}
-                    >
-                      Clear filters
-                    </Button>
-                  </EmptyActions>
+                  {(active !== "All" || query.trim()) && (
+                    <EmptyActions>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setQuery("");
+                          setFilter("All");
+                        }}
+                      >
+                        Show all templates
+                      </Button>
+                    </EmptyActions>
+                  )}
                 </Empty>
               ) : (
                 <TemplateGrid>
@@ -333,8 +383,8 @@ export function CreateInvoiceChooser() {
 /**
  * Three across once there are three to show. Below that it lays out as a flex
  * row instead, with the cards held at the width a grid column would have given
- * them — so a two-card subsection like Recently used neither leaves an empty
- * cell nor stretches its cards to fill one.
+ * them — so a short list neither leaves an empty cell nor stretches its cards
+ * to fill one.
  */
 function TemplateGrid({ children }: { children: React.ReactNode }) {
   if (React.Children.count(children) >= 3) {
@@ -354,16 +404,9 @@ function TemplateGrid({ children }: { children: React.ReactNode }) {
   );
 }
 
-function SubHeading({
-  icon,
-  children,
-}: {
-  icon?: React.ReactNode;
-  children: React.ReactNode;
-}) {
+function SubHeading({ children }: { children: React.ReactNode }) {
   return (
-    <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground tabular">
-      {icon}
+    <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground tabular">
       {children}
     </h3>
   );

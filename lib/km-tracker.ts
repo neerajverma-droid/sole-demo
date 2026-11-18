@@ -39,9 +39,7 @@ import axios from "axios";
 
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
 import { apiErrorMessage } from "@/lib/api-error";
-import { EVENTS } from "@/lib/analytics-events";
 import { formatCountryMoney, type CountryContext } from "@/lib/country-context";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
 import {
@@ -1017,19 +1015,31 @@ export function kmSettingsPayload(settings: KmSettings): Record<string, unknown>
   };
 }
 
-export async function saveKmSettingsApi(settings: KmSettings): Promise<KmSettings> {
+async function postKmSettings(payload: Record<string, unknown>): Promise<KmSettings> {
   const response = await api.post<{
     success?: boolean;
     message?: string;
     data?: ApiKmSettings;
-  }>(
-    apiRoutes.kmTracker.settings,
-    buildEncryptedRequestBody(compactPayload(kmSettingsPayload(settings))),
-  );
+  }>(apiRoutes.kmTracker.settings, buildEncryptedRequestBody(compactPayload(payload)));
   if (response.data?.success === false) {
     throw new Error(response.data.message || "Couldn't save KM tracker settings.");
   }
   return mapKmSettings(response.data?.data);
+}
+
+export async function saveKmSettingsApi(settings: KmSettings): Promise<KmSettings> {
+  return postKmSettings(kmSettingsPayload(settings));
+}
+
+/**
+ * Just the vehicle list. sole-ocr's settings route only touches the fields it's
+ * sent, so adding, editing or removing a vehicle stores it on its own without
+ * carrying (or overwriting) whatever has been typed on the method tab.
+ */
+export async function saveKmVehiclesApi(vehicles: KmVehicle[]): Promise<KmSettings> {
+  return postKmSettings({
+    vehicle_details: vehicles.filter(hasAnyValue).map(vehicleToApi),
+  });
 }
 
 export type KmExpenseRules = {
@@ -1442,8 +1452,9 @@ export function kmDisplayedDistance(trip: KmTrip): number {
   return trip.tripType === "split" ? trip.deductibleKm : trip.distanceKm;
 }
 
-/** Likewise the amount: the deduction for a split trip, the total otherwise. */
+/** Likewise the amount: the deduction for a split trip, nothing for a personal one, the total otherwise. */
 export function kmDisplayedAmount(trip: KmTrip): number {
+  if (trip.tripType === "personal") return 0;
   return trip.tripType === "split" ? trip.estimatedDeduction : trip.totalAmount;
 }
 
@@ -1618,7 +1629,6 @@ export async function createKmTripApi(
   if (response.data?.success === false) {
     throw new Error(response.data.message || "Couldn't save this trip.");
   }
-  track(EVENTS.KM_TRIP_LOGGED, { distance_km: num(payload.distance_km) });
   const id = response.data?.data?.id;
   return { id: id != null ? String(id) : "" };
 }
@@ -1887,9 +1897,12 @@ export type KmTripDraft = {
   startLng: number | null;
   endLat: number | null;
   endLng: number | null;
-  /** Business or personal; a split trip is `isSplit` on top of business. */
+  /**
+   * How the trip was used — the one source of truth for what is claimable.
+   * Business claims everything, personal claims nothing, split claims the
+   * `businessPercentage` share (strictly between 0 and 100).
+   */
   tripType: KmTripType;
-  isSplit: boolean;
   reason: string;
   distanceKm: string;
   businessPercentage: string;
@@ -1926,7 +1939,6 @@ export function emptyKmTripDraft(settings: KmSettings, now = new Date()): KmTrip
     endLat: null,
     endLng: null,
     tripType: "business",
-    isSplit: false,
     reason: "",
     distanceKm: "",
     businessPercentage: "100",
@@ -1951,6 +1963,17 @@ export function emptyKmTripDraft(settings: KmSettings, now = new Date()): KmTrip
   };
 }
 
+/**
+ * The type a saved trip opens as. A trip saved as personal stays personal
+ * whatever percentage it carries (older saves of a personal trip left 100
+ * there); otherwise the share decides.
+ */
+function draftTripType(saved: KmTripType | null, businessPercentage: number): KmTripType {
+  if (saved === "personal") return "personal";
+  if (saved === "split" || (businessPercentage > 0 && businessPercentage < 100)) return "split";
+  return businessPercentage <= 0 ? "personal" : "business";
+}
+
 const moneyInput = (value: number) => (value > 0 ? trimNumber(value) : "");
 
 /** A saved trip as the form edits it — sole-webapp's `mapTripToForm`. */
@@ -1965,10 +1988,7 @@ export function kmTripDraftFromTrip(trip: KmTrip): KmTripDraft {
     startLng: trip.startLng,
     endLat: trip.endLat,
     endLng: trip.endLng,
-    tripType: trip.tripType === "personal" ? "personal" : "business",
-    isSplit:
-      trip.tripType === "split" ||
-      (businessPercentage > 0 && businessPercentage < 100),
+    tripType: draftTripType(trip.tripType, businessPercentage),
     reason: trip.reason,
     distanceKm: trip.distanceKm > 0 ? trimNumber(trip.distanceKm) : "",
     businessPercentage: trimNumber(businessPercentage),
@@ -2007,20 +2027,29 @@ export type KmTripFigures = {
   personalPercentage: number;
   deductibleKm: number;
   personalKm: number;
+  /** Toll, parking and — where the method allows them — fuel and other costs. */
+  expensesTotal: number;
   /** Distance × rate (statutory methods only) plus every expense the method allows. */
   totalAmount: number;
   estimatedDeduction: number;
 };
 
-function deductibleExpense(amount: number, split: boolean, businessPercentage: number) {
-  if (!Number.isFinite(amount) || amount <= 0) return 0;
-  return split ? (amount * businessPercentage) / 100 : amount;
+/**
+ * What part of an expense is claimed. Nothing at a 0% business share — whatever
+ * the per-expense switch says, a wholly personal trip claims no costs.
+ */
+function deductibleExpense(amount: number, prorate: boolean, businessPercentage: number) {
+  if (!Number.isFinite(amount) || amount <= 0 || businessPercentage <= 0) return 0;
+  return prorate ? (amount * businessPercentage) / 100 : amount;
 }
 
 /**
  * The figures the summary shows and the payload sends — `NewTrip`'s
  * `deductibleKm`, `totalAmount` and `estimatedDeduction` memos, which sole-ocr's
  * `prepareTripPayload` also recomputes server-side the same way.
+ *
+ * A personal trip can still have its costs written down, but it deducts
+ * nothing: its share is 0%, so no distance or expense is claimed.
  *
  * Under New Zealand's kilometre rate, pass the vehicle type's tier-1 rate
  * (`kmTripRate`): the figures are then a preview — the tier a trip falls in
@@ -2032,10 +2061,14 @@ export function kmTripFigures(
   ratePerKm: number,
 ): KmTripFigures {
   const cents = isStatutoryKmMethod(method);
+  const personal = draft.tripType === "personal";
   const distanceKm = Math.max(0, num(draft.distanceKm));
-  const businessPercentage = draft.isSplit
-    ? clamp(num(draft.businessPercentage), 0, 100)
-    : 100;
+  const businessPercentage =
+    draft.tripType === "business"
+      ? 100
+      : personal
+        ? 0
+        : clamp(num(draft.businessPercentage), 0, 100);
   const deductibleKm = (distanceKm * businessPercentage) / 100;
   const toll = num(draft.tollAmount);
   const parking = num(draft.parkingAmount);
@@ -2049,6 +2082,7 @@ export function kmTripFigures(
     personalPercentage: 100 - businessPercentage,
     deductibleKm,
     personalKm: Math.max(0, distanceKm - deductibleKm),
+    expensesTotal: toll + parking + fuel + other,
     totalAmount: distanceAmount + toll + parking + fuel + other,
     estimatedDeduction:
       (distanceAmount * businessPercentage) / 100 +
@@ -2057,14 +2091,6 @@ export function kmTripFigures(
       deductibleExpense(fuel, draft.splitFuel, businessPercentage) +
       deductibleExpense(other, draft.splitOther, businessPercentage),
   };
-}
-
-/** What a split trip's type actually is once the percentage is applied. */
-export function effectiveKmTripType(draft: KmTripDraft): KmTripType {
-  if (!draft.isSplit) return draft.tripType;
-  const percentage = clamp(num(draft.businessPercentage), 0, 100);
-  if (percentage > 0 && percentage < 100) return "split";
-  return percentage > 0 ? "business" : "personal";
 }
 
 /**
@@ -2148,12 +2174,17 @@ export function kmTripIssues(
     issues.push({ key: "distanceKm", message: "Distance must be greater than 0" });
   }
 
-  if (draft.isSplit) {
-    const percentage = Number(draft.businessPercentage);
-    if (!Number.isFinite(percentage) || percentage < 0 || percentage > 100) {
+  if (draft.tripType === "split") {
+    const text = draft.businessPercentage.trim();
+    const percentage = Number(text);
+    if (!text || !Number.isFinite(percentage)) {
+      issues.push({ key: "businessPercentage", message: "Enter the business share" });
+    } else if (percentage <= 0 || percentage >= 100) {
+      // 0% is a personal trip and 100% a business one — both have their own
+      // choice, and a "split" at either end would be saved as something else.
       issues.push({
         key: "businessPercentage",
-        message: "Business share must be between 0 and 100%",
+        message: "A split needs a share above 0% and below 100% — pick Personal or Business instead",
       });
     }
   }
@@ -2202,7 +2233,12 @@ export function kmTripIssues(
   }
 
   const { totalAmount } = kmTripFigures(draft, context.method, context.ratePerKm);
-  if (!issues.some((issue) => issue.key === "distanceKm") && totalAmount <= 0) {
+  // A personal trip isn't claimed, so it has no cost to be greater than $0.
+  if (
+    draft.tripType !== "personal" &&
+    !issues.some((issue) => issue.key === "distanceKm") &&
+    totalAmount <= 0
+  ) {
     const logbookLabel = (
       rules.methods.find((method) => method.key === "logbook")?.label ?? "Logbook"
     ).toLowerCase();
@@ -2245,6 +2281,7 @@ export function kmTripPayload(
 ): Record<string, unknown> {
   const figures = kmTripFigures(draft, context.method, context.ratePerKm);
   const cents = isStatutoryKmMethod(context.method);
+  const personal = draft.tripType === "personal";
   // Only where the country asks for per-trip readings; elsewhere the
   // auto-filled values would be sent without anyone having seen them.
   const logbook = kmTripNeedsOdometer(rules, context.method);
@@ -2260,7 +2297,7 @@ export function kmTripPayload(
     start_longitude: draft.startLng ?? undefined,
     end_latitude: draft.endLat ?? undefined,
     end_longitude: draft.endLng ?? undefined,
-    trip_type: effectiveKmTripType(draft),
+    trip_type: draft.tripType,
     reason: draft.reason.trim(),
     calculation_method: context.method,
     distance_km: figures.distanceKm,
@@ -2273,6 +2310,8 @@ export function kmTripPayload(
     estimated_deduction: Number(figures.estimatedDeduction.toFixed(2)),
     deductible_km: Number(figures.deductibleKm.toFixed(4)),
     deductible_distance_km: Number(figures.deductibleKm.toFixed(4)),
+    // Kept as typed on a personal trip too — a record of what it cost. They
+    // aren't claimed: the share is 0%, and the reports leave personal trips out.
     toll_amount: num(draft.tollAmount),
     parking_amount: num(draft.parkingAmount),
     fuel_cost: cents ? 0 : num(draft.fuelCost),
@@ -2286,7 +2325,7 @@ export function kmTripPayload(
     client_id: draft.clientId ?? undefined,
     project_id: draft.projectId ?? undefined,
     job_id: draft.projectId ? (draft.jobId ?? undefined) : undefined,
-    is_billable: draft.isBillable,
+    is_billable: personal ? false : draft.isBillable,
   });
 
   // Added after compacting, which would otherwise drop the "" that clears them.

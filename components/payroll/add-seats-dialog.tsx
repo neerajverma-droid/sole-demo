@@ -88,7 +88,7 @@ export function AddSeatsDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !saving && onOpenChange(next)}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md" data-usertour="seats-dialog">
         <DialogHeader>
           <DialogTitle>Add employee seats</DialogTitle>
           <DialogDescription>
@@ -115,7 +115,7 @@ export function AddSeatsDialog({
             </div>
           </dl>
 
-          <div className="space-y-2">
+          <div className="space-y-2" data-usertour="seats-count">
             <p className="text-sm font-medium">Seats to add</p>
             <div className="flex flex-wrap gap-2" role="group" aria-label="Quick picks">
               {QUICK_PICKS.map((pick) => (
@@ -171,7 +171,10 @@ export function AddSeatsDialog({
             </div>
           </div>
 
-          <div className="flex items-center justify-between gap-4 rounded-md border p-3">
+          <div
+            className="flex items-center justify-between gap-4 rounded-md border p-3"
+            data-usertour="seats-recurring"
+          >
             <div className="space-y-0.5">
               <p className="text-sm font-medium">Keep for the next billing cycle</p>
               <p className="text-xs text-muted-foreground">
@@ -187,7 +190,10 @@ export function AddSeatsDialog({
             />
           </div>
 
-          <div className="space-y-1 rounded-md bg-muted/50 p-3 text-sm">
+          <div
+            className="space-y-1 rounded-md bg-muted/50 p-3 text-sm"
+            data-usertour="seats-total"
+          >
             <div className="flex items-center justify-between gap-3">
               <span className="text-muted-foreground">Charged today</span>
               <span className="font-semibold tabular">

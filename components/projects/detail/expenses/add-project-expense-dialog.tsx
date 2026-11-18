@@ -44,6 +44,8 @@ import {
 import { apiErrorMessage } from "@/lib/api-error";
 import { formatExpenseDate } from "@/lib/expenses";
 import { pageInfo } from "@/lib/project-expenses";
+import { EVENTS } from "@/lib/analytics-events";
+import { useTrackOnOpen } from "@/hooks/use-track-once";
 
 type Mode = "assign" | "manual";
 
@@ -64,6 +66,7 @@ export function AddProjectExpenseDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  useTrackOnOpen(EVENTS.ADD_EXPENSE_INITIATED, open);
   const [mode, setMode] = React.useState<Mode>("assign");
   const [jobId, setJobId] = React.useState<string | null>(null);
   const jobsQuery = useProjectExpenseJobsQuery(projectId, open);

@@ -26,6 +26,7 @@ const {
   fetchInvoicePaymentRails,
   fetchInvoiceTaxSettings,
   fetchNextInvoiceNumber,
+  checkInvoiceNumberTaken,
   quoteTemplateIdFor,
   templateIdFor,
   updateSolePaySettingsApi,
@@ -405,5 +406,32 @@ describe("updateSolePaySettingsApi", () => {
     await expect(updateSolePaySettingsApi("77", { automate: true })).rejects.toThrow(
       "Couldn't update the SolePay setting.",
     );
+  });
+});
+
+describe("checkInvoiceNumberTaken", () => {
+  it("asks the server about the trimmed number", async () => {
+    apiMock.get.mockResolvedValue({ data: { success: true, data: { exists: true } } });
+
+    await expect(checkInvoiceNumberTaken("  INV-0042 ")).resolves.toBe(true);
+
+    expect(apiMock.get).toHaveBeenCalledWith(apiRoutes.invoice.checkNo, {
+      params: { invoice_no: "INV-0042" },
+    });
+  });
+
+  it("passes the invoice being edited so it can't clash with itself", async () => {
+    apiMock.get.mockResolvedValue({ data: { success: true, data: { exists: false } } });
+
+    await expect(checkInvoiceNumberTaken("INV-1", "55")).resolves.toBe(false);
+
+    expect(apiMock.get).toHaveBeenCalledWith(apiRoutes.invoice.checkNo, {
+      params: { invoice_no: "INV-1", exclude_id: "55" },
+    });
+  });
+
+  it("treats an unexpected response as not taken", async () => {
+    apiMock.get.mockResolvedValue({ data: {} });
+    await expect(checkInvoiceNumberTaken("INV-1")).resolves.toBe(false);
   });
 });

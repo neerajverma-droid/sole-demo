@@ -50,7 +50,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Field } from "@/components/documents/field";
 import { apiErrorMessage } from "@/lib/api-error";
-import { contactDefaultCurrency, documentTax } from "@/lib/country-context";
+import { contactDefaultCurrency, contactDefaultDialCode, documentTax } from "@/lib/country-context";
 import { useCountryContext } from "@/hooks/use-country-context";
 import { contactDisplayName, contactFormDefaults } from "@/lib/contacts";
 import { emptyAssetDraft, type AssetCategory } from "@/lib/assets";
@@ -85,6 +85,9 @@ import { useAssetsStore } from "@/stores/assets";
 import { useContactsStore } from "@/stores/contacts";
 import { useExpensesStore } from "@/stores/expenses";
 import { useTransactionsStore } from "@/stores/transactions";
+import { useTrackOnce } from "@/hooks/use-track-once";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
 
 /**
  * The three bodies of the Match Transaction dialog.
@@ -275,6 +278,7 @@ export function CreateTransactionsTab({
         (await createContact.mutateAsync({
           ...contactFormDefaults,
           currency: contactDefaultCurrency(country),
+          countryCode: contactDefaultDialCode(country),
           type: moneyIn ? "Client" : "Supplier",
           businessName: name,
         }));
@@ -865,6 +869,11 @@ export function RefundTab({
   const vendor = direction === "Credit";
   const label = vendor ? "Vendor Refund" : "Client Refund";
   const noun = vendor ? "expense" : "invoice";
+  // A client refund is issued here (Transactions → Match → Client Refund) —
+  // the app has no other way to create one. Opening the tab is the start.
+  useTrackOnce(EVENTS.CLIENT_REFUND_INITIATED, !vendor, {
+    source: "transaction_match",
+  });
 
   const [page, setPage] = React.useState(1);
   const [chosen, setChosen] = React.useState<RefundRecord | null>(null);
@@ -883,6 +892,9 @@ export function RefundTab({
       return matchRefundApi(transaction.id, direction, chosen);
     },
     onSuccess: (message) => {
+      if (!vendor) {
+        track(EVENTS.CLIENT_REFUND_ISSUED, { source: "transaction_match" });
+      }
       toast.success(message);
       void queryClient.invalidateQueries({ queryKey: BANK_TRANSACTIONS_KEY });
       void queryClient.invalidateQueries({ queryKey: ["refund-records"] });

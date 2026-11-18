@@ -19,6 +19,7 @@ import {
   LayoutGrid,
   LayoutList,
   Layers,
+  LayoutTemplate,
   LineChart,
   type LucideIcon,
   Map as MapIcon,
@@ -159,13 +160,6 @@ export const NAV: NavSection[] = [
         href: "/contacts",
         icon: Users,
       },
-      // Its own module, as in sole-webapp — not one of the Sales documents.
-      {
-        id: "proposals",
-        label: "Proposals",
-        href: "/proposals",
-        icon: FileSignature,
-      },
       {
         id: "sales",
         label: "Sales",
@@ -216,6 +210,12 @@ export const NAV: NavSection[] = [
             icon: CircleDollarSign,
           },
           {
+            id: "bills",
+            label: "Bills",
+            href: "/expenses/bills",
+            icon: ReceiptText,
+          },
+          {
             id: "planner",
             label: "Business planner",
             href: "/expenses/business-planner",
@@ -236,30 +236,6 @@ export const NAV: NavSection[] = [
         ],
       },
       {
-        id: "payroll-group",
-        label: "Payroll",
-        icon: Banknote,
-        children: [
-          { id: "payroll-overview", label: "Overview", href: "/payroll" },
-          {
-            id: "payroll-employees",
-            label: "Employees",
-            href: "/payroll/employees",
-          },
-          {
-            id: "payroll-payruns",
-            label: "Pay runs",
-            href: "/payroll/payruns",
-          },
-          { id: "payroll-leave", label: "Leave", href: "/payroll/leave" },
-          {
-            id: "payroll-reports",
-            label: "Reports",
-            href: "/payroll/reports",
-          },
-        ],
-      },
-      {
         /*
          * Not `assets`, which is the add-on's id. The two are separate
          * namespaces — pins, hidden rows and section order are keyed by nav
@@ -274,36 +250,91 @@ export const NAV: NavSection[] = [
         // a row that changed picture on upgrade would read as a different one.
         icon: Landmark,
       },
+      /*
+       * In Main for everyone rather than an item added from More: the reports
+       * are on every plan, and the books aren't much use without them.
+       */
       {
-        /*
-         * Not `km-tracker`, which is the add-on's id — the same separation as
-         * `payroll-group` above. A group rather than a flat add-on row because
-         * the module is three places, the two sole-webapp's sidebar listed
-         * plus Reports, which it only reached from a button. Being in Main
-         * also keeps the add-on from drawing a second row for the same route
-         * (`addonRows` skips an href Main already has).
-         */
-        id: "km-tracker-group",
-        label: "KM Tracker",
-        icon: MapIcon,
+        id: "reporting",
+        label: "Reporting suite",
+        icon: LineChart,
         children: [
           {
-            id: "km-trips",
-            label: "All trips",
-            href: "/km-tracker",
-            icon: Route,
+            id: "pl",
+            label: "Profit & loss",
+            href: "/reports/profit-loss",
+            icon: BarChart3,
           },
           {
-            id: "km-reports",
-            label: "Reports",
-            href: "/km-tracker/reports",
-            icon: FileSpreadsheet,
+            // Not in sole-webapp's own reporting submenu (its entry is
+            // commented out) — `Scale` for the same "two sides balance" idea
+            // `BarChart3` or `FileText` wouldn't carry.
+            id: "balance-sheet",
+            label: "Balance sheet",
+            href: "/reports/balance-sheet",
+            icon: Scale,
           },
           {
-            id: "km-settings",
-            label: "Settings",
-            href: "/km-tracker/settings",
-            icon: Cog,
+            // Also not in the reference — a trend icon for the same reason
+            // `BarChart3` is Profit & Loss's: this report is money over time.
+            id: "cash-flow",
+            label: "Cash flows",
+            href: "/reports/cash-flow",
+            icon: TrendingUp,
+          },
+          {
+            // Not in the reference either — `BookOpenCheck` for "the ledger that
+            // checks out", distinct from the plain `BookOpen` Chart of Accounts
+            // uses below.
+            id: "trial-balance",
+            label: "Trial balance",
+            href: "/reports/trial-balance",
+            icon: BookOpenCheck,
+          },
+          {
+            id: "txn-listing",
+            label: "Transaction listing",
+            href: "/reports/transaction-listing",
+            icon: FileText,
+          },
+          { id: "bas", label: "BAS report", href: "/reports/bas", icon: FileText },
+          {
+            id: "asset-listing",
+            label: "Asset listing",
+            href: "/reports/asset-listing",
+            icon: Layers,
+          },
+          {
+            id: "cust-supplier",
+            label: "Customer / supplier report",
+            href: "/reports/customer-supplier",
+            icon: Users,
+          },
+          {
+            id: "coa",
+            label: "Chart of accounts",
+            href: "/reports/chart-of-accounts",
+            icon: BookOpen,
+          },
+          {
+            id: "audit-trail",
+            label: "Audit trail",
+            href: "/reports/audit-trail",
+            icon: FileText,
+          },
+          {
+            id: "depreciation",
+            label: "Depreciation reports",
+            href: "/assets/depreciation-report",
+            icon: Calculator,
+          },
+          {
+            // `Package` for the one entry here that isn't a single report: a pack
+            // bundles several of the reports above into one PDF.
+            id: "report-packs",
+            label: "Report packs",
+            href: "/reports/packs",
+            icon: Package,
           },
         ],
       },
@@ -365,119 +396,11 @@ export const ADDITIONAL_NAV: AdditionalNavItem[] = [
   },
 
   {
-    id: "reporting",
-    label: "Reporting suite",
-    icon: LineChart,
-    description: "Profit & loss, balance sheet, BAS and eight more reports.",
-    children: [
-      {
-        id: "pl",
-        label: "Profit & loss",
-        href: "/reports/profit-loss",
-        icon: BarChart3,
-      },
-      {
-        // Not in sole-webapp's own reporting submenu (its entry is
-        // commented out) — `Scale` for the same "two sides balance" idea
-        // `BarChart3` or `FileText` wouldn't carry.
-        id: "balance-sheet",
-        label: "Balance sheet",
-        href: "/reports/balance-sheet",
-        icon: Scale,
-      },
-      {
-        // Also not in the reference — a trend icon for the same reason
-        // `BarChart3` is Profit & Loss's: this report is money over time.
-        id: "cash-flow",
-        label: "Cash flows",
-        href: "/reports/cash-flow",
-        icon: TrendingUp,
-      },
-      {
-        // Not in the reference either — `BookOpenCheck` for "the ledger that
-        // checks out", distinct from the plain `BookOpen` Chart of Accounts
-        // uses below.
-        id: "trial-balance",
-        label: "Trial balance",
-        href: "/reports/trial-balance",
-        icon: BookOpenCheck,
-      },
-      {
-        id: "txn-listing",
-        label: "Transaction listing",
-        href: "/reports/transaction-listing",
-        icon: FileText,
-      },
-      { id: "bas", label: "BAS report", href: "/reports/bas", icon: FileText },
-      {
-        id: "asset-listing",
-        label: "Asset listing",
-        href: "/reports/asset-listing",
-        icon: Layers,
-      },
-      {
-        id: "cust-supplier",
-        label: "Customer / supplier report",
-        href: "/reports/customer-supplier",
-        icon: Users,
-      },
-      {
-        id: "coa",
-        label: "Chart of accounts",
-        href: "/reports/chart-of-accounts",
-        icon: BookOpen,
-      },
-      {
-        id: "audit-trail",
-        label: "Audit trail",
-        href: "/reports/audit-trail",
-        icon: FileText,
-      },
-      {
-        id: "depreciation",
-        label: "Depreciation reports",
-        href: "/assets/depreciation-report",
-        icon: Calculator,
-      },
-      {
-        // `Package` for the one entry here that isn't a single report: a pack
-        // bundles several of the reports above into one PDF.
-        id: "report-packs",
-        label: "Report packs",
-        href: "/reports/packs",
-        icon: Package,
-      },
-    ],
-  },
-  {
     id: MIGRATIONS_NAV_ID,
     label: "Migrations",
     icon: Database,
     href: MIGRATION_HREF,
     description: "Bring your books across from another accounting tool.",
-  },
-  {
-    id: "reputation",
-    label: "Reputation",
-    icon: Star,
-    href: "/reputation",
-    description: "Collect client ratings, recover unhappy clients and win Google reviews.",
-  },
-  // Both had a page but no way in from the rail or More — tax estimator only
-  // through Resources, geographic insights only from a dashboard card.
-  {
-    id: "tax-estimator",
-    label: "Tax estimator",
-    icon: Calculator,
-    href: "/tax-estimator",
-    description: "Estimate your quarterly and annual tax as you go.",
-  },
-  {
-    id: "geographic-insights",
-    label: "Geographic insights",
-    icon: MapIcon,
-    href: "/dashboard/geographic-insights",
-    description: "See where your customers and invoices are, by area.",
   },
 ];
 
@@ -736,7 +659,18 @@ export function visibleNav(layout: SidebarLayout): NavSection[] {
     ...(layout.hidden ?? []),
     ...(layout.replaced ?? []),
   ]);
-  const pinned = new Set(layout.pinned ?? []);
+  /*
+   * Only the ids a pin can actually resolve to.
+   *
+   * A pin is a move, so an id in here takes a row out of its section — and if
+   * PINNED then can't draw that row, the row has left the rail altogether. That
+   * is not hypothetical: a group id stored by the onboarding picker emptied
+   * Expenses out of MAIN and resolved to nothing upstairs, so Expenses was
+   * simply gone. `isPinnable` is the same question `pinTargets` asks on the way
+   * in, which is what keeps the two ends of the move agreeing about what moved.
+   */
+  const pinned = new Set((layout.pinned ?? []).filter(isPinnable));
+  // console.log('layout', layout)
 
   return orderedNav(layout.order, layout.childOrder, layout.extras)
     .map((section) => ({
@@ -869,6 +803,44 @@ export function pinTargets(ids: string[] = []): NavItem[] {
   });
 }
 
+/** The pages each group opens, by group id, in catalogue order. */
+const GROUP_CHILDREN: Record<string, string[]> = Object.fromEntries(
+  ALL_ITEMS.filter((item) => item.children?.length).map((item) => [
+    item.id,
+    (item.children ?? []).map((child) => child.id),
+  ]),
+);
+
+/**
+ * A stored pin list as the rail means it: group ids replaced by the pages they
+ * stand for, ids that name nothing dropped, duplicates removed.
+ *
+ * Applied where the stored list is read rather than where it's drawn, so the
+ * cleaned list is also what goes back to the server and the bad id stops coming
+ * round again. `pinTargets` still refuses a group on its own account — this
+ * doesn't make groups pinnable, it reads a group pin as what the person who
+ * ticked it meant: every page in it.
+ *
+ * The expansion exists because the onboarding picker used to store a ticked
+ * group as the group's own id. Nothing writes those any more, but they're in
+ * accounts already, and an account holding one had Expenses missing from the
+ * rail entirely — out of MAIN as a pinned row, absent from PINNED as an
+ * unresolvable one.
+ */
+export function normalisePins(ids: string[] = []): string[] {
+  const out: string[] = [];
+
+  for (const id of ids ?? []) {
+    for (const candidate of GROUP_CHILDREN[id] ?? [id]) {
+      if (isPinnable(candidate) && !out.includes(candidate)) {
+        out.push(candidate);
+      }
+    }
+  }
+
+  return out;
+}
+
 /** Whether the route belongs to a row in these sections, at either level. */
 export function sectionsCoverPath(
   sections: NavSection[],
@@ -890,6 +862,11 @@ export function findOpenGroup(pathname: string): string | null {
   for (const item of ALL_ITEMS) {
     if (item.children?.some((c) => c.href && isActivePath(pathname, c.href))) {
       return item.id;
+    }
+  }
+  for (const addon of ADDONS) {
+    if (addon.pages?.some((c) => c.href && isActivePath(pathname, c.href))) {
+      return addon.id;
     }
   }
   return null;
@@ -947,6 +924,13 @@ export type SearchTarget = {
   label: string;
   href?: string;
   parent?: string;
+  /**
+   * What opening it means for analytics, the same as the rail: a module (a
+   * top-level row, an add-on's own page) or a sub-module of `parent`.
+   * Unset for shortcuts and resources ("Create invoice", a widget), which
+   * aren't modules being opened.
+   */
+  kind?: "module" | "sub_module";
 };
 
 /**
@@ -960,14 +944,23 @@ export function searchTargets(): SearchTarget[] {
   const out: SearchTarget[] = [];
   for (const item of ALL_ITEMS) {
     if (item.href || !item.children) {
-      out.push({ label: item.label, href: item.href });
+      out.push({ label: item.label, href: item.href, kind: "module" });
     }
     for (const child of item.children ?? []) {
-      out.push({ label: child.label, href: child.href, parent: item.label });
+      out.push({
+        label: child.label,
+        href: child.href,
+        parent: item.label,
+        kind: "sub_module",
+      });
     }
   }
-  out.push({ label: QUICK_ACTIONS_NAV.label, href: QUICK_ACTIONS_NAV.href });
-  out.push({ label: DASHBOARD_NAV.label, href: DASHBOARD_NAV.href });
+  out.push({
+    label: QUICK_ACTIONS_NAV.label,
+    href: QUICK_ACTIONS_NAV.href,
+    kind: "module",
+  });
+  out.push({ label: DASHBOARD_NAV.label, href: DASHBOARD_NAV.href, kind: "module" });
 
   // The hub, and the things in it. Leaving them out would make "tax
   // estimator" — a phrase people do type — stop finding anything.
@@ -987,15 +980,33 @@ export function searchTargets(): SearchTarget[] {
   const listed = new Set(out.map((target) => target.href));
   for (const addon of ADDONS) {
     if (addon.href && !listed.has(addon.href)) {
-      out.push({ label: addon.name, href: addon.href, parent: "Add-ons" });
+      out.push({
+        label: addon.name,
+        href: addon.href,
+        parent: "Add-ons",
+        kind: "module",
+      });
       listed.add(addon.href);
     }
     // Its pages by their own names — "calendar", "planner" — under the add-on.
     for (const page of addon.pages ?? []) {
-      out.push({ label: page.label, href: page.href, parent: addon.name });
+      out.push({
+        label: page.label,
+        href: page.href,
+        parent: addon.name,
+        kind: "sub_module",
+      });
     }
   }
 
+  // Not in More any more, but the page stays — reached from its dashboard card,
+  // and still by name from search.
+  out.push({
+    label: "Geographic insights",
+    href: "/dashboard/geographic-insights",
+    parent: DASHBOARD_NAV.label,
+    kind: "sub_module",
+  });
   out.push({ label: "Create invoice", href: "/invoices/new" });
   out.push({ label: "Create proposal", href: "/proposals/new" });
   out.push({ label: "View plans & subscription", href: "/settings" });
@@ -1022,16 +1033,19 @@ export function searchTargets(): SearchTarget[] {
  */
 const JURISDICTION_LABELS: Record<string, (words: CountryWords) => string> = {
   bas: (words) => `${words.taxReturn} report`,
+  super: (words) => `${words.superContributions} contributions`,
 };
 
 /** The words the nav needs from the business's country. */
 export type CountryWords = {
   /** "BAS", "GST return", "VAT return". */
   taxReturn: string;
+  /** "Super", "KiwiSaver" — what the retirement-contribution row is called here. */
+  superContributions: string;
 };
 
 /** Australia, for the moment before the country context has answered. */
-export const AU_NAV_WORDS: CountryWords = { taxReturn: "BAS" };
+export const AU_NAV_WORDS: CountryWords = { taxReturn: "BAS", superContributions: "Super" };
 
 /**
  * The same sections, named the way this business's country names them.
@@ -1063,4 +1077,27 @@ export function localiseNavLabel(
   words: CountryWords = AU_NAV_WORDS,
 ): string {
   return JURISDICTION_LABELS[id]?.(words) ?? label;
+}
+
+/**
+ * The module a page belongs to, by the nav's own names — "Invoices" for
+ * `/invoices/123/edit`. For analytics properties that say where something was
+ * started from (`contact_creation_initiated`'s `module_name`), so a dialog
+ * shared by several modules doesn't need each caller to name itself.
+ *
+ * The row whose link is that module's own list page wins (`/invoices`, not
+ * the "Create invoice" shortcut to `/invoices/new`); a path the nav doesn't
+ * know falls back to its first segment, title-cased.
+ */
+export function moduleNameForPath(pathname: string | null | undefined): string | null {
+  const segment = (pathname ?? "").split("?")[0].split("/").filter(Boolean)[0];
+  if (!segment) return null;
+  const pathOf = (href?: string) => href?.split("?")[0].replace(/\/+$/, "");
+  const targets = searchTargets();
+  const listPage = targets.find((target) => pathOf(target.href) === `/${segment}`);
+  if (listPage) return listPage.label;
+  return segment
+    .split("-")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
 }

@@ -24,6 +24,7 @@ import { useAuthEntry, withEmail } from "@/components/auth/use-auth-entry";
 import BrandSplashLoader from "@/components/layout/brand-splash-loader";
 import { authEmailAtom, authErrorAtom, authPendingAtom } from "@/lib/atoms";
 import { REGISTER_ROUTE } from "@/lib/api/session";
+import { rememberSocialStart, trackSignupInitiated } from "@/lib/analytics";
 import { signInWithPassword } from "@/lib/auth";
 
 const DEMO_EMAIL = "accounts.coastalspark@example.com";
@@ -108,13 +109,18 @@ export function LoginScreen() {
           ? undefined
           : "Welcome back. Sign in with your password or a code."
       }
-      promoHeadline="Start your free trial — no card required."
-      promoSupporting="Thirty days of everything. Cancel whenever, keep your data either way."
+      promoHeadline="Your books, sorted from day one."
+      promoSupporting="Cancel whenever, keep your data either way."
       footer={
         <p>
           Don&apos;t have an account?{" "}
           <Link
             href={withEmail(REGISTER_ROUTE, email)}
+            onClick={() => {
+              // Button 1 of the plan's five: always a sign-up start, with the
+              // email when one was typed here first.
+              trackSignupInitiated("email", { primaryEmail: email });
+            }}
             className="font-medium text-primary underline-offset-4 hover:underline"
           >
             Create one
@@ -232,9 +238,9 @@ export function LoginScreen() {
               className="h-10 w-full"
               disabled={pending}
             >
-                { pending && !sendingCode && (
-                  <Loader2 className="animate-spin" aria-hidden />
-                )}
+              {pending && !sendingCode && (
+                <Loader2 className="animate-spin" aria-hidden />
+              )}
               {pending && !sendingCode
                 ? "Signing in…"
                 : "Sign in as demo user"}
@@ -261,7 +267,9 @@ export function LoginScreen() {
           </form>
 
           <AuthDivider />
-          <SocialButtons />
+          <SocialButtons
+            onStart={(provider) => rememberSocialStart(provider, "login")}
+          />
         </>
       )}
     </AuthLayout>

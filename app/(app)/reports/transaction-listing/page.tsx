@@ -1,11 +1,16 @@
+import type { Metadata } from "next";
 import { Suspense } from "react";
 
-import { TransactionListingScreen } from "@/components/reports/transaction-listing-screen";
+import { TransactionListingReport } from "@/components/reports/transaction-listing-report";
+
+export const metadata: Metadata = {
+  title: "Transaction listing · Sole",
+};
 
 export default function TransactionListingPage() {
   return (
     <Suspense fallback={null}>
-      <TransactionListingScreen />
+      <TransactionListingReport />
     </Suspense>
   );
 }

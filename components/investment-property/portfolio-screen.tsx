@@ -76,7 +76,10 @@ export function PortfolioScreen() {
         title="Investment property"
         description="Portfolio-level dashboard for your investment properties."
       >
-        <Button onClick={() => setCreateOpen(true)}>
+        <Button
+          onClick={() => setCreateOpen(true)}
+          data-usertour="property-new-button"
+        >
           <Plus />
           Create property
         </Button>
@@ -84,7 +87,10 @@ export function PortfolioScreen() {
 
       <InvestmentNav />
 
-      <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
+      <div
+        className="flex flex-wrap items-end gap-x-6 gap-y-3"
+        data-usertour="portfolio-filters"
+      >
         <div className="space-y-1.5">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Financial year

@@ -8,6 +8,7 @@ import { useSession } from "@/components/auth/session-provider";
 import { resolvePostAuthRoute } from "@/lib/api/post-auth";
 import { setSession } from "@/lib/api/session";
 import { fetchProfile } from "@/lib/auth";
+import { reportSocialSignup } from "@/lib/analytics";
 
 /**
  * Where backend-driven SSO lands.
@@ -65,6 +66,8 @@ export function SocialCallback() {
       }
 
       adopt(user);
+      // A Google / Apple press that turned out to be a new account.
+      reportSocialSignup(user);
       router.replace(await resolvePostAuthRoute(user));
     })();
   }, [adopt, router, searchParams]);

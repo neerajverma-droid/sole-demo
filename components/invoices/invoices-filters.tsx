@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { PrefixInput } from "@/components/ui/prefix-input";
 import {
   Popover,
   PopoverContent,
@@ -143,6 +144,15 @@ export function InvoicesFiltersPopover({
 
   const matchingClients = matchContacts(clients, clientQuery);
 
+  // Typed text, so a letter can get in: say so per field, and hold Apply back.
+  const minTotalError = amountFilterError(draft.minTotal);
+  const maxTotalError = amountFilterError(draft.maxTotal);
+  const balanceMinError = amountFilterError(draft.balanceMin);
+  const balanceMaxError = amountFilterError(draft.balanceMax);
+  const hasAmountErrors = Boolean(
+    minTotalError || maxTotalError || balanceMinError || balanceMaxError,
+  );
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -195,35 +205,39 @@ export function InvoicesFiltersPopover({
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Amount min">
+          <Field label="Amount min" error={minTotalError}>
             <AmountInput
               value={draft.minTotal}
               onChange={(next) => patch({ minTotal: next })}
               label="Minimum amount"
+              invalid={!!minTotalError}
             />
           </Field>
-          <Field label="Amount max">
+          <Field label="Amount max" error={maxTotalError}>
             <AmountInput
               value={draft.maxTotal}
               onChange={(next) => patch({ maxTotal: next })}
               label="Maximum amount"
+              invalid={!!maxTotalError}
             />
           </Field>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Balance min">
+          <Field label="Balance min" error={balanceMinError}>
             <AmountInput
               value={draft.balanceMin}
               onChange={(next) => patch({ balanceMin: next })}
               label="Minimum balance owed"
+              invalid={!!balanceMinError}
             />
           </Field>
-          <Field label="Balance max">
+          <Field label="Balance max" error={balanceMaxError}>
             <AmountInput
               value={draft.balanceMax}
               onChange={(next) => patch({ balanceMax: next })}
               label="Maximum balance owed"
+              invalid={!!balanceMaxError}
             />
           </Field>
         </div>
@@ -300,7 +314,7 @@ export function InvoicesFiltersPopover({
           <Button variant="outline" size="sm" onClick={cancel}>
             Cancel
           </Button>
-          <Button size="sm" onClick={apply}>
+          <Button size="sm" onClick={apply} disabled={hasAmountErrors}>
             Apply
           </Button>
         </div>
@@ -309,28 +323,39 @@ export function InvoicesFiltersPopover({
   );
 }
 
-/** A dollar-prefixed amount field — shared with the quotes list's own filters. */
+/**
+ * Why an amount/balance filter can't be applied, or undefined when it can.
+ * Blank is fine (no limit); anything else must be a plain non-negative number.
+ * The field accepts whatever is typed and says so here rather than blocking
+ * keystrokes, like every other numeric field.
+ */
+export function amountFilterError(value: string): string | undefined {
+  const text = value.trim();
+  if (!text) return undefined;
+  return /^(\d+\.?\d*|\.\d+)$/.test(text) ? undefined : "Enter numbers only";
+}
+
+/** A currency-prefixed amount field — shared with the quotes list's own filters. */
 export function AmountInput({
   value,
   onChange,
   label,
+  invalid,
 }: {
   value: string;
   onChange: (value: string) => void;
   label: string;
+  invalid?: boolean;
 }) {
   return (
-    <div className="relative">
-      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-        {activeCurrencySymbol()}
-      </span>
-      <Input
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        inputMode="decimal"
-        className="pl-7 tabular"
-        aria-label={label}
-      />
-    </div>
+    <PrefixInput
+      prefix={activeCurrencySymbol()}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      inputMode="decimal"
+      className="tabular"
+      aria-label={label}
+      aria-invalid={invalid || undefined}
+    />
   );
 }

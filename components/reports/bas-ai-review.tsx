@@ -49,6 +49,8 @@ import {
   useSaveBasReviewReport,
 } from "@/hooks/use-bas-review-mutation";
 import { useFiscalYearStart } from "@/hooks/use-fiscal-year-start";
+import { useCountryContext } from "@/hooks/use-country-context";
+import { returnWord } from "@/lib/country-context";
 import { apiErrorMessage } from "@/lib/api-error";
 import { basDate } from "@/lib/bas-report";
 import {
@@ -89,6 +91,8 @@ const SEVERITY_BADGE: Record<FindingSeverity, "danger" | "warning" | "outline"> 
  * Kept out of the print frame: it's a working aid, not part of the report.
  */
 export function BasAiReview({ range }: { range: { from: string; to: string } }) {
+  const { country } = useCountryContext();
+  const returnName = returnWord(country);
   const review = useBasReviewMutation();
   const { mutate, reset } = review;
   const [decisions, setDecisions] = React.useState<Decisions>({});
@@ -150,7 +154,7 @@ export function BasAiReview({ range }: { range: { from: string; to: string } }) 
           <Running />
         ) : review.isError ? (
           <Failed
-            message={apiErrorMessage(review.error, "Couldn't review the BAS. Try again.")}
+            message={apiErrorMessage(review.error, `Couldn't review the ${returnName}. Try again.`)}
             onRetry={run}
           />
         ) : result ? (
@@ -195,13 +199,14 @@ function Running() {
 }
 
 function Failed({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const { country } = useCountryContext();
   return (
     <Empty>
       <EmptyMedia>
         <TriangleAlert aria-hidden />
       </EmptyMedia>
       <div className="space-y-1">
-        <EmptyTitle>Couldn&apos;t review the BAS</EmptyTitle>
+        <EmptyTitle>Couldn&apos;t review the {returnWord(country)}</EmptyTitle>
         <EmptyDescription>{message}</EmptyDescription>
       </div>
       <EmptyActions>
@@ -318,26 +323,37 @@ function Result({
 
       {review.ai.note && <Note tone="warning">{review.ai.note}</Note>}
 
-      {groups.map((group) => (
-        <div key={group.severity} className="space-y-2">
-          <h3 className="flex items-center gap-2 text-xs font-semibold text-muted-foreground">
-            {SEVERITY_LABEL[group.severity]}
-            <Badge variant="secondary" className="px-1.5 py-0 tabular">
-              {group.findings.length}
-            </Badge>
-          </h3>
-          <ul className="space-y-3">
-            {group.findings.map((finding) => (
-              <FindingCard
-                key={finding.id}
-                finding={finding}
-                decision={decisions[finding.id] ?? "pending"}
-                onDecide={(decision) => onDecide(finding.id, decision)}
-              />
-            ))}
-          </ul>
+      {/*
+       * Bounded and internally scrolling, the same way `ProfitLossTable`
+       * keeps a long table from stretching the page it sits in — a review
+       * with a dozen findings pushed the BAS worksheet below it off screen
+       * entirely, which is backwards for a check that's meant to happen
+       * before the report, not instead of it.
+       */}
+      {groups.length > 0 && (
+        <div className="max-h-[34rem] space-y-5 overflow-y-auto pr-1">
+          {groups.map((group) => (
+            <div key={group.severity} className="space-y-2">
+              <h3 className="flex items-center gap-2 text-xs font-semibold text-muted-foreground">
+                {SEVERITY_LABEL[group.severity]}
+                <Badge variant="secondary" className="px-1.5 py-0 tabular">
+                  {group.findings.length}
+                </Badge>
+              </h3>
+              <ul className="space-y-3">
+                {group.findings.map((finding) => (
+                  <FindingCard
+                    key={finding.id}
+                    finding={finding}
+                    decision={decisions[finding.id] ?? "pending"}
+                    onDecide={(decision) => onDecide(finding.id, decision)}
+                  />
+                ))}
+              </ul>
+            </div>
+          ))}
         </div>
-      ))}
+      )}
 
       <div className="-mx-4 -mb-4 flex flex-wrap items-center justify-between gap-3 border-t border-border p-3 sm:-mx-5 sm:-mb-5 sm:px-5">
         <p className="max-w-2xl text-xs text-muted-foreground">
@@ -377,6 +393,7 @@ export function FindingCard({
   const handled = decision !== "pending";
   // Links into Transactions name the year by the business's own financial year.
   const fiscalYearStart = useFiscalYearStart();
+  const { country } = useCountryContext();
   const rowName = (rowId: string) =>
     finding.rows.find((row) => row.id === rowId)?.name || "Transaction";
 
@@ -481,7 +498,7 @@ export function FindingCard({
                     <TableHead className={cn(HEAD_TINT, RULE, "px-4")}>
                       Client / Supplier
                     </TableHead>
-                    <TableHead className={cn(HEAD_TINT, RULE, HUG_COLUMN, "px-4")}>BAS</TableHead>
+                    <TableHead className={cn(HEAD_TINT, RULE, HUG_COLUMN, "px-4")}>{returnWord(country)}</TableHead>
                     <TableHead className={cn(HEAD_TINT, RULE, "px-4 text-right")}>GST</TableHead>
                     <TableHead className={cn(HEAD_TINT, RULE, "px-4 text-right")}>
                       Inc GST

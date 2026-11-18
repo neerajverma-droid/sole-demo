@@ -24,6 +24,7 @@ type ApiNotification = {
   notification_id: string | number;
   title?: string | null;
   message?: string | null;
+  link?: string | null;
   notification_date?: string | null;
   is_read?: string | number | boolean | null;
 };
@@ -37,6 +38,8 @@ export type AppNotification = {
   id: string;
   title: string;
   message: string;
+  /** Where clicking it goes — an in-app path, or null when it goes nowhere. */
+  link: string | null;
   /** ISO timestamp, or "" when the server didn't record one. */
   date: string;
   read: boolean;
@@ -51,12 +54,19 @@ export type NotificationFeed = {
 /** How many the popover lists. The server paginates; the bell shows the latest. */
 export const NOTIFICATION_PAGE_SIZE = 10;
 
+/** Only a path inside this app ("/proposals/12?comments=4") — never another site. */
+export function safeLink(value: string | null | undefined): string | null {
+  const link = String(value ?? "").trim();
+  return link.startsWith("/") && !link.startsWith("//") && !link.startsWith("/\\") ? link : null;
+}
+
 export function mapNotification(raw: ApiNotification): AppNotification {
   const read = raw.is_read === true || raw.is_read === 1 || raw.is_read === "1";
   return {
     id: String(raw.notification_id),
     title: (raw.title ?? "").trim(),
     message: (raw.message ?? "").trim(),
+    link: safeLink(raw.link),
     date: raw.notification_date ?? "",
     read,
   };
@@ -92,5 +102,13 @@ export async function markAllNotificationsRead(): Promise<void> {
     throw new Error(
       response.data.message || "Couldn't mark notifications read.",
     );
+  }
+}
+
+/** One notification read — clicking it in the bell (`PATCH /v2/user/notification/:id/read`). */
+export async function markNotificationRead(id: string): Promise<void> {
+  const response = await api.patch<ApiEnvelope<unknown>>(apiRoutes.user.notificationRead(id));
+  if (response.data?.success === false) {
+    throw new Error(response.data.message || "Couldn't mark the notification read.");
   }
 }

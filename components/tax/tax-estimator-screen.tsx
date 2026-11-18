@@ -37,8 +37,6 @@ import {
   type TaxDraft,
   type TaxYearLabel,
 } from "@/lib/tax-estimator";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { financialYearOf, transactionSummary } from "@/lib/transactions";
 import { cn } from "@/lib/utils";
 import { useTransactionsStore } from "@/stores/transactions";
@@ -112,18 +110,6 @@ export function TaxEstimatorScreen() {
   const calculate = () => {
     setCalculated(true);
 
-    /*
-     * On the button, not on `estimateTax`. That function is pure arithmetic
-     * re-run on every keystroke — `tax-results-panel` calls it on each render
-     * — so instrumenting it would have produced hundreds of events per person
-     * and a number nobody could interpret. Pressing Calculate is the one
-     * deliberate act here.
-     */
-    track(EVENTS.TAX_ESTIMATOR_USED, {
-      estimated_tax: estimateTax(draft).estimatedTaxPayable,
-      year: draft.year,
-    });
-
     toast.success("Tax estimate updated", {
       description: `${reportMoney(estimateTax(draft).estimatedTaxPayable)} estimated for ${draft.year}. An estimate, not tax advice.`,
     });
@@ -146,7 +132,7 @@ export function TaxEstimatorScreen() {
           </h1>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2" data-usertour="tax-year">
           <Label
             htmlFor="tax-year"
             className="text-sm font-medium text-muted-foreground"
@@ -198,7 +184,10 @@ export function TaxEstimatorScreen() {
             {step === 2 && <SuperStep draft={draft} patch={patch} />}
             {step === 3 && <MedicareStep draft={draft} patch={patch} />}
 
-            <div className="flex items-center justify-end gap-2 border-t border-border pt-4">
+            <div
+              className="flex items-center justify-end gap-2 border-t border-border pt-4"
+              data-usertour="tax-nav"
+            >
               {step > 0 && (
                 <Button variant="outline" onClick={() => setStep(step - 1)}>
                   Back
@@ -254,7 +243,11 @@ function StepProgress({
   onJump: (index: number) => void;
 }) {
   return (
-    <ol className="flex items-start" aria-label="Progress">
+    <ol
+      className="flex items-start"
+      aria-label="Progress"
+      data-usertour="tax-steps"
+    >
       {TAX_STEPS.map((step, index) => {
         const complete = done(index);
         const isCurrent = index === current;
@@ -392,6 +385,7 @@ function MoneyField({
   onChange,
   disabled,
   action,
+  tourId,
 }: {
   id: string;
   label: string;
@@ -401,9 +395,11 @@ function MoneyField({
   onChange: (value: string) => void;
   disabled?: boolean;
   action?: React.ReactNode;
+  /** `data-usertour`, for the tax tour to point at. */
+  tourId?: string;
 }) {
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-1.5" data-usertour={tourId}>
       <FieldLabel
         htmlFor={id}
         label={label}
@@ -511,6 +507,7 @@ function IncomeStep({
       <div className="space-y-4">
         <MoneyField
           id="tax-revenue"
+          tourId="tax-revenue-field"
           label="Revenue"
           required
           tip="Everything the business invoiced or was paid this financial year, before expenses."
@@ -526,7 +523,7 @@ function IncomeStep({
           onChange={(additionalIncome) => patch({ additionalIncome })}
         />
 
-        <div className="space-y-1.5">
+        <div className="space-y-1.5" data-usertour="tax-entity-field">
           <FieldLabel
             htmlFor="tax-entity"
             label="Entity Type"
@@ -570,6 +567,7 @@ function IncomeStep({
       <div className="space-y-4">
         <MoneyField
           id="tax-expenses"
+          tourId="tax-expenses-field"
           label="Expenses"
           required
           tip="Everything the business spent that it can claim — the money-out side of your transactions."

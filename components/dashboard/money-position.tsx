@@ -28,9 +28,11 @@ import {
 import { expenseRemaining } from "@/lib/expenses";
 import { invoiceOutstanding, overdueSummary, toIsoDate } from "@/lib/invoices";
 import { cn } from "@/lib/utils";
-import { useAccountsStore } from "@/stores/accounts";
-import { useExpensesStore } from "@/stores/expenses";
-import { useInvoicesStore } from "@/stores/invoices";
+import {
+  useDashboardAccounts,
+  useDashboardExpenses,
+  useDashboardInvoices,
+} from "@/hooks/use-dashboard-source";
 
 /**
  * The four figures that decide whether this month's drawings are affordable,
@@ -45,11 +47,9 @@ export function MoneyPosition() {
   const stage = useAtomValue(accountStageAtom);
   const isActive = stage === "active";
 
-  const invoices = useInvoicesStore((state) => state.invoices);
-  const invoicesHydrated = useInvoicesStore((state) => state.hydrated);
-  const expenses = useExpensesStore((state) => state.expenses);
-  const expensesHydrated = useExpensesStore((state) => state.hydrated);
-  const accounts = useAccountsStore((state) => state.accounts);
+  const { invoices, hydrated: invoicesHydrated } = useDashboardInvoices();
+  const { expenses, hydrated: expensesHydrated } = useDashboardExpenses();
+  const accounts = useDashboardAccounts();
   const { data: gst, isLoading: gstLoading } = useDashboardGstQuery();
   const { data: balance } = useDashboardBalanceQuery();
   const { isLoading: accountsLoading } = useDashboardBankAccountsQuery();
@@ -158,12 +158,15 @@ export function MoneyPosition() {
         </h2>
       </div>
 
-      <div className="grid items-stretch gap-[15px] lg:grid-cols-3">
-        <div className="lg:col-span-2">
+      <div className="grid items-stretch gap-4 lg:grid-cols-3">
+        <div className="lg:col-span-2" data-usertour="dashboard-cash-balance">
           <BalanceHero />
         </div>
 
-        <div className="grid gap-[15px] sm:grid-cols-3 lg:grid-cols-1">
+        <div
+          className="grid gap-4 sm:grid-cols-3 lg:grid-cols-1"
+          data-usertour="dashboard-money-tiles"
+        >
           {tiles.map((tile) => (
             <MoneyTile
               key={tile.key}
@@ -215,7 +218,7 @@ function MoneyTile({
 }) {
   if (loading) {
     return (
-      <Shimmer className="h-[104px] rounded-lg border border-border bg-card" />
+      <Shimmer className="h-[104px] rounded-xl border border-border bg-card" />
     );
   }
 
@@ -276,7 +279,7 @@ function MoneyTile({
   );
 
   const surface =
-    "block rounded-lg border border-border bg-card p-4 shadow-sm outline-none";
+    "block rounded-xl border border-border bg-card p-4 shadow-sm outline-none";
 
   return href ? (
     <Link

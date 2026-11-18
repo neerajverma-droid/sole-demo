@@ -6,7 +6,6 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -22,6 +21,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { FormSection } from "@/components/ui/form-section";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
@@ -79,96 +79,87 @@ export function BudgetLinkedExpenses({
   };
 
   return (
-    <Card>
-      <CardHeader className="flex-row flex-wrap items-start justify-between gap-3 space-y-0 pb-4">
-        <div className="min-w-0 space-y-1">
-          <CardTitle className="flex items-center gap-2.5 text-base">
-            Linked expenses
-            {!loading && linked.length > 0 && (
-              <Badge variant="secondary">{linked.length}</Badge>
-            )}
-          </CardTitle>
-          <p className="text-sm text-muted-foreground">
-            These expenses count against this budget. Unlinking one leaves the
-            expense itself untouched.
-          </p>
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          className="shrink-0"
-          onClick={() => setPicking(true)}
-        >
+    <FormSection
+      icon={Link2}
+      title={
+        <>
+          Linked expenses
+          {!loading && linked.length > 0 && (
+            <Badge variant="secondary">{linked.length}</Badge>
+          )}
+        </>
+      }
+      description="These expenses count against this budget. Unlinking one leaves the expense itself untouched."
+      action={
+        <Button variant="outline" size="sm" onClick={() => setPicking(true)}>
           <Link2 />
           Link expense
         </Button>
-      </CardHeader>
-
-      <CardContent className="space-y-3">
-        {loading ? (
-          <ExpenseRowsSkeleton />
-        ) : linked.length === 0 ? (
-          <Empty className="border-dashed bg-transparent shadow-none">
-            <EmptyMedia>
-              <Receipt aria-hidden />
-            </EmptyMedia>
-            <div className="space-y-1">
-              <EmptyTitle>Nothing linked yet</EmptyTitle>
-              <EmptyDescription>
-                Link an expense and its amount starts counting towards this
-                budget&apos;s limit.
-              </EmptyDescription>
-            </div>
-            <EmptyCue label="Start here" />
-            <EmptyActions>
-              <Button size="sm" onClick={() => setPicking(true)}>
-                <Link2 />
-                Link expense
-              </Button>
-            </EmptyActions>
-          </Empty>
-        ) : (
-          <>
-            <ul className="divide-y rounded-lg border border-border">
-              {linked.map((expense) => (
-                <li
-                  key={expense.id}
-                  className="flex items-center gap-3 p-3"
+      }
+      className="space-y-3"
+    >
+      {loading ? (
+        <ExpenseRowsSkeleton />
+      ) : linked.length === 0 ? (
+        <Empty className="border-dashed bg-transparent shadow-none">
+          <EmptyMedia>
+            <Receipt aria-hidden />
+          </EmptyMedia>
+          <div className="space-y-1">
+            <EmptyTitle>Nothing linked yet</EmptyTitle>
+            <EmptyDescription>
+              Link an expense and its amount starts counting towards this
+              budget&apos;s limit.
+            </EmptyDescription>
+          </div>
+          <EmptyCue label="Start here" />
+          <EmptyActions>
+            <Button size="sm" onClick={() => setPicking(true)}>
+              <Link2 />
+              Link expense
+            </Button>
+          </EmptyActions>
+        </Empty>
+      ) : (
+        <>
+          <ul className="divide-y rounded-lg border border-border">
+            {linked.map((expense) => (
+              <li
+                key={expense.id}
+                className="flex items-center gap-3 p-3"
+              >
+                <ExpenseIdentity expense={expense} />
+                <span className="shrink-0 text-sm font-medium tabular">
+                  {invoiceMoney(expense.amount)}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-8 shrink-0"
+                  disabled={removingId === expense.id}
+                  onClick={() => remove(expense)}
+                  aria-label={`Unlink ${expense.name}`}
                 >
-                  <ExpenseIdentity expense={expense} />
-                  <span className="shrink-0 text-sm font-medium tabular">
-                    {invoiceMoney(expense.amount)}
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8 shrink-0"
-                    disabled={removingId === expense.id}
-                    onClick={() => remove(expense)}
-                    aria-label={`Unlink ${expense.name}`}
-                  >
-                    <X className="size-4 text-muted-foreground" />
-                  </Button>
-                </li>
-              ))}
-            </ul>
+                  <X className="size-4 text-muted-foreground" />
+                </Button>
+              </li>
+            ))}
+          </ul>
 
-            {/* The sum of what's shown, against the limit it counts towards —
-                both figures are on screen, so neither can be a surprise. */}
-            <p className="text-xs text-muted-foreground tabular">
-              {invoiceMoney(total)} linked
-              {budgetAmount > 0 && ` of ${invoiceMoney(budgetAmount)} budgeted`}
-            </p>
-          </>
-        )}
-      </CardContent>
-
-      <LinkExpenseDialog
-        budgetId={budgetId}
-        open={picking}
-        onOpenChange={setPicking}
-      />
-    </Card>
+          {/* The sum of what's shown, against the limit it counts towards —
+              both figures are on screen, so neither can be a surprise. */}
+          <p className="text-xs text-muted-foreground tabular">
+            {invoiceMoney(total)} linked
+            {budgetAmount > 0 && ` of ${invoiceMoney(budgetAmount)} budgeted`}
+          </p>
+        </>
+      )}
+    <LinkExpenseDialog
+      budgetId={budgetId}
+      open={picking}
+      onOpenChange={setPicking}
+    />
+    </FormSection>
   );
 }
 
@@ -184,12 +175,15 @@ export function BudgetLinkedExpenses({
  * That's worth saying on screen, because otherwise an empty list reads as a
  * broken search rather than as "there is nothing eligible".
  */
-function LinkExpenseDialog({
+export function LinkExpenseDialog({
   budgetId,
+  budgetName,
   open,
   onOpenChange,
 }: {
   budgetId: string;
+  /** Said in the title when the dialog is opened from somewhere with many budgets. */
+  budgetName?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -232,7 +226,9 @@ function LinkExpenseDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Link an expense</DialogTitle>
+          <DialogTitle>
+            {budgetName ? `Add expenses to ${budgetName}` : "Link an expense"}
+          </DialogTitle>
           <DialogDescription>
             Only expenses in this budget&apos;s categories and current period
             can be linked, and each one only once.

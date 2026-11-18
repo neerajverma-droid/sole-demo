@@ -8,10 +8,13 @@ import {
   ArrowLeft,
   Camera,
   Check,
+  ExternalLink,
+  Eye,
   FileText,
   ImagePlus,
   Images,
   Landmark,
+  Link2,
   Loader2,
   Paperclip,
   Percent,
@@ -26,6 +29,13 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Empty,
+  EmptyActions,
+  EmptyDescription,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { FormSection } from "@/components/ui/form-section";
 import { InfoTip } from "@/components/ui/info-tip";
 import { Input } from "@/components/ui/input";
@@ -42,6 +52,13 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useUnsavedChanges } from "@/components/ui/unsaved-changes";
 import { AssetRegistryDialog } from "@/components/assets/asset-registry-dialog";
+import {
+  AssetFileTile,
+  CameraCaptureDialog,
+  FilePreviewDialog,
+  prefersNativeCamera,
+} from "@/components/assets/asset-files";
+import { AdvancedAssetsUpsell, useAssetAccess } from "@/components/assets/asset-access";
 import { AssetUploadStep } from "@/components/assets/asset-upload-step";
 import { RegistryCombobox } from "@/components/assets/registry-combobox";
 import { BusinessContactSelect } from "@/components/documents/business-contact-select";
@@ -57,9 +74,11 @@ import {
   UNIT_TYPES,
   assetIssues,
   assetMoney,
+  canEditAsset,
   emptyAssetDraft,
   firstIncompleteStep,
   gstBreakdown,
+  isSavedAssetFile,
   type AssetCategory,
   type AssetDraft,
   type AssetExtraction,
@@ -67,6 +86,7 @@ import {
   type AssetPhotoSlot,
   type DepreciationMethod,
 } from "@/lib/assets";
+import { apiErrorMessage } from "@/lib/api-error";
 import { fetchBusinessContacts } from "@/lib/clients";
 import { activeCurrencySymbol, documentTax, formatMoneyIn } from "@/lib/country-context";
 import { formatBytes } from "@/lib/expenses";
@@ -78,12 +98,15 @@ import {
 } from "@/lib/service-autocomplete";
 import { cn } from "@/lib/utils";
 import {
+  useAssetRegistryQuery,
   useCreateAssetBrandMutation,
   useCreateAssetTypeMutation,
 } from "@/hooks/use-asset-registry-query";
 import { useAssetQuery, useSaveAssetMutation } from "@/hooks/use-asset-query";
 import { useCountryContext } from "@/hooks/use-country-context";
 import { useAssetRegistryStore } from "@/stores/asset-registry";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
 
 const STEPS = ["Asset", "Details", "Photos", "Depreciation"] as const;
 
@@ -114,7 +137,9 @@ export function AssetForm({
   mode?: "manual" | "upload";
 }) {
   const router = useRouter();
-  const { data: editing, isLoading: loadingEditing } = useAssetQuery(assetId);
+  const registryQuery = useAssetRegistryQuery();
+  const assetQuery = useAssetQuery(assetId);
+  const editing = assetQuery.data;
   const saveAsset = useSaveAssetMutation();
 
   const today = toIsoDate(new Date());
@@ -124,6 +149,8 @@ export function AssetForm({
   const [submitted, setSubmitted] = React.useState(false);
   const [dirty, setDirty] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+  /** Saved and on the way out — Save stays off so a second click can't resubmit. */
+  const [saved, setSaved] = React.useState(false);
 
   // The draft starts empty and fills in once the edit target loads.
   React.useEffect(() => {
@@ -137,12 +164,30 @@ export function AssetForm({
    */
   const [captured, setCaptured] = React.useState(false);
 
-  const patch = (values: Partial<AssetDraft>) => {
+  /** Takes values, or a function of the current draft for async callers. */
+  const patch: Patch = (values) => {
     setDirty(true);
-    setDraft((current) => ({ ...current, ...values }));
+    setDraft((current) => ({
+      ...current,
+      ...(typeof values === "function" ? values(current) : values),
+    }));
   };
 
-  const issues = assetIssues(draft);
+  const { country } = useCountryContext();
+  /*
+   * Advanced Assets decides the shape of the form, as on the old AddAssets:
+   * with it, all four steps; without it, Asset and Photos only (and only the
+   * asset photo slot). Step numbers stay 0–3 so ASSET_STEP_FIELDS still lines
+   * up — the hidden steps are skipped, never renumbered.
+   */
+  const { advanced } = useAssetAccess();
+  const visibleSteps = advanced ? [0, 1, 2, 3] : [0, 2];
+  const nextVisible = visibleSteps.find((index) => index > step);
+  const previousVisible = [...visibleSteps].reverse().find((index) => index < step);
+  // The rate on the purchase date, so depreciation figures cap at the ex-GST cost.
+  const issues = assetIssues(draft, documentTax(country, draft.purchaseDate).rate, {
+    advanced,
+  });
   /**
    * A step the user has tried to leave while it still had something missing —
    * tracked separately from `submitted` (the final Save attempt) so a field's
@@ -154,6 +199,14 @@ export function AssetForm({
   );
   const stepOf = (key: string) =>
     ASSET_STEP_FIELDS.findIndex((fields) => fields.includes(key));
+  /*
+   * Editing an asset whose linked stock item is already tracked: its count is
+   * live stock, changed only through Adjust stock or invoices (the backend
+   * ignores a count sent from here), and its unit can't change under it.
+   */
+  const stockTracked = !!assetId && !!editing?.tracked && !!editing?.inventoryProductId;
+  const stockOnHand = stockTracked ? Number(editing?.openingStock) || 0 : 0;
+
   const issueFor = (key: string) =>
     submitted || attemptedSteps.has(stepOf(key))
       ? issues.find((issue) => issue.key === key)?.message
@@ -166,6 +219,24 @@ export function AssetForm({
    * fields missing — not when a *later* step does, since that one hasn't
    * been seen yet and Next has nothing to say about it.
    */
+  /*
+   * The asset funnel. Creating only — an edit isn't an asset being added —
+   * and each step reported once, so going back and forward again doesn't
+   * count the same step twice. Details exists only with Advanced Assets.
+   */
+  const reportedSteps = React.useRef(new Set<number>());
+  const assetTypeProp = () => ({ asset_type: draft.assetType || null });
+  const reportStepLeft = (left: number) => {
+    if (assetId || reportedSteps.current.has(left)) return;
+    if (left === 1) {
+      reportedSteps.current.add(left);
+      track(EVENTS.ASSET_DETAILS_ADDED, assetTypeProp());
+    } else if (left === 2) {
+      reportedSteps.current.add(left);
+      track(EVENTS.ASSET_PHOTO_UPLOAD_INITIATED, assetTypeProp());
+    }
+  };
+
   const goToStep = (next: number) => {
     if (next <= step) {
       setStep(next);
@@ -177,12 +248,16 @@ export function AssetForm({
       toast.error("Some details are still missing");
       return;
     }
+    reportStepLeft(step);
     setStep(next);
   };
 
-  const { guardNavigate, dialog } = useUnsavedChanges(dirty && !submitted);
+  // Only a successful save switches the guard off — a failed validation or a
+  // server error leaves the edits on screen, and still worth protecting.
+  const { guardNavigate, dialog } = useUnsavedChanges(dirty);
 
   const save = async () => {
+    if (saving || saved) return;
     setSubmitted(true);
     const incomplete = firstIncompleteStep(issues);
     if (incomplete !== null) {
@@ -192,18 +267,32 @@ export function AssetForm({
     }
     setSaving(true);
     try {
-      await saveAsset(draft, editing?.id);
+      const { documentFailures } = await saveAsset(draft, editing, {
+        advanced,
+        assetId,
+      });
       setDirty(false);
-      toast.success(editing ? `${draft.name} updated` : `${draft.name} added to the register`);
+      setSaved(true);
+      if (!editing) {
+        track(EVENTS.ASSET_ADDED, { ...assetTypeProp(), method: mode });
+      }
+      if (documentFailures.length > 0) {
+        // The asset saved; only some of its documents didn't follow.
+        toast.warning(`${draft.name} updated, but some documents didn't save`, {
+          description: documentFailures.join("\n"),
+        });
+      } else {
+        toast.success(editing ? `${draft.name} updated` : `${draft.name} added to the register`);
+      }
       router.push(ASSETS_ROOT);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn't save this asset");
-    } finally {
+      // The server's own reason — e.g. a 409 asking for the match to be undone.
+      toast.error(apiErrorMessage(error, "Couldn't save this asset"));
       setSaving(false);
     }
   };
 
-  const isLast = step === STEPS.length - 1;
+  const isLast = step === visibleSteps[visibleSteps.length - 1];
   const capturing = mode === "upload" && !editing && !captured;
 
   /** Take a reading: fields onto the draft, document into the asset's files. */
@@ -212,22 +301,53 @@ export function AssetForm({
     file: AssetFile,
     advance: boolean,
   ) => {
-    patch({
+    patch((current) => ({
       ...extraction.fields,
-      documents: [...draft.documents, file],
-    });
+      documents: [...current.documents, file],
+    }));
     setCaptured(true);
-    if (advance) setStep(1);
+    // Basic plan: no Details step, so the reading stays on step one.
+    if (advance) setStep(advanced ? 1 : 0);
   };
 
-  // Editing an asset that hasn't loaded yet: hold off on the wizard rather
-  // than rendering it against a still-empty draft.
-  if (assetId && loadingEditing) {
-    return (
-      <div className="mx-auto max-w-3xl py-12 text-center text-sm text-muted-foreground">
-        Loading asset…
-      </div>
-    );
+  /*
+   * Editing: the wizard only ever renders against the loaded asset. While it
+   * (or the registry it waits on) loads, a loading line; if either fails, an
+   * error with a retry — never the blank create form, which would save a
+   * second asset.
+   */
+  if (assetId) {
+    // Only a load that never produced data: a failed background refetch keeps
+    // the form (and its edits) on screen.
+    const loadError =
+      (!registryQuery.data ? registryQuery.error : null) ??
+      (!editing ? assetQuery.error : null);
+    if (loadError) {
+      return (
+        <AssetLoadError
+          message={apiErrorMessage(loadError, "Couldn't load this asset.")}
+          onRetry={() => {
+            if (registryQuery.isError) void registryQuery.refetch();
+            else void assetQuery.refetch();
+          }}
+        />
+      );
+    }
+    // A matched copy being refetched (say, straight after an undo) waits for
+    // the fresh one rather than flashing the blocked state.
+    if (!editing || (!canEditAsset(editing) && assetQuery.isFetching)) {
+      return (
+        <div className="mx-auto max-w-3xl py-12 text-center text-sm text-muted-foreground">
+          Loading asset…
+        </div>
+      );
+    }
+    // Matched (to a bank transaction, or paid with cash): the amount is what
+    // was reconciled, so it isn't editable until the match is undone — the
+    // same path the register's Edit takes.
+    if (!canEditAsset(editing)) {
+      return <AssetMatchedNotice assetId={editing.id} name={editing.name} />;
+    }
   }
 
   return (
@@ -244,7 +364,7 @@ export function AssetForm({
         </Button>
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold tracking-tight">
-            {editing
+            {assetId
               ? "Edit asset"
               : mode === "upload"
                 ? "Upload asset"
@@ -257,7 +377,10 @@ export function AssetForm({
         </div>
       </div>
 
-      <Stepper current={step} onSelect={goToStep} />
+      <Stepper current={step} steps={visibleSteps} onSelect={goToStep} />
+
+      {/* Plan without Advanced Assets: what's locked, and where to get it. */}
+      {!advanced && step === 0 && <AdvancedAssetsUpsell />}
 
       {step === 0 &&
         (capturing ? (
@@ -271,13 +394,19 @@ export function AssetForm({
             onSkip={() => setCaptured(true)}
           />
         ) : (
-          <AssetStep draft={draft} patch={patch} issueFor={issueFor} />
+          <AssetStep
+            draft={draft}
+            patch={patch}
+            issueFor={issueFor}
+            stockTracked={stockTracked}
+            stockOnHand={stockOnHand}
+          />
         ))}
-      {step === 1 && (
+      {step === 1 && advanced && (
         <DetailsStep draft={draft} patch={patch} issueFor={issueFor} />
       )}
-      {step === 2 && <PhotosStep draft={draft} patch={patch} />}
-      {step === 3 && (
+      {step === 2 && <PhotosStep draft={draft} patch={patch} advanced={advanced} />}
+      {step === 3 && advanced && (
         <DepreciationStep draft={draft} patch={patch} issueFor={issueFor} />
       )}
 
@@ -287,8 +416,17 @@ export function AssetForm({
       >
         <Button
           variant="outline"
-          disabled={step === 0}
-          onClick={() => setStep((current) => Math.max(0, current - 1))}
+          onClick={() => {
+            if (previousVisible !== undefined) {
+              setStep(previousVisible);
+              return;
+            }
+            // First step: Back leaves the form — to the "how do you want to add
+            // it" chooser for a new asset, the register for an edit — through
+            // the same unsaved-changes guard Cancel uses. (It used to sit
+            // disabled and faded here, which read as broken.)
+            guardNavigate(assetId ? ASSETS_ROOT : `${ASSETS_ROOT}/new`)();
+          }}
         >
           Back
         </Button>
@@ -304,7 +442,7 @@ export function AssetForm({
             <Link
               href={ASSETS_ROOT}
               onClick={(event) => {
-                if (dirty && !submitted) {
+                if (dirty) {
                   event.preventDefault();
                   guardNavigate(ASSETS_ROOT)();
                 }
@@ -314,7 +452,7 @@ export function AssetForm({
             </Link>
           </Button>
           {isLast ? (
-            <Button onClick={save} disabled={saving}>
+            <Button onClick={save} disabled={saving || saved}>
               {saving && <Loader2 className="size-4 animate-spin" />}
               {saving ? "Saving\u2026" : "Save Asset"}
             </Button>
@@ -323,7 +461,7 @@ export function AssetForm({
               // Nothing to carry forward until capture has read something, and
               // a Next that skips the step it's standing on is a trap.
               disabled={capturing}
-              onClick={() => goToStep(Math.min(STEPS.length - 1, step + 1))}
+              onClick={() => goToStep(nextVisible ?? step)}
             >
               Next
             </Button>
@@ -340,15 +478,93 @@ export function AssetForm({
   );
 }
 
+/** A picked file as a data URL. */
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+/** The edit route when the asset (or the registry it needs) didn't load. */
+function AssetLoadError({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="mx-auto max-w-3xl">
+      <Empty>
+        <EmptyMedia>
+          <Landmark aria-hidden />
+        </EmptyMedia>
+        <div className="space-y-1">
+          <EmptyTitle>Couldn&apos;t open this asset</EmptyTitle>
+          <EmptyDescription>{message}</EmptyDescription>
+        </div>
+        <EmptyActions>
+          <Button size="sm" onClick={onRetry}>
+            Try again
+          </Button>
+          <Button variant="outline" size="sm" asChild>
+            <Link href={ASSETS_ROOT}>Back to assets</Link>
+          </Button>
+        </EmptyActions>
+      </Empty>
+    </div>
+  );
+}
+
+/**
+ * The edit route opened on a matched asset (a bookmark, a typed URL). Undo
+ * goes through the register's own edit link (`/assets?edit=<id>`), whose gate
+ * opens the Undo dialog worded for an edit and comes back here once nothing
+ * is left matched.
+ */
+function AssetMatchedNotice({ assetId, name }: { assetId: string; name: string }) {
+  return (
+    <div className="mx-auto max-w-3xl">
+      <Empty>
+        <EmptyMedia>
+          <Link2 aria-hidden />
+        </EmptyMedia>
+        <div className="space-y-1">
+          <EmptyTitle>{name} is matched</EmptyTitle>
+          <EmptyDescription>
+            A matched asset can&apos;t be edited — undo the match first. Its
+            cost is what the bank transaction or cash payment was reconciled
+            against.
+          </EmptyDescription>
+        </div>
+        <EmptyActions>
+          <Button size="sm" asChild>
+            <Link href={`${ASSETS_ROOT}?edit=${assetId}`}>Undo match to edit</Link>
+          </Button>
+          <Button variant="outline" size="sm" asChild>
+            <Link href={ASSETS_ROOT}>Back to assets</Link>
+          </Button>
+        </EmptyActions>
+      </Empty>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ *
  * Stepper
  * ------------------------------------------------------------------ */
 
 function Stepper({
   current,
+  steps,
   onSelect,
 }: {
   current: number;
+  /** The step indices on this plan, in order (hidden ones are left out). */
+  steps: number[];
   onSelect: (step: number) => void;
 }) {
   return (
@@ -356,7 +572,8 @@ function Stepper({
       className="flex flex-wrap items-center gap-x-2 gap-y-2"
       data-usertour="asset-form-steps"
     >
-      {STEPS.map((label, index) => {
+      {steps.map((index, position) => {
+        const label = STEPS[index];
         const done = index < current;
         const active = index === current;
         return (
@@ -381,11 +598,11 @@ function Stepper({
                 )}
                 aria-hidden
               >
-                {done ? <Check className="size-3.5" /> : index + 1}
+                {done ? <Check className="size-3.5" /> : position + 1}
               </span>
               {label}
             </button>
-            {index < STEPS.length - 1 && (
+            {position < steps.length - 1 && (
               <span className="h-px w-4 bg-border sm:w-8" aria-hidden />
             )}
           </li>
@@ -399,9 +616,13 @@ function Stepper({
  * Step 1 — Asset details
  * ------------------------------------------------------------------ */
 
+type Patch = (
+  values: Partial<AssetDraft> | ((current: AssetDraft) => Partial<AssetDraft>),
+) => void;
+
 type StepProps = {
   draft: AssetDraft;
-  patch: (values: Partial<AssetDraft>) => void;
+  patch: Patch;
   issueFor: (key: string) => string | undefined;
 };
 
@@ -548,7 +769,17 @@ function inclusiveGstHint(
   return `On means the cost above already includes ${word}. The component is the price ${formula} — so ${money(100 + rate)} contains ${money(rate)} of ${word}, leaving ${money(100)} ex-${word}.`;
 }
 
-function AssetStep({ draft, patch, issueFor }: StepProps) {
+function AssetStep({
+  draft,
+  patch,
+  issueFor,
+  stockTracked = false,
+  stockOnHand = 0,
+}: StepProps & {
+  /** Editing an asset whose linked stock item is already tracked. */
+  stockTracked?: boolean;
+  stockOnHand?: number;
+}) {
   /*
    * GST in the business's own terms: its word (GST, VAT) and the rate on the
    * purchase date — its custom rate, else 10% AU / 15% NZ / 15% ZA.
@@ -604,6 +835,11 @@ function AssetStep({ draft, patch, issueFor }: StepProps) {
                         lowStockAlert: entry.lowStockAlert,
                       }
                     : {}),
+                  // The picked item's own sale price, so linking to it doesn't
+                  // look like it has none.
+                  ...(entry.productId && entry.salePrice
+                    ? { salePrice: entry.salePrice }
+                    : {}),
                   // Always set, deterministically: null clears a stale link
                   // from a previous pick just as surely as an id sets a new
                   // one — a plain services_all row has nothing to link to.
@@ -657,12 +893,25 @@ function AssetStep({ draft, patch, issueFor }: StepProps) {
         <Field label="Category" required error={issueFor("category")}>
           <Select
             value={draft.category}
-            onValueChange={(value) =>
-              patch({ category: value as AssetCategory })
-            }
+            onValueChange={(value) => {
+              const category = value as AssetCategory;
+              patch({
+                category,
+                // Choosing Inventory starts the stock block the way it's
+                // usually wanted — counted, with a low-stock warning at 5.
+                ...(category === TRACKED_CATEGORY &&
+                draft.category !== TRACKED_CATEGORY
+                  ? {
+                      tracked: true,
+                      unitType: draft.unitType || "Items",
+                      lowStockAlert: draft.lowStockAlert || "5",
+                    }
+                  : {}),
+              });
+            }}
           >
-            <SelectTrigger aria-label="Category">
-              <SelectValue />
+            <SelectTrigger aria-label="Category" aria-invalid={!!issueFor("category")}>
+              <SelectValue placeholder="Choose a category" />
             </SelectTrigger>
             <SelectContent>
               {ASSET_CATEGORIES.map((option) => (
@@ -673,23 +922,6 @@ function AssetStep({ draft, patch, issueFor }: StepProps) {
             </SelectContent>
           </Select>
         </Field>
-
-        <div className="sm:col-span-2">
-          <Field
-            label={`Still owing (${activeCurrencySymbol()})`}
-            htmlFor="asset-owing"
-            hint="Leave blank if it's paid outright."
-          >
-            <Input
-              id="asset-owing"
-              inputMode="decimal"
-              value={draft.owing}
-              onChange={(event) => patch({ owing: event.target.value })}
-              placeholder="0.00"
-              className="tabular"
-            />
-          </Field>
-        </div>
       </FormSection>
 
       {/* Only the one category carries stock, so the block appears with it. */}
@@ -698,12 +930,19 @@ function AssetStep({ draft, patch, issueFor }: StepProps) {
           icon={Images}
           title="Inventory tracking"
           description="This category carries stock, so Sole can keep a count."
+          tourId="asset-inventory"
           className="grid gap-4 sm:grid-cols-2"
         >
-          <Field label="Unit type" required error={issueFor("unitType")}>
+          <Field
+            label="Unit type"
+            required
+            error={issueFor("unitType")}
+            hint={stockTracked ? "Locked — stock is counted in this unit." : undefined}
+          >
             <Select
               value={draft.unitType}
               onValueChange={(unitType) => patch({ unitType })}
+              disabled={stockTracked}
             >
               <SelectTrigger aria-label="Unit type">
                 <SelectValue placeholder="Choose a unit" />
@@ -718,6 +957,23 @@ function AssetStep({ draft, patch, issueFor }: StepProps) {
             </Select>
           </Field>
 
+          <Field
+            label={`Sale price (${activeCurrencySymbol()})`}
+            htmlFor="asset-sale-price"
+            error={issueFor("salePrice")}
+            hint="What you sell one for — filled in when you pick it on a quote or invoice."
+          >
+            <Input
+              id="asset-sale-price"
+              inputMode="decimal"
+              value={draft.salePrice ?? ""}
+              onChange={(event) => patch({ salePrice: event.target.value })}
+              placeholder="0.00"
+              className="tabular"
+              aria-invalid={!!issueFor("salePrice")}
+            />
+          </Field>
+
           <div className="sm:col-span-2">
             <Label className="flex cursor-pointer items-start gap-3 font-normal">
               <Checkbox
@@ -725,6 +981,9 @@ function AssetStep({ draft, patch, issueFor }: StepProps) {
                 onCheckedChange={(checked) =>
                   patch({ tracked: checked === true })
                 }
+                // Untracking with units on hand would hide that stock; the
+                // backend refuses it too.
+                disabled={stockTracked && stockOnHand > 0}
                 className="mt-0.5"
               />
               <span className="space-y-0.5">
@@ -732,7 +991,9 @@ function AssetStep({ draft, patch, issueFor }: StepProps) {
                   I track this item
                 </span>
                 <span className="block text-xs text-muted-foreground">
-                  Keep a stock count and warn you when it runs low.
+                  {stockTracked && stockOnHand > 0
+                    ? `${stockOnHand} still in stock — adjust stock to 0 before turning tracking off.`
+                    : "Keep a stock count and warn you when it runs low."}
                 </span>
               </span>
             </Label>
@@ -740,20 +1001,33 @@ function AssetStep({ draft, patch, issueFor }: StepProps) {
 
           {draft.tracked && (
             <>
-              <Field label="Opening stock" htmlFor="asset-stock">
-                <Input
-                  id="asset-stock"
-                  inputMode="numeric"
-                  value={draft.openingStock}
-                  onChange={(event) =>
-                    patch({ openingStock: event.target.value })
-                  }
-                  className="tabular"
-                />
-              </Field>
+              {stockTracked ? (
+                <Field
+                  label="Stock on hand"
+                  hint="Use Adjust stock on the Inventory list to change this."
+                >
+                  <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 text-sm tabular text-muted-foreground">
+                    {stockOnHand} {draft.unitType || "units"}
+                  </div>
+                </Field>
+              ) : (
+                <Field label="Opening stock" htmlFor="asset-stock">
+                  <Input
+                    id="asset-stock"
+                    placeholder="e.g. 10"
+                    inputMode="numeric"
+                    value={draft.openingStock}
+                    onChange={(event) =>
+                      patch({ openingStock: event.target.value })
+                    }
+                    className="tabular"
+                  />
+                </Field>
+              )}
               <Field label="Low stock alert at" htmlFor="asset-low">
                 <Input
                   id="asset-low"
+                  placeholder="e.g. 5"
                   inputMode="numeric"
                   value={draft.lowStockAlert}
                   onChange={(event) =>
@@ -883,8 +1157,8 @@ function DetailsStep({ draft, patch, issueFor }: StepProps) {
             const stored = await createBrand(name);
             toast.success(`${stored} added to the registry`);
             return stored;
-          } catch {
-            toast.error("Couldn't add that brand");
+          } catch (error) {
+            toast.error(apiErrorMessage(error, "Couldn't add that brand"));
             return draft.brand;
           }
         }}
@@ -906,8 +1180,8 @@ function DetailsStep({ draft, patch, issueFor }: StepProps) {
             const stored = await createType(name);
             toast.success(`${stored} added to the registry`);
             return stored;
-          } catch {
-            toast.error("Couldn't add that asset type");
+          } catch (error) {
+            toast.error(apiErrorMessage(error, "Couldn't add that asset type"));
             return draft.assetType;
           }
         }}
@@ -921,6 +1195,7 @@ function DetailsStep({ draft, patch, issueFor }: StepProps) {
       <Field label="Model no" htmlFor="asset-model">
         <Input
           id="asset-model"
+          placeholder="e.g. A2992"
           value={draft.modelNo}
           onChange={(event) => patch({ modelNo: event.target.value })}
         />
@@ -929,6 +1204,7 @@ function DetailsStep({ draft, patch, issueFor }: StepProps) {
       <Field label="Serial no" htmlFor="asset-serial">
         <Input
           id="asset-serial"
+          placeholder="e.g. C02XG0FDH7JY"
           value={draft.serialNo}
           onChange={(event) => patch({ serialNo: event.target.value })}
         />
@@ -942,6 +1218,7 @@ function DetailsStep({ draft, patch, issueFor }: StepProps) {
         >
           <Textarea
             id="asset-marks"
+            placeholder="e.g. Scratch on the lid, company sticker on the base"
             rows={3}
             value={draft.identifyingMarks}
             onChange={(event) =>
@@ -1033,43 +1310,58 @@ const PHOTO_SLOTS: {
 function PhotosStep({
   draft,
   patch,
+  advanced,
 }: {
   draft: AssetDraft;
-  patch: (values: Partial<AssetDraft>) => void;
+  patch: Patch;
+  /** Without Advanced Assets only the asset photo slot is offered (old AddAssets). */
+  advanced: boolean;
 }) {
-  const setPhoto = (slot: AssetPhotoSlot, file: AssetFile | undefined) => {
-    const photos = { ...draft.photos };
-    if (file) photos[slot] = file;
-    else delete photos[slot];
-    patch({ photos });
-  };
+  const [previewDoc, setPreviewDoc] = React.useState<AssetFile | null>(null);
+  // Against the current draft, not this render's: a file is read
+  // asynchronously, and two slots filled in quick succession would otherwise
+  // each overwrite the other.
+  const setPhoto = (slot: AssetPhotoSlot, file: AssetFile | undefined) =>
+    patch((current) => {
+      const photos = { ...current.photos };
+      if (file) photos[slot] = file;
+      else delete photos[slot];
+      return { photos };
+    });
 
-  const addDocuments = (files: FileList) => {
+  const addDocuments = async (files: FileList) => {
     const room = MAX_DOCUMENTS - draft.documents.length;
     if (room <= 0) {
       toast.error(`That's the limit — ${MAX_DOCUMENTS} documents per asset.`);
       return;
     }
-    const accepted = [...files].slice(0, room);
-    accepted.forEach((file) => {
-      if (file.size > MAX_DOCUMENT_BYTES) {
-        toast.error(`${file.name} is over 20MB.`);
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = () =>
-        patch({
-          documents: [
-            ...draft.documents,
-            {
-              dataUrl: String(reader.result),
-              name: file.name,
-              size: file.size,
-            },
-          ],
-        });
-      reader.readAsDataURL(file);
+    const sized = [...files].filter((file) => {
+      if (file.size <= MAX_DOCUMENT_BYTES) return true;
+      toast.error(`${file.name} is over 20MB.`);
+      return false;
     });
+    if (sized.length > room) {
+      toast.error(`Only ${room} more could be added — ${MAX_DOCUMENTS} documents per asset.`);
+    }
+    // Every file read first, then one update: each reader patching on its own
+    // started from the same stale list, so only the last file survived.
+    let read: AssetFile[];
+    try {
+      read = await Promise.all(
+        sized.slice(0, room).map(async (file) => ({
+          dataUrl: await readAsDataUrl(file),
+          name: file.name,
+          size: file.size,
+        })),
+      );
+    } catch {
+      toast.error("Couldn't read those files.");
+      return;
+    }
+    if (read.length === 0) return;
+    patch((current) => ({
+      documents: [...current.documents, ...read].slice(0, MAX_DOCUMENTS),
+    }));
   };
 
   return (
@@ -1083,7 +1375,7 @@ function PhotosStep({
         // that reflows as you go makes the step feel unfinished.
         className="grid gap-4 sm:auto-rows-fr sm:grid-cols-2"
       >
-        {PHOTO_SLOTS.map(({ slot, label, hint, icon, pdf }) => (
+        {PHOTO_SLOTS.filter(({ slot }) => advanced || slot === "photo").map(({ slot, label, hint, icon, pdf }) => (
           <PhotoTile
             key={slot}
             slot={slot}
@@ -1115,10 +1407,37 @@ function PhotosStep({
                   className="size-3.5 shrink-0 text-muted-foreground"
                   aria-hidden
                 />
-                <span className="min-w-0 flex-1 truncate">{file.name}</span>
-                <span className="shrink-0 text-xs text-muted-foreground tabular">
-                  {formatBytes(file.size)}
-                </span>
+                <button
+                  type="button"
+                  onClick={() => setPreviewDoc(file)}
+                  className="min-w-0 flex-1 truncate text-left underline-offset-2 hover:underline"
+                  title={`Preview ${file.name}`}
+                >
+                  {file.name}
+                </button>
+                {file.size > 0 && (
+                  <span className="shrink-0 text-xs text-muted-foreground tabular">
+                    {formatBytes(file.size)}
+                  </span>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7"
+                  aria-label={`View ${file.name}`}
+                  onClick={() => setPreviewDoc(file)}
+                >
+                  <Eye className="size-3.5" />
+                  View
+                </Button>
+                {isSavedAssetFile(file) ? (
+                  // Already on the server: also open it where it's stored.
+                  <Button variant="ghost" size="icon" className="size-7" asChild>
+                    <a href={file.dataUrl} target="_blank" rel="noreferrer" aria-label={`Open ${file.name} in a new tab`}>
+                      <ExternalLink className="size-3.5" />
+                    </a>
+                  </Button>
+                ) : null}
                 <Button
                   variant="ghost"
                   size="icon"
@@ -1138,6 +1457,7 @@ function PhotosStep({
             ))}
           </ul>
         )}
+        <FilePreviewDialog file={previewDoc} onClose={() => setPreviewDoc(null)} />
       </FormSection>
     </div>
   );
@@ -1171,7 +1491,15 @@ function PhotoTile({
   const browseRef = React.useRef<HTMLInputElement>(null);
   const cameraRef = React.useRef<HTMLInputElement>(null);
   const [over, setOver] = React.useState(false);
+  const [previewing, setPreviewing] = React.useState(false);
+  const [cameraOpen, setCameraOpen] = React.useState(false);
   const inputId = `asset-photo-${slot}`;
+
+  /** Phones open their own camera app; desktops get a live webcam preview. */
+  const openCamera = () => {
+    if (prefersNativeCamera()) cameraRef.current?.click();
+    else setCameraOpen(true);
+  };
   const accept = pdf ? "image/*,application/pdf" : "image/*";
 
   /**
@@ -1261,44 +1589,22 @@ function PhotoTile({
       )}
 
       {file ? (
-        <div className="space-y-2">
-          {file.dataUrl.startsWith("data:image") ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={file.dataUrl}
-              alt=""
-              className="h-24 w-full rounded-md border border-border object-cover"
-            />
-          ) : (
-            <div className="flex items-center gap-2 rounded-md border border-border bg-card p-2">
-              <span
-                className="grid size-9 shrink-0 place-items-center rounded bg-primary/10 text-primary"
-                aria-hidden
-              >
-                <FileText className="size-4" />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-xs font-medium">
-                  {file.name}
-                </span>
-                <span className="block text-xs text-muted-foreground tabular">
-                  {formatBytes(file.size)}
-                </span>
-              </span>
-            </div>
-          )}
-          {file.dataUrl.startsWith("data:image") ? (
-            <p className="truncate text-xs text-muted-foreground">
-              {file.name} ·{" "}
-              <span className="tabular">{formatBytes(file.size)}</span>
-            </p>
-          ) : null}
-        </div>
+        // A saved photo is the server's URL, not a data:image URL — the tile
+        // works out which it is, so saved photos show (and open) too.
+        <AssetFileTile file={file} label={label} onOpen={() => setPreviewing(true)} />
       ) : null}
 
-      <div className="mt-auto flex gap-2">
+      <div className="mt-auto flex flex-wrap gap-2">
         {file ? (
           <>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPreviewing(true)}
+            >
+              <Eye />
+              View
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -1321,17 +1627,25 @@ function PhotoTile({
               <Upload />
               Browse
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => cameraRef.current?.click()}
-            >
+            <Button variant="ghost" size="sm" onClick={openCamera}>
               <Camera />
               Camera
             </Button>
           </>
         )}
       </div>
+
+      <FilePreviewDialog
+        file={previewing ? (file ?? null) : null}
+        title={label}
+        onClose={() => setPreviewing(false)}
+      />
+      <CameraCaptureDialog
+        open={cameraOpen}
+        title={label}
+        onOpenChange={setCameraOpen}
+        onCapture={take}
+      />
 
       {/* sr-only rather than hidden, and out of the tab order: Browse is the
           control, but a hidden input can't be reached by a label click. */}
@@ -1427,8 +1741,26 @@ function Dropzone({ onFiles }: { onFiles: (files: FileList) => void }) {
 
 function DepreciationStep({ draft, patch, issueFor }: StepProps) {
   const depreciation = draft.depreciation;
+  // As on the depreciation screen: only diminishing value takes an override.
+  const overrideApplies = depreciation.method === "Diminishing value";
   const set = (values: Partial<AssetDraft["depreciation"]>) =>
     patch({ depreciation: { ...depreciation, ...values } });
+
+  /*
+   * Errors show once Save has been tried (`issueFor`) or as soon as a field is
+   * left — the same rules either way, read from `assetIssues` so the step and
+   * the Save gate can't disagree.
+   */
+  const { country } = useCountryContext();
+  const [touched, setTouched] = React.useState<Set<string>>(new Set());
+  const touch = (key: string) =>
+    setTouched((current) => (current.has(key) ? current : new Set(current).add(key)));
+  const stepIssues = assetIssues(draft, documentTax(country, draft.purchaseDate).rate);
+  const errorFor = (key: string) =>
+    issueFor(key) ??
+    (touched.has(key)
+      ? stepIssues.find((issue) => issue.key === key)?.message
+      : undefined);
 
   return (
     <FormSection
@@ -1480,53 +1812,88 @@ function DepreciationStep({ draft, patch, issueFor }: StepProps) {
           </fieldset>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field
-              label="Effective life (years)"
-              htmlFor="dep-life"
-              required
-              error={issueFor("effectiveLife")}
-            >
-              <Input
-                id="dep-life"
-                inputMode="decimal"
-                value={depreciation.effectiveLife}
-                onChange={(event) => set({ effectiveLife: event.target.value })}
-                className="tabular"
-                aria-invalid={!!issueFor("effectiveLife")}
-              />
-            </Field>
+            {/* A full write-off has no life and no rate to set — it's the
+                whole cost in year one. */}
+            {depreciation.method !== "Full depreciation on purchase" && (
+              <>
+                <Field
+                  label="Effective life (years)"
+                  htmlFor="dep-life"
+                  required
+                  error={errorFor("effectiveLife")}
+                >
+                  <Input
+                    id="dep-life"
+                    placeholder="e.g. 5"
+                    inputMode="decimal"
+                    value={depreciation.effectiveLife}
+                    onChange={(event) =>
+                      set({ effectiveLife: event.target.value })
+                    }
+                    onBlur={() => touch("effectiveLife")}
+                    className="tabular"
+                    aria-invalid={!!errorFor("effectiveLife")}
+                  />
+                </Field>
+
+                <Field
+                  label="Override rate (%)"
+                  htmlFor="dep-rate"
+                  hint={
+                    overrideApplies
+                      ? "Leave blank to use the rate the method implies."
+                      : "Only used for diminishing value — straight line has a fixed rate."
+                  }
+                  error={errorFor("overrideRate")}
+                >
+                  <Input
+                    id="dep-rate"
+                    placeholder="Auto-calculated"
+                    inputMode="decimal"
+                    disabled={!overrideApplies}
+                    value={depreciation.overrideRate}
+                    onChange={(event) =>
+                      set({ overrideRate: event.target.value })
+                    }
+                    onBlur={() => touch("overrideRate")}
+                    className="tabular"
+                    aria-invalid={!!errorFor("overrideRate")}
+                  />
+                </Field>
+              </>
+            )}
 
             <Field
-              label="Override rate (%)"
-              htmlFor="dep-rate"
-              hint="Leave blank to use the rate the method implies."
+              label={`Residual (salvage) value (${activeCurrencySymbol()})`}
+              htmlFor="dep-residual"
+              error={errorFor("residualValue")}
             >
-              <Input
-                id="dep-rate"
-                inputMode="decimal"
-                value={depreciation.overrideRate}
-                onChange={(event) => set({ overrideRate: event.target.value })}
-                className="tabular"
-              />
-            </Field>
-
-            <Field label={`Residual (salvage) value (${activeCurrencySymbol()})`} htmlFor="dep-residual">
               <Input
                 id="dep-residual"
+                placeholder="0.00"
                 inputMode="decimal"
                 value={depreciation.residualValue}
                 onChange={(event) => set({ residualValue: event.target.value })}
+                onBlur={() => touch("residualValue")}
                 className="tabular"
+                aria-invalid={!!errorFor("residualValue")}
               />
             </Field>
 
-            <Field label={`Cost limit (${activeCurrencySymbol()})`} htmlFor="dep-limit">
+            <Field
+              label={`Cost limit (${activeCurrencySymbol()})`}
+              htmlFor="dep-limit"
+              error={errorFor("costLimit")}
+            >
               <Input
                 id="dep-limit"
+                placeholder="No limit"
                 inputMode="decimal"
                 value={depreciation.costLimit}
                 onChange={(event) => set({ costLimit: event.target.value })}
+                onBlur={() => touch("costLimit")}
                 className="tabular"
+                aria-invalid={!!errorFor("costLimit")}
               />
             </Field>
 

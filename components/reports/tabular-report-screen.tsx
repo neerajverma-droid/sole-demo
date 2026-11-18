@@ -63,6 +63,7 @@ import { apiErrorMessage } from "@/lib/api-error";
 import { sendReportOpenAtom } from "@/lib/atoms";
 import {
   cellAlignment,
+  columnLabel,
   downloadTabularReport,
   formatReportCell,
   isGroupedRepeat,
@@ -187,6 +188,8 @@ export function TabularReportScreen({
 
   // The business's financial year, as the query above resolved it.
   const fiscalYearStart = useFiscalYearStart();
+  // Column headings that are jurisdiction nouns (ABN / NZBN) read from it.
+  const { country } = useCountryContext();
   const shape = periodShape(period, range, undefined, fiscalYearStart);
   const rangeLabel = report?.rangeLabel ?? spanLabel(shape.current);
   const dated = config.dated !== false;
@@ -231,7 +234,10 @@ export function TabularReportScreen({
 
         {exportable && (
           <>
-            <Button onClick={() => setSendOpen(true)}>
+            <Button
+              onClick={() => setSendOpen(true)}
+              data-usertour="report-send"
+            >
               <Send />
               Send report
             </Button>
@@ -273,7 +279,6 @@ export function TabularReportScreen({
         <ReportCustomRange
           from={range?.from ?? ""}
           to={range?.to ?? ""}
-          label={rangeLabel}
           onChange={onRangeChange}
         />
       )}
@@ -363,7 +368,7 @@ export function TabularReportScreen({
                             // rather than overriding it to a colour only the
                             // sortable columns would show.
                             className="-ml-3 h-7 gap-1 px-3 text-xs font-medium text-inherit hover:bg-transparent hover:text-inherit hover:opacity-70"
-                            aria-label={`Sort by ${column.label ?? column.key}`}
+                            aria-label={`Sort by ${columnLabel(column, country)}`}
                             onClick={() => {
                               const key = column.sortKey!;
                               // Clicking the sorted column flips it; a new
@@ -374,14 +379,14 @@ export function TabularReportScreen({
                               );
                             }}
                           >
-                            {column.label ?? column.key}
+                            {columnLabel(column, country)}
                             <SortIcon
                               active={sort?.by === column.sortKey}
                               dir={sort?.dir ?? "asc"}
                             />
                           </Button>
                         ) : (
-                          (column.label ?? column.key)
+                          (columnLabel(column, country))
                         )}
                       </TableHead>
                     ))}

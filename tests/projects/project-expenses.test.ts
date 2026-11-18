@@ -1,8 +1,10 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
+const trackMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/analytics", () => ({ track: trackMock }));
+
 import { decryptPayload } from "@/utils/encrypt";
 import apiRoutes from "@/config/api-routes";
-import { EVENTS } from "@/lib/analytics-events";
 
 const apiMock = {
   get: vi.fn(),
@@ -11,15 +13,9 @@ const apiMock = {
   delete: vi.fn(),
 };
 
-const trackMock = vi.fn();
-
 vi.mock("@/utils/axiosInstance", () => ({
   default: apiMock,
 }));
-
-// `createProjectExpenseApi` fires the same analytics event the main expense
-// form does — mocked so the test can assert it without touching Mixpanel.
-vi.mock("@/lib/analytics", () => ({ track: trackMock }));
 
 // Imported after the mocks so `lib/project-expenses.ts`'s own imports resolve
 // to the mocked modules above.
@@ -594,27 +590,7 @@ describe("creating an expense on a project", () => {
     expect((body.getAll("files[]") as File[]).map((file) => file.name)).toEqual(["receipt.pdf"]);
   });
 
-  it("fires the expense-logged event the main expense form fires", async () => {
-    apiMock.post.mockResolvedValue({ data: { success: true, data: { id: 1 } } });
-    const receipt = new File(["x"], "r.png", { type: "image/png" });
-
-    await createProjectExpenseApi({
-      draft: draft({ amount: 220, gst: true, paymentMethod: "Cash", splitEnabled: true, businessAmount: 100 }),
-      files: [receipt],
-      projectId: "88",
-      projectJobId: null,
-    });
-
-    expect(trackMock).toHaveBeenCalledWith(EVENTS.EXPENSE_LOGGED, {
-      amount: 220,
-      has_receipt: true,
-      has_gst: true,
-      payment_method: "Cash",
-      is_split: true,
-    });
-  });
-
-  it("throws without an id in the response, and doesn't track it", async () => {
+  it("throws without an id in the response", async () => {
     apiMock.post.mockResolvedValueOnce({ data: { success: true, data: {} } });
     await expect(
       createProjectExpenseApi({ draft: draft(), files: [], projectId: "88", projectJobId: null }),
@@ -625,7 +601,6 @@ describe("creating an expense on a project", () => {
       createProjectExpenseApi({ draft: draft(), files: [], projectId: "88", projectJobId: null }),
     ).rejects.toThrow("Required data missing");
 
-    expect(trackMock).not.toHaveBeenCalled();
   });
 
   it("accepts an id of 0 as a real id", async () => {
@@ -1033,5 +1008,24 @@ describe("viewing a project expense", () => {
     apiMock.get.mockResolvedValue({ data: { success: true, data: null } });
 
     await expect(fetchProjectExpenseView("901")).rejects.toThrow("Expense not found.");
+  });
+});
+
+describe("createProjectExpenseApi fires its Mixpanel event", () => {
+  it("fires after the server confirms", async () => {
+    trackMock.mockClear();
+    apiMock.post.mockResolvedValue({ data: { success: true, data: { id: 1 } } });
+    await createProjectExpenseApi({ draft: draft(), files: [], projectId: "88", projectJobId: null });
+    expect(trackMock).toHaveBeenCalledWith("expense_added", {
+      source: "project",
+      expense_category: draft().category || null,
+    });
+  });
+
+  it("stays silent when the server refuses", async () => {
+    trackMock.mockClear();
+    apiMock.post.mockResolvedValue({ data: { success: false, message: "no" } });
+    await expect(createProjectExpenseApi({ draft: draft(), files: [], projectId: "88", projectJobId: null })).rejects.toThrow();
+    expect(trackMock).not.toHaveBeenCalled();
   });
 });

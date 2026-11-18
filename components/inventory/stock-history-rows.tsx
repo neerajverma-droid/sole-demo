@@ -18,6 +18,8 @@ import { invoiceMoney } from "@/lib/invoices";
 import {
   fetchInventoryHistory,
   stockAdjustReasonLabel,
+  stockAdjustmentNote,
+  stockMovementDisplay,
   type InventoryItem,
 } from "@/lib/inventory";
 import { cn } from "@/lib/utils";
@@ -102,17 +104,20 @@ export function StockHistoryRows({ item }: { item: InventoryItem }) {
               <TableCell
                 className={cn(
                   "py-2 text-right font-medium tabular",
-                  entry.quantity > 0 ? "text-success" : "text-destructive",
+                  {
+                    in: "text-success",
+                    out: "text-destructive",
+                    none: "text-muted-foreground",
+                  }[stockMovementDisplay(entry.quantity).tone],
                 )}
               >
-                {entry.quantity > 0 ? "+" : ""}
-                {entry.quantity}
+                {stockMovementDisplay(entry.quantity).text}
               </TableCell>
               <TableCell className="py-2 text-right text-muted-foreground tabular">
                 {entry.unitCost !== null ? invoiceMoney(entry.unitCost) : "—"}
               </TableCell>
               <TableCell className="py-2 text-muted-foreground">
-                {entry.note || "—"}
+                {stockAdjustmentNote(entry)}
               </TableCell>
               <TableCell className="py-2 text-right font-medium tabular">
                 {entry.balanceAfter}
@@ -125,7 +130,7 @@ export function StockHistoryRows({ item }: { item: InventoryItem }) {
       {(query.data?.totalPages ?? 1) > 1 && (
         <div className="mt-2 flex items-center justify-between px-1">
           <p className="text-xs text-muted-foreground">
-            Showing the {adjustments.length} most recent movements of{" "}
+            Showing the {adjustments.length} most recent entries of{" "}
             {query.data?.total}.
           </p>
           <Button

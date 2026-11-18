@@ -556,6 +556,16 @@ export function isValidSolePayPhone(phone: string): boolean {
   return true;
 }
 
+/** Matches `isAustralia()` in payments/worldpayservice -- "Australia" or "AU", case-insensitive. */
+function isAustralianCountry(country: string): boolean {
+  const value = country.trim().toUpperCase();
+  return value === "AUSTRALIA" || value === "AU";
+}
+
+export function isValidAuStateCode(value: string): boolean {
+  return (AU_STATES as readonly string[]).includes(value.trim().toUpperCase());
+}
+
 type WireAccountEntry = {
   account: {
     accountnumber: string;
@@ -1157,6 +1167,21 @@ export function entityIssues(
     issues.website = "Enter a valid website URL (e.g. https://company.com).";
   }
 
+  // Quantity and dollar amounts are all counts -- never meaningfully
+  // negative. The inputs themselves don't block typing "-" (per the
+  // platform rule in MoneyInput/TextField: show an error rather than
+  // reject a keystroke), so this is what actually stops a negative value
+  // from being saved, same way `daysInAdvance` above already does it.
+  if (filled(entity.transactionQty) && Number(entity.transactionQty) < 0) {
+    issues.transactionQty = "Enter 0 or more.";
+  }
+  if (filled(entity.maxTransaction) && Number(entity.maxTransaction) < 0) {
+    issues.maxTransaction = "Enter 0 or more.";
+  }
+  if (filled(entity.avgTransaction) && Number(entity.avgTransaction) < 0) {
+    issues.avgTransaction = "Enter 0 or more.";
+  }
+
   // Not backend-enforced - matches spm's EntitySchema's avg <= max
   // superRefine, a sanity check rather than anything Worldpay itself
   // requires.
@@ -1165,7 +1190,9 @@ export function entityIssues(
     filled(entity.avgTransaction) &&
     Number.isFinite(Number(entity.maxTransaction)) &&
     Number.isFinite(Number(entity.avgTransaction)) &&
-    Number(entity.avgTransaction) > Number(entity.maxTransaction)
+    Number(entity.avgTransaction) > Number(entity.maxTransaction) &&
+    Number(entity.avgTransaction) >= 0 &&
+    Number(entity.maxTransaction) >= 0
   ) {
     issues.avgTransaction =
       "Avg transaction cannot be more than max transaction.";
@@ -1177,7 +1204,31 @@ export function entityIssues(
   require("address.postcode", address.postcode);
   require("address.country", address.country);
 
+  // Worldpay rejects anything outside the 8 AU codes once this reaches a
+  // save -- catch it here too, so a typo like "465" doesn't look accepted
+  // until the backend's own groupedInvalid round-trip surfaces it.
+  if (
+    filled(address.state) &&
+    isAustralianCountry(address.country) &&
+    !isValidAuStateCode(address.state)
+  ) {
+    issues["address.state"] = ENTITY_INVALID_MESSAGES["address.state"];
+  }
+
   return issues;
+}
+
+/**
+ * The latest date of birth that still makes someone 18 today -- shared by
+ * `directorIssues` (the error message) and the DOB calendar itself (which
+ * dates it refuses to let you click), so "must be 18" means the same day in
+ * both places rather than two separate +/-1-day-off implementations.
+ */
+export function latestEligibleDirectorDob(): Date {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  date.setFullYear(date.getFullYear() - 18);
+  return date;
 }
 
 export function directorIssues(director: SolePayDirector): SolePayIssues {
@@ -1206,18 +1257,25 @@ export function directorIssues(director: SolePayDirector): SolePayIssues {
       issues.dateOfBirth = "Enter a valid date of birth.";
     } else if (dob.getTime() > Date.now()) {
       issues.dateOfBirth = "Date of birth cannot be in the future.";
-    } else {
-      const minAgeDate = new Date();
-      minAgeDate.setFullYear(minAgeDate.getFullYear() - 18);
-      if (dob.getTime() > minAgeDate.getTime()) {
-        issues.dateOfBirth = "Director must be at least 18 years old.";
-      }
+    } else if (dob.getTime() > latestEligibleDirectorDob().getTime()) {
+      issues.dateOfBirth = "Director must be at least 18 years old.";
     }
   }
 
   if (director.idType === "1") {
     require("licenceState", director.licenceState);
     require("cardNumber", director.cardNumber);
+
+    // Same AU-state-code rule Worldpay enforces on `member.dlstate` --
+    // mirrored here so e.g. "465" is flagged immediately, not just after
+    // a save round-trips through groupedInvalid.
+    if (
+      filled(director.licenceState) &&
+      isAustralianCountry(director.address.country) &&
+      !isValidAuStateCode(director.licenceState)
+    ) {
+      issues.licenceState = MEMBER_INVALID_MESSAGES.licenceState;
+    }
   }
 
   if (filled(director.email) && !/.+@.+\..+/.test(director.email)) {
@@ -1240,6 +1298,14 @@ export function directorIssues(director: SolePayDirector): SolePayIssues {
   require("address.city", director.address.city);
   require("address.state", director.address.state);
   require("address.postcode", director.address.postcode);
+
+  if (
+    filled(director.address.state) &&
+    isAustralianCountry(director.address.country) &&
+    !isValidAuStateCode(director.address.state)
+  ) {
+    issues["address.state"] = MEMBER_INVALID_MESSAGES["address.state"];
+  }
 
   return issues;
 }

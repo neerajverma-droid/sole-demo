@@ -1,11 +1,10 @@
 "use client";
 
 import { Check, Circle } from "lucide-react";
-
 import { passwordRules, passwordStrength } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
-/** Four segments, filling as the password gets stronger. */
+
 const TONES = [
   "bg-destructive",
   "bg-destructive",
@@ -14,18 +13,6 @@ const TONES = [
   "bg-success",
 ];
 
-/**
- * The meter and the rule checklist under a new-password field.
- *
- * Two separate questions, deliberately shown separately: the rules are what the
- * form requires, the meter is how good the password actually is. A password can
- * satisfy every rule and still be weak, and saying so is more use than a bar
- * that turns green the moment the minimum is met.
- *
- * Nothing here is announced live — a screen reader reading a strength bar on
- * every keystroke is noise. The rules carry their state in the icon and the
- * text, and the field's own error is what blocks submission.
- */
 export function PasswordStrengthMeter({ value }: { value: string }) {
   const strength = passwordStrength(value);
   const rules = passwordRules(value);

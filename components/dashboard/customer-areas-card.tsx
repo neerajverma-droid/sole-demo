@@ -89,7 +89,7 @@ export function CustomerAreasCard() {
 
   return (
     <Card>
-      <CardHeader className="flex-row items-center justify-between space-y-0 pb-4">
+      <CardHeader className="flex-row items-center justify-between space-y-0">
         <div className="space-y-1">
           {/* The title is the way through as much as the action is — this card
               is a summary of a page, and both say so. */}

@@ -67,7 +67,7 @@ export async function startDemo(): Promise<DemoResult> {
 
   setSession(user);
   setBusinessId(String((user as any).business_id || 1));
-  track(EVENTS.SIGNIN_COMPLETED, { method: "demo" });
+  track(EVENTS.SIGNUP_COMPLETED, { method: "demo" });
   return { ok: true, user };
 }
 

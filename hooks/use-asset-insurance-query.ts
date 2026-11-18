@@ -22,8 +22,11 @@ export function useAssetInsuranceQuery(assetId: string | undefined) {
 
 function useInvalidateInsurance(assetId: string) {
   const queryClient = useQueryClient();
-  return () =>
-    queryClient.invalidateQueries({ queryKey: ["asset-insurance", assetId] });
+  return () => {
+    // The disposal record's suggested sale value is the latest policy's cover.
+    queryClient.invalidateQueries({ queryKey: ["asset-disposal", assetId] });
+    return queryClient.invalidateQueries({ queryKey: ["asset-insurance", assetId] });
+  };
 }
 
 export function useCreateAssetInsuranceMutation(assetId: string) {

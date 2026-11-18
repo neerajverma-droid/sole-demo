@@ -14,6 +14,8 @@ import { useSalesSettingsStore } from "@/stores/sales-settings";
  */
 export function useSalesSettingsQuery() {
   const patch = useSalesSettingsStore((state) => state.patch);
+  /** True once the fetched settings are in the store — or the fetch failed. */
+  const [applied, setApplied] = React.useState(false);
 
   const query = useQuery({
     queryKey: ["sales-settings"],
@@ -21,9 +23,18 @@ export function useSalesSettingsQuery() {
   });
 
   React.useEffect(() => {
-    if (query.data) patch(query.data);
+    if (query.data) {
+      patch(query.data);
+      setApplied(true);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query.data]);
 
-  return query;
+  /*
+   * Set only after `patch`, in the same effect, so a screen reading `ready`
+   * never paints the stored defaults for a frame between the response landing
+   * and the store catching up. A failed fetch is ready too: the screen falls
+   * back to whatever was stored rather than loading forever.
+   */
+  return { ...query, ready: applied || query.isError };
 }

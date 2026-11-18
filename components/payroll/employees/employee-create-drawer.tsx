@@ -51,6 +51,9 @@ import {
   type EmployeeWriteBlock,
   type Option,
 } from "@/lib/payroll-employees";
+import { EVENTS } from "@/lib/analytics-events";
+import { useTrackOnOpen } from "@/hooks/use-track-once";
+import { track } from "@/lib/analytics";
 
 const TAX_FLAGS: { name: keyof CreateEmployeeValues; label: string }[] = [
   { name: "taxFreeThresholdClaimed", label: "Tax-free threshold claimed" },
@@ -83,6 +86,7 @@ export function EmployeeCreateDrawer({
   onBlocked: (block: EmployeeWriteBlock, message: string) => void;
 }) {
   const create = useCreateEmployeeMutation();
+  useTrackOnOpen(EVENTS.EMPLOYEE_ADDITION_INITIATED, open);
 
   const form = useForm<CreateEmployeeValues>({
     resolver: zodResolver(createEmployeeSchema),
@@ -116,6 +120,11 @@ export function EmployeeCreateDrawer({
   const onSubmit = async (values: CreateEmployeeValues) => {
     try {
       await create.mutateAsync(values);
+      track(EVENTS.EMPLOYEE_ADDED, {
+        source: "manual",
+        count: 1,
+        employment_type: values.employmentType || null,
+      });
       toast.success("Employee created and queued for Microkeeper sync");
       onOpenChange(false);
     } catch (error) {
@@ -130,7 +139,10 @@ export function EmployeeCreateDrawer({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="flex w-full flex-col gap-0 p-0 sm:max-w-xl">
+      <SheetContent
+        className="flex w-full flex-col gap-0 p-0 sm:max-w-xl"
+        data-usertour="payroll-employee-drawer"
+      >
         <SheetHeader className="space-y-1 border-b p-6 text-left">
           <SheetTitle>New employee</SheetTitle>
           <SheetDescription>
@@ -148,6 +160,7 @@ export function EmployeeCreateDrawer({
               <FormSection
                 icon={UserRound}
                 title="Employee details"
+                tourId="payroll-employee-details"
                 description="Used across payroll and on payslips."
                 className="grid gap-4 sm:grid-cols-2"
               >
@@ -249,6 +262,7 @@ export function EmployeeCreateDrawer({
               <FormSection
                 icon={ReceiptText}
                 title="Tax"
+                tourId="payroll-employee-tax"
                 description="Needed before this employee can be paid."
                 className="grid gap-4 sm:grid-cols-2"
               >
@@ -300,6 +314,7 @@ export function EmployeeCreateDrawer({
               <FormSection
                 icon={PiggyBank}
                 title="Superannuation"
+                tourId="payroll-employee-super"
                 description="The employee's primary employer super fund."
                 className="grid gap-4 sm:grid-cols-2"
               >
@@ -346,6 +361,7 @@ export function EmployeeCreateDrawer({
               <FormSection
                 icon={Landmark}
                 title="Banking"
+                tourId="payroll-employee-banking"
                 description="The account their pay goes into."
                 className="grid gap-4 sm:grid-cols-2"
               >
@@ -389,7 +405,11 @@ export function EmployeeCreateDrawer({
               >
                 Cancel
               </Button>
-              <Button type="submit" disabled={create.isPending}>
+              <Button
+                type="submit"
+                disabled={create.isPending}
+                data-usertour="payroll-employee-create"
+              >
                 {create.isPending && (
                   <Loader2 className="animate-spin" aria-hidden />
                 )}

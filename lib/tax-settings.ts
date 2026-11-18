@@ -21,8 +21,6 @@
 
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
 
 type ApiResult<T> = { success?: boolean; message?: string; data?: T };
@@ -147,16 +145,6 @@ export async function saveTaxRate(
   if (response.data?.success === false) {
     throw new Error(response.data.message || "Couldn't save your tax settings.");
   }
-
-  // Whether a business is GST-registered changes what half the product should
-  // show it, so "how many configure this at all" is a setup-funnel question
-  // rather than a settings detail.
-  track(EVENTS.GST_SETTINGS_CONFIGURED, {
-    rate: Number(values.percentage),
-    is_default: Boolean(values.isDefault),
-    follows_country: Boolean(values.followsCountry),
-    is_first_time: values.id == null,
-  });
 
   return response.data?.data?.id ?? values.id;
 }

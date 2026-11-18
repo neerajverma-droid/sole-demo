@@ -12,7 +12,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { ArrowLeft, Landmark, Loader2, Plus, ShieldCheck } from "lucide-react";
+import { ArrowLeft, Landmark, Loader2, Plus, Send, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -23,22 +23,33 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { InfoTip } from "@/components/ui/info-tip";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { DatePicker } from "@/components/documents/date-picker";
-import { Required } from "@/components/documents/field";
+import { Field } from "@/components/documents/field";
 import { MoneyInput } from "@/components/planner/money-input";
+import {
+  insuranceErrors,
+  stripNonPhoneChars,
+  type InsuranceField,
+} from "@/lib/asset-validation";
+import { apiErrorMessage } from "@/lib/api-error";
 import { formatAssetDate, newAssetInsurance, type AssetInsurance } from "@/lib/assets";
+import { parseIsoDate } from "@/lib/invoices";
 import {
   useAssetInsuranceQuery,
   useCreateAssetInsuranceMutation,
   useDeleteAssetInsuranceMutation,
+  useSendAssetInsuranceReportMutation,
   useUpdateAssetInsuranceMutation,
 } from "@/hooks/use-asset-insurance-query";
-import { useAssetsQuery } from "@/hooks/use-assets-query";
-import { useAssetsStore } from "@/stores/assets";
+import { useRegisterAsset } from "@/hooks/use-asset-query";
 
 const ASSETS_ROOT = "/assets";
 
@@ -64,16 +75,18 @@ const INSURER_HELP =
  * committed yet. Only the record being edited is local — see `draft`.
  */
 export function InsuranceScreen({ assetId }: { assetId: string }) {
-  // Hydrates the register on a direct/refreshed visit to this route.
-  useAssetsQuery();
-  const assets = useAssetsStore((state) => state.assets);
+  // The register's copy, or the asset fetched on its own on a direct visit.
+  const { asset, loading } = useRegisterAsset(assetId);
   const { data: records = [] } = useAssetInsuranceQuery(assetId);
   const createInsurance = useCreateAssetInsuranceMutation(assetId);
   const updateInsurance = useUpdateAssetInsuranceMutation(assetId);
   const deleteInsurance = useDeleteAssetInsuranceMutation(assetId);
+  const sendReport = useSendAssetInsuranceReportMutation();
 
-  const asset = assets.find((entry) => entry.id === assetId);
-  const assetHref = `${ASSETS_ROOT}/${assetId}`;
+  // Back, Cancel and "done" return to the register — `/assets/:id` is the edit
+  // form (it shows "Loading asset…" and isn't where these screens were opened
+  // from).
+  const assetHref = ASSETS_ROOT;
 
   /**
    * The record being edited, or null when the form is closed.
@@ -85,8 +98,26 @@ export function InsuranceScreen({ assetId }: { assetId: string }) {
    * from an update.
    */
   const [draft, setDraft] = React.useState<AssetInsurance | null>(null);
+  /**
+   * Which fields have been left, and whether Save has been tried, for the
+   * record being edited. Errors show on those only — a fresh form doesn't open
+   * already complaining — and both reset whenever a different record opens.
+   */
+  const [touched, setTouched] = React.useState<Set<InsuranceField>>(new Set());
+  const [attempted, setAttempted] = React.useState(false);
+  const openDraft = (record: AssetInsurance | null) => {
+    setDraft(record);
+    setTouched(new Set());
+    setAttempted(false);
+  };
+  const touch = (field: InsuranceField) =>
+    setTouched((current) =>
+      current.has(field) ? current : new Set(current).add(field),
+    );
   const [saving, setSaving] = React.useState(false);
   const [confirmingRemoveId, setConfirmingRemoveId] = React.useState<string | null>(null);
+  const [confirmingSendId, setConfirmingSendId] = React.useState<string | null>(null);
+  const sendingRecord = records.find((record) => record.id === confirmingSendId);
 
   const patch = (values: Partial<AssetInsurance>) =>
     setDraft((current) => (current ? { ...current, ...values } : current));
@@ -99,21 +130,32 @@ export function InsuranceScreen({ assetId }: { assetId: string }) {
    * outright is also what clears an edit in progress — there is a single form,
    * and this is it starting over on a blank record.
    */
-  const startAdding = () => setDraft(newAssetInsurance());
+  const startAdding = () => openDraft(newAssetInsurance());
+
+  /*
+   * The backend's own rules (`validateInsurance`: insurer, policy, coverage,
+   * start and end required; end on or after start) plus the stable app's
+   * format checks on email, phone and the amounts — caught here so they show
+   * under the field rather than as a toast from the server.
+   */
+  const errors = draft ? insuranceErrors(draft) : {};
+  const errorFor = (field: InsuranceField) =>
+    attempted || touched.has(field) ? errors[field] : undefined;
+  const canSave = !!draft && Object.keys(errors).length === 0;
 
   const commit = async () => {
     if (!draft) return;
+    setAttempted(true);
+    if (!canSave) return;
     const exists = records.some((record) => record.id === draft.id);
     setSaving(true);
     try {
       if (exists) await updateInsurance.mutateAsync(draft);
       else await createInsurance.mutateAsync(draft);
-      setDraft(null);
+      openDraft(null);
       toast.success(exists ? "Insurance updated" : "Insurance added");
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Couldn't save that policy",
-      );
+      toast.error(apiErrorMessage(error, "Couldn't save that policy"));
     } finally {
       setSaving(false);
     }
@@ -123,20 +165,34 @@ export function InsuranceScreen({ assetId }: { assetId: string }) {
     if (!confirmingRemoveId) return;
     try {
       await deleteInsurance.mutateAsync(confirmingRemoveId);
-      if (draft?.id === confirmingRemoveId) setDraft(null);
+      if (draft?.id === confirmingRemoveId) openDraft(null);
       toast.success("Insurance removed");
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Couldn't remove that policy",
-      );
+      toast.error(apiErrorMessage(error, "Couldn't remove that policy"));
     } finally {
       setConfirmingRemoveId(null);
     }
   };
 
-  // Only the insurer is required — everything else is something you may not
-  // have to hand when you're recording the policy.
-  const canSave = !!draft && draft.insurerName.trim().length > 0;
+  const confirmSend = async () => {
+    if (!sendingRecord) return;
+    try {
+      await sendReport.mutateAsync(sendingRecord.id);
+      toast.success(`Insurance report sent to ${sendingRecord.insurerEmail}`);
+    } catch (error) {
+      toast.error(apiErrorMessage(error, "Couldn't send the report"));
+    } finally {
+      setConfirmingSendId(null);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="mx-auto max-w-3xl py-12 text-center text-sm text-muted-foreground">
+        Loading asset…
+      </div>
+    );
+  }
 
   if (!asset) {
     return (
@@ -167,7 +223,7 @@ export function InsuranceScreen({ assetId }: { assetId: string }) {
         <Button variant="ghost" size="sm" className="-ml-2" asChild>
           <Link href={assetHref}>
             <ArrowLeft />
-            {asset.name}
+            Assets
           </Link>
         </Button>
         <div className="space-y-1">
@@ -180,7 +236,7 @@ export function InsuranceScreen({ assetId }: { assetId: string }) {
         </div>
       </div>
 
-      <section className="space-y-4">
+      <section className="space-y-4" data-usertour="asset-insurance">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-medium">Insurance details</h2>
           {/*
@@ -226,9 +282,11 @@ export function InsuranceScreen({ assetId }: { assetId: string }) {
                 <li key={record.id}>
                   <InsuranceRecord
                     record={record}
-                    onEdit={() => setDraft({ ...record })}
+                    onEdit={() => openDraft({ ...record })}
                     onRemove={() => setConfirmingRemoveId(record.id)}
                     removing={deleteInsurance.isPending && confirmingRemoveId === record.id}
+                    onSend={() => setConfirmingSendId(record.id)}
+                    sending={sendReport.isPending && confirmingSendId === record.id}
                   />
                 </li>
               ))}
@@ -238,114 +296,154 @@ export function InsuranceScreen({ assetId }: { assetId: string }) {
 
         {draft && (
           <div className="space-y-4 rounded-[14px] border border-border bg-card p-5 shadow-sm">
-            <div className="space-y-2">
-              <Label
-                htmlFor="insurance-insurer"
-                className="flex items-center gap-1.5"
-              >
-                Insurer name
-                <Required />
-                <InfoTip text={INSURER_HELP} />
-              </Label>
+            <Field
+              label="Insurer name"
+              htmlFor="insurance-insurer"
+              required
+              labelTip={INSURER_HELP}
+              error={errorFor("insurerName")}
+            >
               <Input
                 id="insurance-insurer"
+                placeholder="e.g. Allianz, NRMA, QBE"
                 value={draft.insurerName}
                 onChange={(event) => patch({ insurerName: event.target.value })}
+                onBlur={() => touch("insurerName")}
+                aria-invalid={!!errorFor("insurerName")}
               />
-            </div>
+            </Field>
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="insurance-policy">Policy number</Label>
+              <Field
+                label="Policy number"
+                htmlFor="insurance-policy"
+                required
+                error={errorFor("policyNumber")}
+              >
                 <Input
                   id="insurance-policy"
+                  placeholder="e.g. POL-1234567"
                   value={draft.policyNumber}
                   onChange={(event) =>
                     patch({ policyNumber: event.target.value })
                   }
+                  onBlur={() => touch("policyNumber")}
+                  aria-invalid={!!errorFor("policyNumber")}
                 />
-              </div>
+              </Field>
 
-              <div className="space-y-2">
-                <Label htmlFor="insurance-email">Insurer email contact</Label>
+              <Field
+                label="Insurer email contact"
+                htmlFor="insurance-email"
+                error={errorFor("insurerEmail")}
+              >
                 <Input
                   id="insurance-email"
+                  placeholder="e.g. claims@insurer.com.au"
                   type="email"
                   value={draft.insurerEmail}
                   onChange={(event) =>
                     patch({ insurerEmail: event.target.value })
                   }
+                  onBlur={() => touch("insurerEmail")}
+                  aria-invalid={!!errorFor("insurerEmail")}
                 />
-              </div>
+              </Field>
 
-              <div className="space-y-2">
-                <Label htmlFor="insurance-broker">Broker&apos;s name</Label>
+              <Field label="Broker's name" htmlFor="insurance-broker">
                 <Input
                   id="insurance-broker"
+                  placeholder="e.g. Jane Smith"
                   value={draft.brokerName}
                   onChange={(event) =>
                     patch({ brokerName: event.target.value })
                   }
                 />
-              </div>
+              </Field>
 
-              <div className="space-y-2">
-                <Label htmlFor="insurance-broker-phone">
-                  Broker&apos;s phone number
-                </Label>
+              <Field
+                label="Broker's phone number"
+                htmlFor="insurance-broker-phone"
+                error={errorFor("brokerPhone")}
+              >
+                {/* Letters and symbols a number can't hold are dropped as
+                    they're typed, as in the stable app. */}
                 <Input
                   id="insurance-broker-phone"
+                  placeholder="e.g. 0412 345 678"
+                  type="tel"
                   inputMode="tel"
                   value={draft.brokerPhone}
                   onChange={(event) =>
-                    patch({ brokerPhone: event.target.value })
+                    patch({ brokerPhone: stripNonPhoneChars(event.target.value) })
                   }
+                  onBlur={() => touch("brokerPhone")}
+                  aria-invalid={!!errorFor("brokerPhone")}
                 />
-              </div>
+              </Field>
 
-              <div className="space-y-2">
-                <Label htmlFor="insurance-coverage">Coverage amount</Label>
+              <Field
+                label="Coverage amount"
+                htmlFor="insurance-coverage"
+                required
+                error={errorFor("coverageAmount")}
+              >
                 <MoneyInput
                   id="insurance-coverage"
+                  placeholder="0.00"
                   label="Coverage amount"
                   value={draft.coverageAmount}
                   onChange={(coverageAmount) => patch({ coverageAmount })}
+                  onBlur={() => touch("coverageAmount")}
+                  invalid={!!errorFor("coverageAmount")}
                 />
-              </div>
+              </Field>
 
-              <div className="space-y-2">
-                <Label htmlFor="insurance-premium">Premium amount</Label>
+              <Field
+                label="Premium amount"
+                htmlFor="insurance-premium"
+                error={errorFor("premiumAmount")}
+              >
                 <MoneyInput
                   id="insurance-premium"
+                  placeholder="0.00"
                   label="Premium amount"
                   value={draft.premiumAmount}
                   onChange={(premiumAmount) => patch({ premiumAmount })}
+                  onBlur={() => touch("premiumAmount")}
+                  invalid={!!errorFor("premiumAmount")}
                 />
-              </div>
+              </Field>
 
-              <div className="space-y-2">
-                <Label>Start date</Label>
+              <Field label="Start date" required error={errorFor("startDate")}>
                 <DatePicker
                   label="Start date"
                   value={draft.startDate}
                   onChange={(startDate) => patch({ startDate })}
+                  onClose={() => touch("startDate")}
+                  invalid={!!errorFor("startDate")}
                 />
-              </div>
+              </Field>
 
-              <div className="space-y-2">
-                <Label>End date</Label>
+              <Field label="End date" required error={errorFor("endDate")}>
+                {/* Can't be picked before the start; a typed-in or older
+                    record is still caught by the rule. */}
                 <DatePicker
                   label="End date"
                   value={draft.endDate}
                   onChange={(endDate) => patch({ endDate })}
+                  onClose={() => touch("endDate")}
+                  fromDate={parseIsoDate(draft.startDate)}
+                  invalid={!!errorFor("endDate")}
                 />
-              </div>
+              </Field>
             </div>
 
             <div className="space-y-2">
               <Label htmlFor="insurance-notes">Notes</Label>
               <Textarea
                 id="insurance-notes"
+                placeholder="Anything worth noting about this policy…"
                 rows={3}
                 value={draft.notes}
                 onChange={(event) => patch({ notes: event.target.value })}
@@ -353,10 +451,16 @@ export function InsuranceScreen({ assetId }: { assetId: string }) {
             </div>
 
             <div className="flex justify-end gap-2">
-              <Button variant="ghost" size="sm" onClick={() => setDraft(null)}>
+              <Button variant="ghost" size="sm" onClick={() => openDraft(null)}>
                 Cancel
               </Button>
-              <Button size="sm" disabled={!canSave || saving} onClick={commit}>
+              {/* Clickable until tried, so the first click can say what's
+                  wrong; after that it stays off until the errors are fixed. */}
+              <Button
+                size="sm"
+                disabled={(attempted && !canSave) || saving}
+                onClick={commit}
+              >
                 {saving && <Loader2 className="size-4 animate-spin" />}
                 {saving ? "Saving…" : "Save"}
               </Button>
@@ -370,9 +474,46 @@ export function InsuranceScreen({ assetId }: { assetId: string }) {
           a page-level Save would be a button with nothing left to do. */}
       <div className="sticky bottom-0 -mx-4 flex flex-wrap items-center justify-end gap-2 border-t border-border bg-background/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
         <Button variant="outline" asChild>
-          <Link href={assetHref}>Back to asset</Link>
+          <Link href={assetHref}>Back to assets</Link>
         </Button>
       </div>
+
+      <AlertDialog
+        open={confirmingSendId !== null}
+        onOpenChange={(open) => {
+          if (!open && !sendReport.isPending) setConfirmingSendId(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Send insurance report?</AlertDialogTitle>
+            <AlertDialogDescription>
+              A report on {asset.name} under{" "}
+              {sendingRecord?.insurerName || "this policy"}
+              {sendingRecord?.policyNumber
+                ? ` (policy ${sendingRecord.policyNumber})`
+                : ""}{" "}
+              will be emailed to {sendingRecord?.insurerEmail || "the insurer"}.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={sendReport.isPending}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={sendReport.isPending}
+              onClick={(event) => {
+                // Stays open, reading "Sending…", until the server answers.
+                event.preventDefault();
+                void confirmSend();
+              }}
+            >
+              {sendReport.isPending && <Loader2 className="size-4 animate-spin" />}
+              {sendReport.isPending ? "Sending…" : "Send report"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog
         open={confirmingRemoveId !== null}
@@ -415,12 +556,33 @@ function InsuranceRecord({
   onEdit,
   onRemove,
   removing,
+  onSend,
+  sending,
 }: {
   record: AssetInsurance;
   onEdit: () => void;
   onRemove: () => void;
   removing: boolean;
+  onSend: () => void;
+  sending: boolean;
 }) {
+  const hasEmail = record.insurerEmail.trim().length > 0;
+  const sendButton = (
+    <Button
+      variant="outline"
+      size="sm"
+      disabled={!hasEmail || removing || sending}
+      onClick={onSend}
+    >
+      {sending ? (
+        <Loader2 className="size-3.5 animate-spin" />
+      ) : (
+        <Send className="size-3.5" />
+      )}
+      {sending ? "Sending…" : "Send to insurer"}
+    </Button>
+  );
+
   const cover = [
     record.coverageAmount && `${record.coverageAmount} cover`,
     record.premiumAmount && `${record.premiumAmount} premium`,
@@ -454,9 +616,40 @@ function InsuranceRecord({
             {dates}
           </p>
         )}
+        {hasEmail ? (
+          <p className="truncate text-xs text-muted-foreground">
+            Report goes to {record.insurerEmail}
+          </p>
+        ) : (
+          // Said on the card, not only in a hover tooltip: a greyed-out Send
+          // with no visible reason read as "there is no send option".
+          <p className="text-xs text-warning">
+            Add the insurer&apos;s email to send them a report.{" "}
+            <button
+              type="button"
+              onClick={onEdit}
+              className="font-medium text-primary underline-offset-2 hover:underline"
+            >
+              Add email
+            </button>
+          </p>
+        )}
       </div>
 
       <div className="flex shrink-0 items-center gap-1">
+        {hasEmail ? (
+          sendButton
+        ) : (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              {/* The wrapper takes the hover: a disabled button fires no events. */}
+              <span tabIndex={0}>{sendButton}</span>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-56">
+              Add the insurer&apos;s email to this policy to send them a report.
+            </TooltipContent>
+          </Tooltip>
+        )}
         <Button variant="ghost" size="sm" disabled={removing} onClick={onEdit}>
           Edit
         </Button>

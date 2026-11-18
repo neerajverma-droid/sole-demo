@@ -159,7 +159,8 @@ export function EmailCodeStep({
             <>
               We sent a code to{" "}
               <span className="font-medium text-foreground">
-                {maskEmail(request.email)}
+                {/* {maskEmail(request.email)} */}
+                {request.email}
               </span>
             </>
           )}

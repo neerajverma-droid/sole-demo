@@ -7,8 +7,6 @@
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 
 type ApiEnvelope<T> = { success: boolean; message?: string; data?: T };
 
@@ -49,17 +47,6 @@ export async function deleteAccount(
   if (response.data?.success === false) {
     throw new Error(response.data.message || "Couldn't delete your account.");
   }
-
-  /*
-   * Same redaction rule as `cancelSubscription`: the predefined reason only,
-   * never `otherText` — that's free text someone typed and may contain
-   * account details, names or complaints that can't be redacted once in a
-   * third-party tool.
-   */
-  track(EVENTS.ACCOUNT_DELETED, {
-    reason,
-    has_other_text: otherText.trim().length > 0,
-  });
 
   return response.data.message;
 }

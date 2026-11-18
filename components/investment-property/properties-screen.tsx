@@ -182,7 +182,10 @@ export function PropertiesScreen() {
         title="Investment property"
         description="Track property holdings, equity position and acquisition costs from one portfolio view."
       >
-        <Button onClick={() => setCreateOpen(true)}>
+        <Button
+          onClick={() => setCreateOpen(true)}
+          data-usertour="property-new-button"
+        >
           <Plus />
           Create property
         </Button>
@@ -191,7 +194,7 @@ export function PropertiesScreen() {
       <InvestmentNav />
 
       {noProperties ? (
-        <Empty>
+        <Empty data-usertour="properties-empty">
           <EmptyMedia>
             <Building2 aria-hidden />
           </EmptyMedia>
@@ -211,10 +214,15 @@ export function PropertiesScreen() {
         </Empty>
       ) : (
         <>
-          <StatCards stats={stats} loading={summaryQuery.isLoading} />
+          <div data-usertour="properties-stats">
+            <StatCards stats={stats} loading={summaryQuery.isLoading} />
+          </div>
 
           <section className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+            <div
+              className="flex flex-wrap items-center justify-between gap-3"
+              data-usertour="properties-filters"
+            >
               <FilterPills
                 label="Property status"
                 options={TAB_LABELS}
@@ -292,7 +300,10 @@ export function PropertiesScreen() {
                 </EmptyActions>
               </Empty>
             ) : (
-              <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+              <div
+                className="overflow-hidden rounded-lg border border-border bg-card shadow-sm"
+                data-usertour="properties-table"
+              >
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -308,9 +319,10 @@ export function PropertiesScreen() {
                     </TableRow>
                   </TableHeader>
                   <TableBody className={cn(settling && "opacity-60 transition-opacity")}>
-                    {rows.map((property) => (
+                    {rows.map((property, index) => (
                       <PropertyRow
                         key={property.id}
+                        first={index === 0}
                         property={property}
                         query={search}
                         onEdit={() => setEditId(property.id)}
@@ -365,12 +377,15 @@ function toTarget(property: PropertyListItem): PropertyTarget {
 }
 
 function PropertyRow({
+  first,
   property,
   query,
   onEdit,
   onDispose,
   onDelete,
 }: {
+  /** The top row carries the tour's anchor for the row actions. */
+  first?: boolean;
   property: PropertyListItem;
   query: string;
   onEdit: () => void;
@@ -415,7 +430,10 @@ function PropertyRow({
         <PropertyStatusBadge status={property.status} />
       </TableCell>
       <TableCell className={HUG_COLUMN}>
-        <div className="flex justify-end">
+        <div
+          className="flex justify-end"
+          data-usertour={first ? "properties-row-actions" : undefined}
+        >
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button

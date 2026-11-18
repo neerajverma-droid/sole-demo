@@ -1,6 +1,6 @@
 "use client";
 
-import { Input } from "@/components/ui/input";
+import { PrefixInput } from "@/components/ui/prefix-input";
 import { useCountryContext } from "@/hooks/use-country-context";
 import { countryCurrencySymbol } from "@/lib/country-context";
 import { cn } from "@/lib/utils";
@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 export function MoneyInput({
   value,
   onChange,
+  onBlur,
   label,
   invalid,
   id,
@@ -22,6 +23,8 @@ export function MoneyInput({
 }: {
   value: string;
   onChange: (value: string) => void;
+  /** Focus left the field — when a form starts showing its error. */
+  onBlur?: () => void;
   label: string;
   invalid?: boolean;
   /** For a form that pairs the field with a visible `<Label htmlFor>`. */
@@ -38,31 +41,19 @@ export function MoneyInput({
   const { country } = useCountryContext();
   const symbol = prefix ?? countryCurrencySymbol(country);
   return (
-    <div className="relative">
-      <span
-        className={cn(
-          "pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm",
-          disabled ? "text-muted-foreground/50" : "text-muted-foreground",
-        )}
-      >
-        {symbol}
-      </span>
-      <Input
-        id={id}
-        className={cn(
-          symbol.length <= 1 ? "pl-7" : symbol.length === 2 ? "pl-9" : "pl-11",
-          "tabular",
-          invalid && "border-destructive focus-visible:ring-destructive",
-          disabled && "cursor-not-allowed bg-muted",
-        )}
-        inputMode="decimal"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        aria-label={label}
-        aria-invalid={!!invalid}
-        disabled={disabled}
-        placeholder={placeholder}
-      />
-    </div>
+    <PrefixInput
+      prefix={symbol}
+      id={id}
+      wrapperClassName={cn(disabled && "bg-muted")}
+      className="tabular"
+      inputMode="decimal"
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      onBlur={onBlur}
+      aria-label={label}
+      aria-invalid={!!invalid}
+      disabled={disabled}
+      placeholder={placeholder}
+    />
   );
 }

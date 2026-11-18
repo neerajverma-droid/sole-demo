@@ -10,8 +10,51 @@
  * sole-ocr's bank-transaction endpoints, not the asset ones.
  */
 import { apiErrorMessage } from "@/lib/api-error";
+import { assetValue, type Asset } from "@/lib/assets";
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
+
+/* ------------------------------------------------------------------ *
+ * Which undo an asset offers
+ * ------------------------------------------------------------------ */
+
+type UndoableAsset = Pick<
+  Asset,
+  "paidWithCash" | "isReconciled" | "remainingAmount" | "costPrice"
+> &
+  Partial<Pick<Asset, "matchedJournalEntries">>;
+
+/**
+ * Whether an asset has a bank match that can be undone — fully reconciled,
+ * or partly paid (something matched, something still remaining), or carrying
+ * a matched journal entry. Never for one paid with cash: that "match" is a
+ * cash payment, undone through `undoAssetCashPaymentApi` instead — the generic
+ * undo-match would leave its cash transaction behind. The same rule as
+ * sole-webapp's `canUndoAssetMatch`.
+ */
+export function canUndoAssetMatch(asset: UndoableAsset): boolean {
+  if (asset.paidWithCash) return false;
+  if (asset.isReconciled) return true;
+  if ((asset.matchedJournalEntries?.length ?? 0) > 0) return true;
+  const value = assetValue(asset);
+  const remaining = Number(asset.remainingAmount);
+  // A sub-cent gap is rounding, not a partial match.
+  return Number.isFinite(remaining) && remaining > 0.005 && remaining < value - 0.005;
+}
+
+/** Whether the asset was paid with cash, which is undone as a cash payment. */
+export function canUndoAssetCashPayment(
+  asset: Pick<Asset, "paidWithCash">,
+): boolean {
+  return asset.paidWithCash;
+}
+
+/** Which undo the register offers for an asset, if any. */
+export function assetUndoKind(asset: UndoableAsset): "cash" | "match" | null {
+  if (canUndoAssetCashPayment(asset)) return "cash";
+  if (canUndoAssetMatch(asset)) return "match";
+  return null;
+}
 
 export type PossibleMatchTransaction = {
   id: string;
@@ -183,17 +226,22 @@ export async function matchAssetToMultipleTransactionsApi(
 
 /**
  * `POST /v2/bank/undo-match-transaction` — confirmed against
- * `services/v2/bankTransaction.js`. `asset_id` is one of the resolver's own
- * convenience fields (alongside `reference_type`/`reference_id`), and
- * reverts the asset to `is_reconciled: 0` server-side.
+ * `services/v2/bankTransaction.js` (`resolveUndoMatchJournalEntryId`). With a
+ * `journalEntryId` that one match is undone — how an asset matched to several
+ * transactions has one of them taken off. Without, `asset_id` resolves to the
+ * asset's most recent matched journal entry, and the asset reverts to
+ * `is_reconciled: 0` server-side.
  */
-export async function undoAssetMatchApi(assetId: string): Promise<void> {
+export async function undoAssetMatchApi(
+  assetId: string,
+  journalEntryId?: string,
+): Promise<void> {
   const fallback = "Failed to undo this match.";
   let response;
   try {
     response = await api.post<{ success: boolean; message?: string }>(
       apiRoutes.bankTransaction.undoMatchTransaction,
-      { asset_id: assetId },
+      journalEntryId ? { journal_entry_id: journalEntryId } : { asset_id: assetId },
     );
   } catch (error) {
     // The backend answers a refusal with a 4xx/5xx and its reason in the body
@@ -202,6 +250,33 @@ export async function undoAssetMatchApi(assetId: string): Promise<void> {
     // backend's own words on.
     throw new Error(apiErrorMessage(error, fallback));
   }
+  if (!response.data?.success) {
+    throw new Error(response.data?.message || fallback);
+  }
+}
+
+/**
+ * `POST /v2/expense/undo-paid-with-cash` with `{type: "asset", id}` — what
+ * sole-webapp's own "Undo Paid with Cash" sends (as form data), confirmed
+ * against `controllers/v2/expense.js`'s `undoPaidWithCashAssetsExpenses`. It
+ * reverses the cash payment and removes the cash transaction with it, which
+ * the generic undo-match doesn't.
+ */
+export async function undoAssetCashPaymentApi(assetId: string): Promise<void> {
+  const fallback = "Failed to undo this cash payment.";
+  const form = new FormData();
+  form.append("type", "asset");
+  form.append("id", assetId);
+  let response;
+  try {
+    response = await api.post<{ success: boolean; message?: string }>(
+      apiRoutes.expense.undoExpenseInvoice,
+      form,
+    );
+  } catch (error) {
+    throw new Error(apiErrorMessage(error, fallback));
+  }
+  // A refusal ("Asset not found or not paid with cash.") comes back as a 200.
   if (!response.data?.success) {
     throw new Error(response.data?.message || fallback);
   }

@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { FormSection } from "@/components/ui/form-section";
 import { Input } from "@/components/ui/input";
+import { PrefixInput } from "@/components/ui/prefix-input";
 import {
   Select,
   SelectContent,
@@ -55,6 +56,8 @@ import {
 import { useInvoicesStore } from "@/stores/invoices";
 import { useRefundsStore } from "@/stores/refunds";
 import { activeCurrencySymbol } from "@/lib/country-context";
+import { EVENTS } from "@/lib/analytics-events";
+import { useTrackOnce } from "@/hooks/use-track-once";
 
 const NO_INVOICE = "none";
 
@@ -67,6 +70,7 @@ export function RefundForm({
   /** Issuing another like this one: its values seed a new refund. */
   copyOfId?: string;
 } = {}) {
+  useTrackOnce(EVENTS.CLIENT_REFUND_INITIATED, !refundId);
   const router = useRouter();
   const refunds = useRefundsStore((state) => state.refunds);
   const invoices = useInvoicesStore((state) => state.invoices);
@@ -250,6 +254,7 @@ export function RefundForm({
         icon={ReceiptText}
         title="Refund details"
         description="Who it's going to, what it's against, and how much."
+        tourId="refund-details"
         className="grid gap-4 sm:grid-cols-2"
       >
         <div className="sm:col-span-2">
@@ -355,24 +360,16 @@ export function RefundForm({
           required
           error={liveAmountError ?? issueFor("amount")}
         >
-          <div className="relative">
-            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-              {activeCurrencySymbol()}
-            </span>
-            <Input
-              ref={register("amount")}
-              value={draft.amount}
-              inputMode="decimal"
-              onChange={(event) => onAmountChange(event.target.value)}
-              placeholder="0.00"
-              aria-invalid={!!(liveAmountError ?? issueFor("amount"))}
-              className={cn(
-                "pl-7 tabular",
-                (liveAmountError ?? issueFor("amount")) &&
-                  "border-destructive focus-visible:ring-destructive",
-              )}
-            />
-          </div>
+          <PrefixInput
+            prefix={activeCurrencySymbol()}
+            ref={register("amount")}
+            value={draft.amount}
+            inputMode="decimal"
+            onChange={(event) => onAmountChange(event.target.value)}
+            placeholder="0.00"
+            aria-invalid={!!(liveAmountError ?? issueFor("amount"))}
+            className="tabular"
+          />
         </Field>
 
         <Field
@@ -385,26 +382,19 @@ export function RefundForm({
           }
         >
           <div className="flex items-center gap-2">
-            <div className="relative flex-1">
-              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-                {activeCurrencySymbol()}
-              </span>
-              <Input
-                ref={register("gstAmount")}
-                value={draft.gstAmount}
-                inputMode="decimal"
-                onChange={(event) =>
-                  patch({ gstAmount: event.target.value, gstManual: true })
-                }
-                placeholder="0.00"
-                aria-invalid={!!(liveGstError ?? issueFor("gstAmount"))}
-                className={cn(
-                  "pl-7 tabular",
-                  (liveGstError ?? issueFor("gstAmount")) &&
-                    "border-destructive focus-visible:ring-destructive",
-                )}
-              />
-            </div>
+            <PrefixInput
+              prefix={activeCurrencySymbol()}
+              wrapperClassName="flex-1"
+              ref={register("gstAmount")}
+              value={draft.gstAmount}
+              inputMode="decimal"
+              onChange={(event) =>
+                patch({ gstAmount: event.target.value, gstManual: true })
+              }
+              placeholder="0.00"
+              aria-invalid={!!(liveGstError ?? issueFor("gstAmount"))}
+              className="tabular"
+            />
             {draft.gstManual && (
               <Button
                 variant="ghost"

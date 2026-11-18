@@ -67,7 +67,7 @@ export function ReferralScreen() {
         description="Invite another business owner to Sole. Once they subscribe, you're credited $50."
       />
 
-      <Card className="p-5">
+      <Card className="p-5" data-usertour="referral-invite">
         <Field label="Invite by email" htmlFor="referral-email" error={issue}>
           <div className="flex flex-col gap-2 sm:flex-row">
             <div className="relative flex-1">

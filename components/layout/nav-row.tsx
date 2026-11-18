@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { ChevronRight, Pin, type LucideIcon } from "lucide-react";
+import { ChevronRight, Lock, Pin, type LucideIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -18,6 +18,18 @@ export type NavPin = {
    * once you've found it. Reverts to hover-only afterwards.
    */
   alwaysVisible?: boolean;
+  /**
+   * Whether this row's id is something a pin can actually resolve — the same
+   * question `lib/nav.ts`'s `isPinnable` answers, asked by the caller that
+   * knows the id rather than re-derived here from the row's own shape.
+   *
+   * Required, like the rest of `NavPin`: `hasChildren` alone used to stand in
+   * for this and was wrong for exactly one case — a single-page add-on has no
+   * children either, so it read as pinnable by that test and grew a pin button
+   * for an id `pinTargets` was built to refuse. A button that toggles a pin
+   * nothing can ever show.
+   */
+  pinnable: boolean;
 };
 
 /**
@@ -42,6 +54,11 @@ type NavRowProps = React.HTMLAttributes<HTMLElement> & {
   tone?: NavTone;
   /** 1 indents a child so its label lines up under the parent's label. */
   depth?: 0 | 1;
+  /**
+   * The plan doesn't include it. Still a link — the page it opens says why
+   * and how to unlock it — but the padlock says so before the click.
+   */
+  locked?: boolean;
   pin: NavPin;
   type?: "button";
 };
@@ -79,6 +96,7 @@ export const NavRow = React.forwardRef<HTMLElement, NavRowProps>(
       expanded = false,
       tone = "default",
       depth = 0,
+      locked = false,
       pin,
       className,
       ...props
@@ -86,15 +104,12 @@ export const NavRow = React.forwardRef<HTMLElement, NavRowProps>(
     ref,
   ) {
     /**
-     * A group row carries no pin.
-     *
-     * It isn't a destination — it opens the list beneath it and goes nowhere
-     * itself — so a shortcut to it would save nobody the step it claimed to.
-     * Decided from `hasChildren` here rather than by each call site passing or
-     * withholding a pin, which is the version that drifts: `lib/nav.ts` keeps
-     * the same rule for what a stored id is allowed to resolve to.
+     * A group row carries no pin, and neither does anything the caller has
+     * already told us can't resolve one — add-ons, principally. `hasChildren`
+     * alone used to decide this and missed that second case entirely; see
+     * `pin.pinnable`'s own doc for why.
      */
-    const pinnable = !hasChildren;
+    const pinnable = !hasChildren && pin.pinnable;
 
     const classes = cn(
       ROW_BASE,
@@ -108,10 +123,17 @@ export const NavRow = React.forwardRef<HTMLElement, NavRowProps>(
       <>
         {Icon ? <Icon className="size-4 shrink-0" aria-hidden /> : null}
         <span className="truncate text-sm">{label}</span>
+        {locked ? (
+          <Lock
+            className="ml-auto size-3.5 shrink-0 text-muted-foreground"
+            aria-label="Locked"
+          />
+        ) : null}
         {hasChildren ? (
           <ChevronRight
             className={cn(
-              "ml-auto size-4 shrink-0 text-muted-foreground transition-transform duration-150",
+              "size-4 shrink-0 text-muted-foreground transition-transform duration-150",
+              !locked && "ml-auto",
               expanded && "rotate-90",
             )}
             aria-hidden

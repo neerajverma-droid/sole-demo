@@ -13,6 +13,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
+import { PrefixInput } from "@/components/ui/prefix-input";
 import {
   Popover,
   PopoverContent,
@@ -425,17 +426,13 @@ function AmountInput({
   label: string;
 }) {
   return (
-    <div className="relative">
-      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-        {activeCurrencySymbol()}
-      </span>
-      <Input
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        inputMode="decimal"
-        className="pl-7 tabular"
-        aria-label={label}
-      />
-    </div>
+    <PrefixInput
+      prefix={activeCurrencySymbol()}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      inputMode="decimal"
+      className="tabular"
+      aria-label={label}
+    />
   );
 }

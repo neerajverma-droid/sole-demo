@@ -27,6 +27,7 @@ const {
   fetchInvoiceDetail,
   fetchInvoicePdfBlob,
   fetchInvoices,
+  fetchInvoiceSummaryStats,
   formatDocumentMoney,
   invoiceAmount,
   invoiceDocumentAmount,
@@ -38,6 +39,8 @@ const {
   fetchInvoicesPage,
   markInvoicePaidWithCashApi,
   markInvoiceSentApi,
+  sendInvoiceToClientApi,
+  formatRecipientList,
   ndisIssues,
   newLineItem,
   newNdisLineItem,
@@ -46,6 +49,17 @@ const {
   overdueSummary,
   sendInvoicePaidReceiptApi,
   sendInvoiceReminderApi,
+  canSaveInvoiceAsDraft,
+  depositIssue,
+  followUpIssue,
+  invoiceEditBlock,
+  invoiceEmailError,
+  invoiceTotalIssue,
+  invoiceAwaitingPayment,
+  invoiceMoneyBands,
+  invoiceSplit,
+  invoiceUndoAction,
+  stockIssues,
   statusAfterPayment,
   stopRecurringInvoiceApi,
   undoInvoicePaidWithCashApi,
@@ -505,6 +519,39 @@ describe("fetching one invoice in full", () => {
     ]);
   });
 
+  it("lists the stored attachments with their id, link and size", async () => {
+    apiMock.get.mockResolvedValue({
+      data: {
+        success: true,
+        data: {
+          ...API_ROW,
+          documents: [
+            {
+              id: 91,
+              document_id: 91,
+              file_name: "scope.pdf",
+              file_path: "https://bucket.test/staging/1/invoice/a.pdf",
+              file_url: "https://bucket.test/staging/1/invoice/a.pdf",
+              file_size: 2048,
+            },
+            // Older rows: only the document_id spelling, and no size.
+            { document_id: 92, file_path: "staging/1/invoice/b.png" },
+          ],
+        },
+      },
+    });
+
+    expect((await fetchInvoiceDetail("8801")).attachments).toEqual([
+      {
+        id: "91",
+        name: "scope.pdf",
+        size: 2048,
+        url: "https://bucket.test/staging/1/invoice/a.pdf",
+      },
+      { id: "92", name: "b.png", size: 0, url: undefined },
+    ]);
+  });
+
   it("shows bank details unless the record says otherwise", async () => {
     apiMock.get.mockResolvedValue({ data: { success: true, data: API_ROW } });
     expect((await fetchInvoiceDetail("8801")).showBankDetails).toBe(true);
@@ -578,12 +625,82 @@ describe("row actions", () => {
     expect(body).toEqual({ invoice_ids: [8801, 8802] });
   });
 
+  it("reports how many a bulk delete removed and how many it skipped", async () => {
+    apiMock.post.mockResolvedValue({
+      data: {
+        success: true,
+        message: "1 of 2 invoices deleted; 1 skipped.",
+        data: { deleted_count: 1, skipped_count: 1 },
+      },
+    });
+    expect(await deleteInvoicesApi(["8801", "8802"])).toEqual({
+      deleted: 1,
+      skipped: 1,
+    });
+  });
+
+  it("counts everything as deleted when the response carries no counts", async () => {
+    apiMock.post.mockResolvedValue({ data: { success: true } });
+    expect(await deleteInvoicesApi(["8801", "8802"])).toEqual({
+      deleted: 2,
+      skipped: 0,
+    });
+  });
+
+  it("throws the server's reason when every selected invoice is locked", async () => {
+    apiMock.post.mockResolvedValue({
+      data: {
+        success: false,
+        message: "No invoices deleted: selected invoices are locked.",
+      },
+    });
+    await expect(deleteInvoicesApi(["8801", "8802"])).rejects.toThrow(
+      /locked/,
+    );
+  });
+
   it("marks an invoice sent against its own route", async () => {
     apiMock.post.mockResolvedValue({ data: { success: true } });
     await markInvoiceSentApi("8801");
     expect(apiMock.post.mock.calls[0][0]).toBe(
       apiRoutes.invoice.markSent("8801"),
     );
+  });
+
+  it("sends an invoice to its client and returns every recipient, client first", async () => {
+    apiMock.post.mockResolvedValue({
+      data: {
+        success: true,
+        data: {
+          recipients: { to: ["client@example.com"], cc: ["cc@example.com"] },
+        },
+      },
+    });
+    const recipients = await sendInvoiceToClientApi("8801");
+    expect(apiMock.post.mock.calls[0][0]).toBe(
+      apiRoutes.invoice.sendToClient("8801"),
+    );
+    expect(recipients).toEqual(["client@example.com", "cc@example.com"]);
+  });
+
+  it("surfaces the server's reason when sending to the client fails", async () => {
+    apiMock.post.mockResolvedValue({
+      data: { success: false, message: "Acme has no email address." },
+    });
+    await expect(sendInvoiceToClientApi("8801")).rejects.toThrow(
+      /no email address/,
+    );
+  });
+
+  it("names recipients as a readable list", () => {
+    expect(formatRecipientList([])).toBe("");
+    expect(formatRecipientList(["a@example.com"])).toBe("a@example.com");
+    expect(formatRecipientList(["a@example.com", "b@example.com"])).toBe(
+      "a@example.com and b@example.com",
+    );
+    expect(
+      formatRecipientList(["a@example.com", "b@example.com", "c@example.com"]),
+    ).toBe("a@example.com, b@example.com and c@example.com");
   });
 
   it("settles an invoice in cash, dated today", async () => {
@@ -675,6 +792,20 @@ describe("attachments", () => {
     expect(form.get("source_type")).toBe("invoice");
     expect(form.get("source_id")).toBe("8801");
     expect(attachment).toMatchObject({ id: "91", name: "scope.pdf" });
+  });
+
+  it("reads the document id out of the response envelope", async () => {
+    // The server answers { success, message, data: { document_id } }; the id
+    // used to be read off the top level, so a real upload got a placeholder id
+    // that no later delete could find.
+    apiMock.post.mockResolvedValue({
+      data: { success: true, data: { document_id: 93 } },
+    });
+    const file = new File(["bytes"], "scope.pdf", { type: "application/pdf" });
+
+    expect(await uploadInvoiceAttachmentApi("8801", file)).toMatchObject({
+      id: "93",
+    });
   });
 
   it("still returns an attachment when the server sends no id back", async () => {
@@ -793,6 +924,27 @@ describe("totals", () => {
   });
 });
 
+describe("canSaveInvoiceAsDraft", () => {
+  it("is always on offer for a new invoice or a copy", () => {
+    expect(canSaveInvoiceAsDraft(false, undefined)).toBe(true);
+  });
+
+  it("is on offer when editing an invoice that is still a draft", () => {
+    expect(canSaveInvoiceAsDraft(true, "Draft")).toBe(true);
+  });
+
+  it.each(["Outstanding", "Overdue", "Partially paid", "Paid"] as const)(
+    "is not on offer when editing an invoice that is %s",
+    (status) => {
+      expect(canSaveInvoiceAsDraft(true, status)).toBe(false);
+    },
+  );
+
+  it("is not on offer while the invoice being edited hasn't loaded", () => {
+    expect(canSaveInvoiceAsDraft(true, undefined)).toBe(false);
+  });
+});
+
 describe("statusAfterPayment", () => {
   const owed = invoice(); // one 100 line
 
@@ -872,6 +1024,63 @@ describe("documentIssues", () => {
     );
   });
 
+  describe("line items, field by field", () => {
+    const draft = (items: InvoiceLineItem[]) => ({
+      clientId: "42",
+      clientName: "Acme",
+      number: "INV-1",
+      items,
+    });
+    const keyed = (issues: ReturnType<typeof documentIssues>) =>
+      issues.map((issue) => `${issue.key.replace(/^item-line-\d+-/, "")}: ${issue.message}`);
+
+    it("marks the quantity, not the table, when only the quantity was forgotten", () => {
+      const issues = documentIssues(draft([{ ...newLineItem(), description: "Work", price: "50" }]));
+      expect(keyed(issues)).toEqual(["quantity: Enter a quantity."]);
+      expect(issues[0].submitOnly).toBe(true);
+    });
+
+    it("marks the price when only the price was forgotten", () => {
+      const issues = documentIssues(draft([{ ...newLineItem(), description: "Work", quantity: "2" }]));
+      expect(keyed(issues)).toEqual(["price: Enter a price."]);
+    });
+
+    it("marks the description when only the description was forgotten", () => {
+      const issues = documentIssues(draft([{ ...newLineItem(), quantity: "1", price: "50" }]));
+      expect(keyed(issues)).toEqual(["description: Enter a description."]);
+    });
+
+    it("marks all three on an untouched first line, since nothing has been billed", () => {
+      expect(keyed(documentIssues(draft([newLineItem()])))).toEqual([
+        "description: Enter a description.",
+        "quantity: Enter a quantity.",
+        "price: Enter a price.",
+      ]);
+    });
+
+    it("says a zero quantity must be more than 0 rather than that it is missing", () => {
+      const issues = documentIssues(draft([{ ...newLineItem(), description: "Work", quantity: "0", price: "5" }]));
+      expect(keyed(issues)).toEqual(["quantity: Quantity must be more than 0."]);
+    });
+
+    it("leaves a blank spare row alone beside a complete one", () => {
+      const filled = line({ description: "Work", quantity: "1", price: "50" });
+      expect(documentIssues(draft([filled, newLineItem()]))).toEqual([]);
+    });
+
+    it("holds a half-typed second line to the same rule", () => {
+      const filled = line({ description: "Work", quantity: "1", price: "50" });
+      const issues = documentIssues(draft([filled, { ...newLineItem(), description: "More" }]));
+      expect(keyed(issues)).toEqual(["quantity: Enter a quantity.", "price: Enter a price."]);
+    });
+
+    it("keeps the live message for letters, and doesn't repeat it as a missing value", () => {
+      const issues = documentIssues(draft([line({ description: "Work", quantity: "1", price: "abc" })]));
+      expect(issues).toHaveLength(1);
+      expect(issues[0].submitOnly).toBeUndefined();
+    });
+  });
+
   it("names the document, so a quote isn't told to enter an invoice number", () => {
     const blank = {
       clientId: null,
@@ -907,6 +1116,49 @@ describe("lineItemErrors", () => {
     expect(lineItemErrors(line({ quantity: "12.38", qtyType: "km" })).quantity).toBeUndefined();
     expect(lineItemErrors(line({ quantity: "1.5", qtyType: "hours" })).quantity).toBeUndefined();
     expect(lineItemErrors(line({ quantity: "1.5", qtyType: "days" })).quantity).toBeTruthy();
+  });
+
+  it("holds an NDIS support to the same quantity rule — a fraction only in hours or km", () => {
+    const support = (qtyType: "items" | "hours" | "km" | "days") => ({
+      ...newNdisLineItem(),
+      quantity: "1.5",
+      price: "65",
+      qtyType,
+    });
+    expect(lineItemErrors(support("hours")).quantity).toBeUndefined();
+    expect(lineItemErrors(support("km")).quantity).toBeUndefined();
+    expect(lineItemErrors(support("items")).quantity).toBeTruthy();
+    expect(lineItemErrors(support("days")).quantity).toBeTruthy();
+  });
+
+  it("allows at most 2 decimal places on a price", () => {
+    expect(lineItemErrors(line({ price: "10.25" })).price).toBeUndefined();
+    expect(lineItemErrors(line({ price: "10." })).price).toBeUndefined();
+    expect(lineItemErrors(line({ price: "10.255" })).price).toBe(
+      "Price can have up to 2 decimal places.",
+    );
+    expect(
+      lineItemErrors({ ...newNdisLineItem(), price: "65.123" }).price,
+    ).toBeTruthy();
+  });
+
+  it("allows at most 2 decimal places on a discount, percentage or amount", () => {
+    expect(
+      lineItemErrors(line({ discountPercent: "12.5" })).discountPercent,
+    ).toBeUndefined();
+    expect(
+      lineItemErrors(line({ discountPercent: "12.555" })).discountPercent,
+    ).toBe("Discount can have up to 2 decimal places.");
+    expect(
+      lineItemErrors(
+        line({
+          quantity: "1",
+          price: "500",
+          discountPercent: "10.999",
+          discountType: "amount",
+        }),
+      ).discountPercent,
+    ).toBe("Discount can have up to 2 decimal places.");
   });
 
   it("caps a discount at 100%", () => {
@@ -1085,5 +1337,581 @@ describe("currency", () => {
     expect(formatDocumentMoney(1000)).toBe("$1,000.00");
     expect(formatDocumentMoney(1000, "NZD")).toContain("1,000.00");
     expect(formatDocumentMoney(1000, "NZD")).not.toBe("$1,000.00");
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Rules the old editor and list enforced
+ * ------------------------------------------------------------------ */
+
+describe("invoiceEditBlock", () => {
+  it("lets draft, outstanding and overdue invoices be edited", () => {
+    for (const status of ["Draft", "Outstanding", "Overdue"] as const) {
+      expect(invoiceEditBlock({ status, bulkUpload: false })).toBeUndefined();
+    }
+  });
+
+  it("opens a paid invoice in view mode only", () => {
+    expect(invoiceEditBlock({ status: "Paid", bulkUpload: false })).toMatch(
+      /view mode only/,
+    );
+  });
+
+  it("gives a partially paid invoice no edit", () => {
+    expect(
+      invoiceEditBlock({ status: "Partially paid", bulkUpload: false }),
+    ).toMatch(/Partially paid invoices can't be edited/);
+  });
+
+  it("never edits a bulk-uploaded invoice, whatever its status", () => {
+    expect(invoiceEditBlock({ status: "Draft", bulkUpload: true })).toMatch(
+      /Bulk-uploaded/,
+    );
+  });
+});
+
+describe("invoiceTotalIssue", () => {
+  it("rejects zero and negative totals", () => {
+    expect(invoiceTotalIssue(0)).toBe("Invoice total must be greater than 0.");
+    expect(invoiceTotalIssue(-5)).toBeDefined();
+    expect(invoiceTotalIssue(0.01)).toBeUndefined();
+  });
+});
+
+describe("invoiceEmailError", () => {
+  it("accepts an address and rejects everything else", () => {
+    expect(invoiceEmailError("accounts@acme.test")).toBeUndefined();
+    expect(invoiceEmailError("  accounts@acme.test  ")).toBeUndefined();
+    expect(invoiceEmailError("")).toBeDefined();
+    expect(invoiceEmailError("accounts")).toBeDefined();
+    expect(invoiceEmailError("accounts@acme")).toBeDefined();
+    expect(invoiceEmailError("a b@acme.test")).toBeDefined();
+  });
+});
+
+describe("depositIssue", () => {
+  const items = [
+    { ...newLineItem(), description: "Design", quantity: "1", price: "600" },
+    { ...newLineItem(), description: "Build", quantity: "1", price: "400" },
+  ];
+  const context = {
+    total: 1000,
+    items,
+    gstPercent: 10,
+    issued: "2026-11-01",
+    due: "2026-11-15",
+  };
+  const percent = (value: string, dueDate = "2026-11-04") => ({
+    mode: "percent" as const,
+    value,
+    dueDate,
+  });
+
+  it("is fine when there is no deposit", () => {
+    expect(depositIssue(null, context)).toBeUndefined();
+  });
+
+  it("accepts a sensible percentage, amount and set of lines", () => {
+    expect(depositIssue(percent("30"), context)).toBeUndefined();
+    expect(
+      depositIssue(
+        { mode: "amount", value: "250", dueDate: "2026-11-04" },
+        context,
+      ),
+    ).toBeUndefined();
+    expect(
+      depositIssue(
+        {
+          mode: "items",
+          value: "",
+          selectedItems: [0],
+          dueDate: "2026-11-04",
+        },
+        context,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("needs something to take a deposit on", () => {
+    expect(depositIssue(percent("30"), { ...context, total: 0 })).toMatch(
+      /at least one item/,
+    );
+  });
+
+  it("keeps a percentage strictly between 0 and 100", () => {
+    expect(depositIssue(percent("0"), context)).toMatch(/greater than 0/);
+    expect(depositIssue(percent("100"), context)).toMatch(/less than 100/);
+  });
+
+  it("keeps a fixed amount above 0 and below the total", () => {
+    const amount = (value: string) => ({
+      mode: "amount" as const,
+      value,
+      dueDate: "2026-11-04",
+    });
+    expect(depositIssue(amount("0"), context)).toMatch(/greater than 0/);
+    expect(depositIssue(amount("1000"), context)).toMatch(/less than 1000.00/);
+  });
+
+  it("notices a deposit the invoice has since outgrown", () => {
+    // A 600 deposit was fine on a 1,000 invoice; the total has dropped to 500.
+    expect(
+      depositIssue(
+        { mode: "amount", value: "600", dueDate: "2026-11-04" },
+        { ...context, total: 500 },
+      ),
+    ).toMatch(/less than 500.00/);
+  });
+
+  it("needs two lines, and at least one left unchecked, for chosen lines", () => {
+    const chosen = (selectedItems: number[]) => ({
+      mode: "items" as const,
+      value: "",
+      selectedItems,
+      dueDate: "2026-11-04",
+    });
+    expect(depositIssue(chosen([]), context)).toMatch(/Select at least one/);
+    expect(depositIssue(chosen([0, 1]), context)).toMatch(/remain unchecked/);
+    expect(
+      depositIssue(chosen([0]), { ...context, items: items.slice(0, 1) }),
+    ).toMatch(/at least two/);
+  });
+
+  it("keeps the deposit due date between the invoice date and the due date", () => {
+    expect(
+      depositIssue({ mode: "percent", value: "30" }, context),
+    ).toMatch(/when the deposit is due/);
+    expect(depositIssue(percent("30", "2026-10-31"), context)).toMatch(
+      /earlier than the invoice date/,
+    );
+    expect(depositIssue(percent("30", "2026-11-16"), context)).toMatch(
+      /later than the invoice due date/,
+    );
+  });
+});
+
+describe("followUpIssue", () => {
+  const base = {
+    followUpReminder: true,
+    followUpDays: "3",
+    followUpNote: "Check the install",
+    issued: "2026-11-01",
+    due: "2026-11-08",
+  };
+
+  it("is fine while the follow-up is off, whatever is typed", () => {
+    expect(
+      followUpIssue({ ...base, followUpReminder: false, followUpDays: "" }),
+    ).toBeUndefined();
+  });
+
+  it("accepts days within the term and a note", () => {
+    expect(followUpIssue(base)).toBeUndefined();
+    expect(followUpIssue({ ...base, followUpDays: "7" })).toBeUndefined();
+  });
+
+  it("needs the days, as a whole number of 1 or more", () => {
+    expect(followUpIssue({ ...base, followUpDays: "" })).toMatch(/Enter how many/);
+    expect(followUpIssue({ ...base, followUpDays: "0" })).toMatch(/whole number/);
+    expect(followUpIssue({ ...base, followUpDays: "1.5" })).toMatch(/whole number/);
+  });
+
+  it("can't reach back before the invoice date", () => {
+    expect(followUpIssue({ ...base, followUpDays: "8" })).toMatch(
+      /more than 7 days/,
+    );
+  });
+
+  it("needs to say what the follow-up is about", () => {
+    expect(followUpIssue({ ...base, followUpNote: "  " })).toBe(
+      "Describe the follow-up work.",
+    );
+  });
+});
+
+describe("stockIssues", () => {
+  const line = (productId: string | undefined, quantity: string) => ({
+    ...newLineItem(),
+    description: "Widget",
+    quantity,
+    price: "10",
+    productId,
+  });
+
+  it("flags a line that asks for more than is on the shelf", () => {
+    const items = [line("p1", "5")];
+    const issues = stockIssues(items, new Map([["p1", 4]]));
+    expect(issues).toEqual([
+      { key: `item-${items[0].id}-quantity`, message: "Only 4 in stock." },
+    ]);
+  });
+
+  it("lets a line take exactly what is there", () => {
+    expect(stockIssues([line("p1", "4")], new Map([["p1", 4]]))).toEqual([]);
+  });
+
+  it("adds up two lines of the same product", () => {
+    const items = [line("p1", "3"), line("p1", "3")];
+    expect(stockIssues(items, new Map([["p1", 5]]))).toHaveLength(2);
+  });
+
+  it("gives back what the invoice being edited already holds", () => {
+    // 0 on the shelf because this invoice took all 5; editing it as 5 is fine.
+    expect(
+      stockIssues(
+        [line("p1", "5")],
+        new Map([["p1", 0]]),
+        new Map([["p1", 5]]),
+      ),
+    ).toEqual([]);
+    expect(
+      stockIssues(
+        [line("p1", "6")],
+        new Map([["p1", 0]]),
+        new Map([["p1", 5]]),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("ignores lines that aren't a tracked product", () => {
+    expect(
+      stockIssues([line(undefined, "99"), line("untracked", "99")], new Map()),
+    ).toEqual([]);
+  });
+
+  it("needs a whole-number quantity on a tracked line", () => {
+    const items = [line("p1", "2.5")];
+    expect(stockIssues(items, new Map([["p1", 10]]))).toEqual([
+      {
+        key: `item-${items[0].id}-quantity`,
+        message: "Stock items need a whole-number quantity.",
+      },
+    ]);
+    // A fractional quantity is fine on a line that isn't stock.
+    expect(stockIssues([line(undefined, "2.5")], new Map())).toEqual([]);
+  });
+
+  it("a quote or draft adds nothing back, so 80 of 50 is refused", () => {
+    // What the quote and draft-invoice editors call: no `onInvoice`.
+    expect(stockIssues([line("p1", "80")], new Map([["p1", 50]]))).toEqual([
+      expect.objectContaining({ message: "Only 50 in stock." }),
+    ]);
+  });
+});
+
+describe("documentIssues client", () => {
+  const base = { clientName: "", number: "INV-1", items: [] };
+
+  it("asks for a client when none is picked", () => {
+    expect(
+      documentIssues({ ...base, clientId: null }).find((i) => i.key === "client")
+        ?.message,
+    ).toBe("Select a client for this invoice.");
+  });
+
+  it("wants a client picked from the list, not just a name", () => {
+    expect(
+      documentIssues({ ...base, clientId: null, clientName: "Acme" }).find(
+        (i) => i.key === "client",
+      )?.message,
+    ).toMatch(/Pick this invoice's client from the list/);
+  });
+
+  it("treats the backend's \"0\" as no client", () => {
+    expect(
+      documentIssues({ ...base, clientId: "0", clientName: "Acme" }).some(
+        (i) => i.key === "client",
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts a picked client", () => {
+    expect(
+      documentIssues({ ...base, clientId: "12", clientName: "Acme" }).some(
+        (i) => i.key === "client",
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("fetchInvoiceSummaryStats", () => {
+  beforeEach(() => apiMock.get.mockReset());
+
+  it("asks the status-counts route for stats and maps both periods", async () => {
+    apiMock.get.mockResolvedValue({
+      data: {
+        success: true,
+        data: {
+          stats: {
+            year: {
+              issued: 31625.54,
+              draft_count: 14,
+              paid: { count: 1, part_paid: 0, amount: 4036.5 },
+              pending: { count: 6, part_paid: 0, amount: "26641.04" },
+              overdue: { count: 3, part_paid: 0, amount: 948, oldest_days: 9 },
+            },
+            month: {},
+          },
+        },
+      },
+    });
+
+    const stats = await fetchInvoiceSummaryStats();
+
+    expect(apiMock.get).toHaveBeenCalledWith(apiRoutes.invoice.statusCounts, {
+      params: { include_stats: 1 },
+    });
+    expect(stats.year).toEqual({
+      issued: 31625.54,
+      draftCount: 14,
+      paid: { count: 1, partPaid: 0, amount: 4036.5 },
+      pending: { count: 6, partPaid: 0, amount: 26641.04 },
+      overdue: { count: 3, partPaid: 0, amount: 948, oldestDays: 9 },
+    });
+    // A period the server leaves out is zeroes, not a crash.
+    expect(stats.month.issued).toBe(0);
+    expect(stats.month.overdue.oldestDays).toBe(0);
+  });
+});
+
+describe("invoiceAwaitingPayment", () => {
+  const sent = "2026-03-02T09:00:00.000Z";
+
+  it("is true for a sent invoice that is still owed", () => {
+    for (const status of ["Outstanding", "Overdue"] as const) {
+      expect(invoiceAwaitingPayment(invoice({ status, sentAt: sent }))).toBe(true);
+    }
+  });
+
+  it("is false for a draft, even one the feed has a candidate for", () => {
+    expect(invoiceAwaitingPayment(invoice({ status: "Draft", sentAt: sent }))).toBe(false);
+    expect(invoiceAwaitingPayment(invoice({ status: "Draft" }), 2)).toBe(false);
+  });
+
+  it("is true for one saved but not sent (Save & Print), since it can still be paid or matched", () => {
+    expect(
+      invoiceAwaitingPayment(
+        invoice({ status: "Outstanding", sentAt: null, savedAt: "2026-03-02" }),
+      ),
+    ).toBe(true);
+    expect(invoiceAwaitingPayment(invoice({ status: "Outstanding", sentAt: null }))).toBe(true);
+  });
+
+  it("is false once nothing is owing", () => {
+    expect(
+      invoiceAwaitingPayment(invoice({ status: "Outstanding", sentAt: sent, paidAmount: 1100 })),
+    ).toBe(false);
+    expect(invoiceAwaitingPayment(invoice({ status: "Paid", sentAt: sent }))).toBe(false);
+  });
+});
+
+describe("invoiceUndoAction", () => {
+  const entry = {
+    journalEntryId: "55",
+    description: "Deposit",
+    amount: 100,
+    matchedAt: null,
+  };
+
+  it("offers nothing on an invoice that isn't paid or part paid", () => {
+    for (const status of ["Draft", "Outstanding", "Overdue"] as const) {
+      expect(
+        invoiceUndoAction({
+          status,
+          paidWithCash: true,
+          matchedEntries: [entry],
+        }),
+      ).toBeNull();
+    }
+  });
+
+  it("undoes a cash payment by marking the invoice unpaid", () => {
+    expect(
+      invoiceUndoAction({ status: "Paid", paidWithCash: true }),
+    ).toBe("cash");
+  });
+
+  it("undoes a bank match when the payment was one", () => {
+    expect(
+      invoiceUndoAction({
+        status: "Paid",
+        paidWithCash: false,
+        matchedEntries: [entry],
+      }),
+    ).toBe("match");
+    expect(
+      invoiceUndoAction({
+        status: "Partially paid",
+        paidWithCash: false,
+        matchedEntries: [entry],
+      }),
+    ).toBe("match");
+  });
+
+  it("leaves a payment settled through SolePay alone", () => {
+    expect(
+      invoiceUndoAction({
+        status: "Paid",
+        paidWithCash: true,
+        paidWithPayrix: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("has nothing to undo when the payment isn't on record here", () => {
+    expect(
+      invoiceUndoAction({ status: "Paid", paidWithCash: false }),
+    ).toBeNull();
+    expect(
+      invoiceUndoAction({
+        status: "Partially paid",
+        paidWithCash: false,
+        matchedEntries: [],
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("matched transactions on an invoice row", () => {
+  it("reads each matched journal entry, newest first as sent", async () => {
+    apiMock.get.mockResolvedValue({
+      data: {
+        success: true,
+        data: {
+          invoice_details: [
+            {
+              ...API_ROW,
+              matched_journal_entries: [
+                {
+                  journal_entry_id: 77,
+                  transaction_description: " ACME PTY LTD ",
+                  matched_amount: "60.5",
+                  matched_at: "2026-11-02 09:10:11",
+                },
+                { journal_entry_id: 0, matched_amount: 5 },
+                {
+                  journal_entry_id: 78,
+                  transaction_description: null,
+                  matched_amount: 39.5,
+                  matched_at: null,
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    const [row] = await fetchInvoices();
+
+    // The entry with no real journal entry id can't be undone, so it is dropped.
+    expect(row.matchedEntries).toEqual([
+      {
+        journalEntryId: "77",
+        description: "ACME PTY LTD",
+        amount: 60.5,
+        matchedAt: "2026-11-02",
+      },
+      { journalEntryId: "78", description: null, amount: 39.5, matchedAt: null },
+    ]);
+  });
+
+  it("is empty when the row carries no matches", async () => {
+    apiMock.get.mockResolvedValue({
+      data: { success: true, data: { invoice_details: [API_ROW] } },
+    });
+    expect((await fetchInvoices())[0].matchedEntries).toEqual([]);
+  });
+});
+
+describe("invoiceSplit and the summary's money bands", () => {
+  // A 1,000 invoice, in whatever state a test needs.
+  const thousand = (over: Partial<Invoice>) =>
+    invoice({ items: [line({ price: "1000" })], ...over });
+
+  it("counts a fully paid invoice wholly as paid, and nothing as owed", () => {
+    expect(invoiceSplit(thousand({ status: "Paid", paidAmount: 1000 }))).toEqual({ paid: 1000, owed: 0 });
+  });
+
+  it("counts a Paid invoice as paid in full even when its recorded payment is missing", () => {
+    // A bulk-uploaded paid invoice is settled by a cash entry the list may not echo back.
+    expect(invoiceSplit(thousand({ status: "Paid", paidAmount: 0 }))).toEqual({ paid: 1000, owed: 0 });
+  });
+
+  it("splits a part-paid invoice into what was received and the balance", () => {
+    expect(invoiceSplit(thousand({ status: "Partially paid", paidAmount: 400 }))).toEqual({ paid: 400, owed: 600 });
+    expect(invoiceSplit(thousand({ status: "Partially paid", paidAmount: 500 }))).toEqual({ paid: 500, owed: 500 });
+  });
+
+  it("counts an unpaid invoice wholly as owed", () => {
+    expect(invoiceSplit(thousand({ status: "Outstanding", paidAmount: 0 }))).toEqual({ paid: 0, owed: 1000 });
+    expect(invoiceSplit(thousand({ status: "Overdue", paidAmount: 0 }))).toEqual({ paid: 0, owed: 1000 });
+  });
+
+  it("counts a draft as neither — it hasn't been issued", () => {
+    expect(invoiceSplit(thousand({ status: "Draft", paidAmount: 0 }))).toEqual({ paid: 0, owed: 0 });
+  });
+
+  it("never counts more than the invoice is for", () => {
+    expect(invoiceSplit(thousand({ status: "Partially paid", paidAmount: 1500 }))).toEqual({ paid: 1000, owed: 0 });
+    expect(invoiceSplit(thousand({ status: "Partially paid", paidAmount: -50 }))).toEqual({ paid: 0, owed: 1000 });
+  });
+
+  it("puts the paid part of a part-paid invoice in Paid and only its balance in Pending", () => {
+    const bands = invoiceMoneyBands([
+      thousand({ id: "1", status: "Paid", paidAmount: 1000 }),
+      thousand({ id: "2", status: "Partially paid", paidAmount: 400 }),
+      thousand({ id: "3", status: "Outstanding", paidAmount: 0 }),
+      thousand({ id: "4", status: "Overdue", paidAmount: 0 }),
+      thousand({ id: "5", status: "Draft", paidAmount: 0 }),
+    ]);
+
+    // 1,000 paid in full + the 400 received on the part-paid one.
+    expect(bands.paid).toEqual({ count: 2, partPaid: 1, amount: 1400 });
+    // The part-paid balance (600) plus the untouched outstanding one (1,000), not 2,000 for both.
+    expect(bands.pending).toEqual({ count: 2, partPaid: 1, amount: 1600 });
+    expect(bands.overdue).toEqual({ count: 1, partPaid: 0, amount: 1000 });
+  });
+
+  it("adds up to what was invoiced, drafts aside", () => {
+    const invoices = [
+      thousand({ status: "Paid", paidAmount: 1000 }),
+      thousand({ status: "Partially paid", paidAmount: 250 }),
+      thousand({ status: "Outstanding", paidAmount: 0 }),
+      thousand({ status: "Overdue", paidAmount: 0 }),
+    ];
+    const { paid, pending, overdue } = invoiceMoneyBands(invoices);
+
+    expect(paid.amount + pending.amount + overdue.amount).toBe(4000);
+  });
+
+  it("leaves Paid at zero, rather than counting a part-paid invoice, when nothing has been received", () => {
+    const bands = invoiceMoneyBands([thousand({ status: "Partially paid", paidAmount: 0 })]);
+
+    expect(bands.paid).toEqual({ count: 0, partPaid: 0, amount: 0 });
+    expect(bands.pending).toEqual({ count: 1, partPaid: 1, amount: 1000 });
+  });
+});
+
+describe("documentHasDraftContent", () => {
+  const blank = { clientId: null, clientName: "", number: "INV-1", items: [newLineItem()] };
+
+  it("is false for a form with nothing in it", async () => {
+    const { documentHasDraftContent } = await import("@/lib/invoices");
+    expect(documentHasDraftContent(blank)).toBe(false);
+    // "0" is the backend's "no client", not a client.
+    expect(documentHasDraftContent({ ...blank, clientId: "0" })).toBe(false);
+  });
+
+  it("is true once there is a client, a description, or a line with a description or price", async () => {
+    const { documentHasDraftContent } = await import("@/lib/invoices");
+    expect(documentHasDraftContent({ ...blank, clientId: "7" })).toBe(true);
+    expect(documentHasDraftContent({ ...blank, description: "Kitchen refit" })).toBe(true);
+    expect(
+      documentHasDraftContent({ ...blank, items: [{ ...newLineItem(), description: "Labour" }] }),
+    ).toBe(true);
+    expect(
+      documentHasDraftContent({ ...blank, items: [{ ...newLineItem(), price: "50" }] }),
+    ).toBe(true);
   });
 });

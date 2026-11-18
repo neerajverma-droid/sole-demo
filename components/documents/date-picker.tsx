@@ -19,6 +19,7 @@ export function DatePicker({
   id,
   value,
   onChange,
+  onClose,
   fromDate,
   toDate,
   label,
@@ -29,6 +30,11 @@ export function DatePicker({
   id?: string;
   value: string;
   onChange: (iso: string) => void;
+  /**
+   * The calendar closed, with or without a pick. The date field's equivalent of
+   * blur — focus moving into the popover isn't the user leaving the field.
+   */
+  onClose?: () => void;
   /** Blocks dates before this — e.g. an expiry can't precede the issue date. */
   fromDate?: Date;
   /** Blocks dates after this — e.g. a transaction can't be in the future. */
@@ -47,7 +53,13 @@ export function DatePicker({
   ];
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) onClose?.();
+      }}
+    >
       <PopoverTrigger asChild>
         <Button
           id={id}
@@ -80,6 +92,7 @@ export function DatePicker({
           onSelect={(date) => {
             if (date) onChange(toIsoDate(date));
             setOpen(false);
+            onClose?.();
           }}
         />
       </PopoverContent>

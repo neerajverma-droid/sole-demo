@@ -39,4 +39,17 @@ describe("undoAssetMatchMutationOptions", () => {
     await expect(mutation.execute("42")).rejects.toThrow("nope");
     expect(invalidate).not.toHaveBeenCalled();
   });
+
+  it("undoes one picked match by its journal entry, and refreshes that asset", async () => {
+    apiMock.post.mockResolvedValue({ data: { success: true } });
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const mutation = client
+      .getMutationCache()
+      .build(client, undoAssetMatchMutationOptions(client));
+
+    await mutation.execute({ assetId: "42", journalEntryId: "301" });
+    expect(apiMock.post.mock.calls[0][1]).toEqual({ journal_entry_id: "301" });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["asset", "42"] });
+  });
 });

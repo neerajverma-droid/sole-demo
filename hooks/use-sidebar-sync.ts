@@ -11,6 +11,7 @@ import {
   sidebarHiddenAtom,
   sidebarOrderAtom,
 } from "@/lib/atoms";
+import { normalisePins } from "@/lib/nav";
 import {
   fetchSidebarLayout,
   fetchSidebarPins,
@@ -173,8 +174,14 @@ export function useSidebarSync() {
        * save, because these writes replace rather than merge. So a failure
        * leaves the cached copy alone and the snapshot unset, and the first
        * local change after it is what establishes the baseline.
+       *
+       * The pins are normalised on the way in — see `normalisePins`. Here
+       * rather than where the rail draws them, because the snapshot below is
+       * seeded from the raw response: a list that needed cleaning is then
+       * unequal to it and posts itself back cleaned, and one that didn't
+       * serialises identically and posts nothing.
        */
-      if (serverPins) setPinnedIds(serverPins);
+      if (serverPins) setPinnedIds(normalisePins(serverPins));
       if (serverLayout) {
         setOrder(serverLayout.order);
         setChildOrder(serverLayout.childOrder);

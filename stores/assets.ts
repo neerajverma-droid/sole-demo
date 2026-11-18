@@ -17,10 +17,13 @@ type AssetsState = {
   hydrated: boolean;
   /** Replaces the list wholesale with a fresh `fetchAssets()` result. */
   setAssets: (assets: Asset[]) => void;
+  /** Back to "not loaded" — on a business or user switch (`QueryCacheScope`). */
+  reset: () => void;
 };
 
 export const useAssetsStore = create<AssetsState>()((set) => ({
   assets: [],
   hydrated: false,
   setAssets: (assets) => set({ assets, hydrated: true }),
+  reset: () => set({ assets: [], hydrated: false }),
 }));

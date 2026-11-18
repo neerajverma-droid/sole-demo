@@ -1,9 +1,17 @@
 "use client";
 
 import * as React from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 
-import { fetchInvoices } from "@/lib/invoices";
+import { useAtomValue } from "jotai";
+
+import { listedInvoicesAtom } from "@/lib/atoms";
+import { fetchInvoiceDetail, fetchInvoices, type Invoice } from "@/lib/invoices";
 import { createBulkInvoices } from "@/lib/bulk-records";
 import { invoicePayloads } from "@/lib/invoice-import";
 import type { BulkRow } from "@/lib/bulk-import";
@@ -29,6 +37,56 @@ export function useInvoicesQuery() {
   }, [query.data, setInvoices]);
 
   return query;
+}
+
+/**
+ * Every invoice a row dialog might be asked about: the list's current page first
+ * (it's the freshest copy), then whatever the shared store holds from the
+ * dashboard's fill.
+ */
+export function useKnownInvoices(): Invoice[] {
+  const stored = useInvoicesStore((state) => state.invoices);
+  const listed = useAtomValue(listedInvoicesAtom);
+
+  return React.useMemo(() => {
+    const listedIds = new Set(listed.map((invoice) => invoice.id));
+    return [...listed, ...stored.filter((invoice) => !listedIds.has(invoice.id))];
+  }, [listed, stored]);
+}
+
+/**
+ * One invoice by id for a row dialog. It is on the page the list is showing in
+ * nearly every case; for one that isn't (the linked invoice a converted quote
+ * opens from the Quotes screen, which has no invoice list) it is fetched by id.
+ * Keyed under `["invoices"]`, so a save, payment or delete refreshes it too.
+ */
+export function useKnownInvoice(id: string | null): Invoice | undefined {
+  const known = useKnownInvoices();
+  const found = id ? known.find((invoice) => invoice.id === id) : undefined;
+
+  const fetched = useQuery({
+    queryKey: ["invoices", "detail", id],
+    queryFn: () => fetchInvoiceDetail(id as string),
+    enabled: Boolean(id) && !found,
+  });
+
+  return found ?? fetched.data;
+}
+
+/**
+ * Puts the invoice list back to "not loaded yet".
+ *
+ * Invalidating isn't enough when a save is about to land the user on the list:
+ * the page it cached last time is still there, so it renders at once, stale,
+ * and the new invoice pops in whenever the quiet refetch finishes — the list
+ * never looks like it is loading. Resetting drops that cached data (the table,
+ * the status tabs and the summary cards alike) so the list opens on its
+ * skeleton, and clears the store's `hydrated` flag, which is what the summary
+ * cards check before showing theirs.
+ */
+export function resetInvoiceListCache(queryClient: QueryClient) {
+  useInvoicesStore.setState({ hydrated: false });
+  void queryClient.resetQueries({ queryKey: ["invoices"] });
 }
 
 /**

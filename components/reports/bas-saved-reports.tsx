@@ -22,6 +22,8 @@ import {
 } from "@/hooks/use-bas-review-mutation";
 import { basDate } from "@/lib/bas-report";
 import { SEVERITY_LABEL, type Decision } from "@/lib/bas-review";
+import { useCountryContext } from "@/hooks/use-country-context";
+import { returnWord } from "@/lib/country-context";
 
 const DECISION_LABEL: Record<Decision, string> = {
   accepted: "Done",
@@ -41,6 +43,7 @@ const DECISION_VARIANT: Record<Decision, "success" | "outline" | "warning"> = {
  * finding — so it reads the same later whatever has changed in the books since.
  */
 export function BasSavedReports() {
+  const { country } = useCountryContext();
   const [open, setOpen] = React.useState(false);
   const [openId, setOpenId] = React.useState<number | null>(null);
   const list = useSavedBasReviewReports(open);
@@ -62,7 +65,7 @@ export function BasSavedReports() {
       </SheetTrigger>
       <SheetContent className="w-full overflow-y-auto sm:max-w-lg">
         <SheetHeader>
-          <SheetTitle>Past BAS reviews</SheetTitle>
+          <SheetTitle>Past {returnWord(country)} reviews</SheetTitle>
           <SheetDescription>
             Saved snapshots of a review: what it found and which items you marked done or ignored.
           </SheetDescription>

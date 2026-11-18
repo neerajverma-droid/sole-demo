@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Client cleanup assessment</title>
+
+<!--
+=====================================================================
+  WHITE-LABEL CONFIGURATION
+  Everything a firm needs to change lives in the CONFIG object below.
+  Colours, logo, firm name, contact details, CTA and all product copy.
+  The assessment model (questions and weights) is kept separate, further
+  down, and only needs editing if you want to change the scoring itself.
+
+  NOTE ON THE SPM BENEFIT COPY:
+  The lines under product.benefits are PLACEHOLDERS derived from the brief.
+  Replace them with SPM's real feature descriptions before going live.
+=====================================================================
+-->
+<script>
+const CONFIG = {
+  // Firm identity (what the accounting firm rebrands)
+  firmName: "Your Firm Name",
+  logoImageUrl: "",              // optional. Leave blank to use logoText. For true offline use, set a data URI or a local file path.
+  logoText: "Your Firm",         // shown when no logo image is set
+
+  // Product being introduced in the results (the thing you are selling)
+  product: {
+    name: "SPM",
+    // Placeholder benefit copy per domain. Replace with real SPM features.
+    benefits: {
+      documents:     "Automated document requests and reminders, so chasing happens without your team having to lift a finger.",
+      communication: "Centralised client communication and task tracking, so every follow-up is logged and nothing slips.",
+      records:       "Structured collection checklists that surface incomplete records before the work starts.",
+      workflow:      "Reusable onboarding and workflow templates you can apply across every client.",
+      billing:       "Automated invoicing and payment reminders tied to the work, to reduce late payment and disputes."
+    }
+  },
+
+  // Call to action shown in the results
+  cta: {
+    text: "See how SPM handles this",
+    url:  "https://example.com"     // replace with your link
+  },
+
+  // Contact details shown in the footer (leave blank to hide)
+  contact: {
+    email: "",
+    phone: "",
+    website: ""
+  },
+
+  // Colours. Accent is the only brand colour used; the rest is neutral chrome.
+  colours: {
+    accent:     "#5B5BF6",   // Sole blue
+    accentDark: "#4141D6"    // darker shade for button hover
+  },
+
+  // Small print
+  disclaimer: "For internal use. This assessment is a guide based on the answers provided and does not replace professional judgement."
+};
+</script>
+
+<style>
+  :root{
+    --accent:#5B5BF6;
+    --accent-dark:#4141D6;
+    --ink:#1A1D21;
+    --ink-soft:#4A5157;
+    --ink-faint:#7A828A;
+    --paper:#F6F7F8;
+    --card:#FFFFFF;
+    --line:#E4E7EA;
+    --line-strong:#CDD3D8;
+    --radius:12px;
+    --radius-sm:8px;
+    --shadow:0 1px 2px rgba(20,29,37,.04), 0 8px 24px rgba(20,29,37,.06);
+
+    --healthy:#2E7D5B;
+    --attention:#B7860B;
+    --high:#C05621;
+    --critical:#B02A37;
+
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    font-family:var(--font);
+    color:var(--ink);
+    background:var(--paper);
+    line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+    font-size:16px;
+  }
+
+  /* ---------- Layout ---------- */
+  .wrap{max-width:820px;margin:0 auto;padding:0 20px;}
+
+  header.site{
+    border-bottom:1px solid var(--line);
+    background:var(--card);
+    position:sticky;top:0;z-index:20;
+  }
+  header.site .wrap{
+    display:flex;align-items:center;justify-content:space-between;
+    height:64px;
+  }
+  .logo{display:flex;align-items:center;gap:12px;font-weight:650;letter-spacing:-.01em;color:var(--ink);}
+  .logo img{max-height:34px;max-width:180px;display:block;}
+  .logo .mark{
+    width:30px;height:30px;border-radius:7px;background:var(--accent);
+    display:none;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:14px;
+  }
+  .kicker{font-size:12.5px;color:var(--ink-faint);font-weight:500;}
+
+  main{padding:32px 0 64px;}
+
+  /* ---------- Progress ---------- */
+  .progress{margin-bottom:24px;}
+  .progress .track{height:5px;background:var(--line);border-radius:99px;overflow:hidden;}
+  .progress .fill{height:100%;background:var(--accent);width:0;transition:width .35s ease;}
+  .progress .meta{
+    display:flex;justify-content:space-between;align-items:baseline;
+    margin-top:10px;font-size:13px;color:var(--ink-faint);
+  }
+  .progress .meta strong{color:var(--ink-soft);font-weight:600;}
+
+  /* ---------- Card / step ---------- */
+  .card{
+    background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:var(--shadow);padding:32px;
+  }
+  @media (max-width:560px){ .card{padding:22px;} }
+
+  .step-eyebrow{
+    font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--accent);margin-bottom:8px;
+  }
+  h1.step-title{font-size:24px;line-height:1.2;letter-spacing:-.02em;margin:0 0 6px;font-weight:680;}
+  .step-lead{color:var(--ink-soft);margin:0 0 24px;font-size:15px;}
+
+  /* ---------- Fields ---------- */
+  .field{margin-bottom:22px;}
+  .field:last-child{margin-bottom:0;}
+  .field > label.q{display:block;font-weight:600;font-size:15px;margin-bottom:4px;}
+  .field .hint{font-size:13px;color:var(--ink-faint);margin:0 0 12px;}
+
+  .text-input, select{
+    width:100%;font:inherit;font-size:15px;color:var(--ink);
+    padding:11px 13px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);
+    background:#fff;
+  }
+  .text-input:focus, select:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent);}
+
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  @media (max-width:560px){ .grid-2{grid-template-columns:1fr;} }
+
+  /* option rows (radio + checkbox share styling) */
+  .options{display:flex;flex-direction:column;gap:8px;}
+  .opt{
+    display:flex;align-items:flex-start;gap:12px;
+    border:1px solid var(--line);border-radius:var(--radius-sm);
+    padding:12px 14px;cursor:pointer;transition:border-color .12s,background .12s;
+  }
+  .opt:hover{border-color:var(--line-strong);background:#FAFBFB;}
+  .opt input{margin-top:2px;width:17px;height:17px;accent-color:var(--accent);flex:none;cursor:pointer;}
+  .opt.selected{border-color:var(--accent);background:rgba(91,91,246,.06);}
+  .opt .opt-label{font-size:14.5px;}
+
+  /* ---------- Nav ---------- */
+  .nav{display:flex;justify-content:space-between;align-items:center;margin-top:28px;gap:12px;}
+  .btn{
+    font:inherit;font-weight:600;font-size:15px;cursor:pointer;border-radius:var(--radius-sm);
+    padding:12px 22px;border:1px solid transparent;transition:background .12s,border-color .12s;
+  }
+  .btn-primary{background:var(--accent);color:#fff;}
+  .btn-primary:hover{background:var(--accent-dark);}
+  .btn-ghost{background:transparent;color:var(--ink-soft);border-color:var(--line-strong);}
+  .btn-ghost:hover{background:#F0F2F3;}
+  .btn-ghost[disabled]{opacity:.4;cursor:not-allowed;}
+  .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+
+  .required-note{color:var(--critical);font-size:13px;margin-top:10px;display:none;}
+  .required-note.show{display:block;}
+
+  /* ---------- Intro ---------- */
+  .intro h1{font-size:28px;letter-spacing:-.02em;margin:0 0 12px;line-height:1.15;}
+  .intro p{color:var(--ink-soft);font-size:15.5px;margin:0 0 16px;max-width:60ch;}
+  .intro ol{color:var(--ink-soft);font-size:15px;padding-left:20px;margin:0 0 24px;}
+  .intro ol li{margin-bottom:6px;}
+
+  /* ---------- Results ---------- */
+  .verdict{
+    border-radius:var(--radius);padding:26px 28px;color:#fff;margin-bottom:24px;
+    border:1px solid rgba(0,0,0,.06);
+  }
+  .verdict .band-label{font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;opacity:.9;}
+  .verdict h2{font-size:30px;margin:4px 0 10px;letter-spacing:-.02em;line-height:1.1;}
+  .verdict p{margin:0;font-size:15px;opacity:.95;max-width:62ch;}
+  .v-healthy{background:var(--healthy);}
+  .v-attention{background:var(--attention);}
+  .v-high{background:var(--high);}
+  .v-critical{background:var(--critical);}
+
+  .client-meta{
+    display:flex;flex-wrap:wrap;gap:20px;padding:16px 18px;border:1px solid var(--line);
+    border-radius:var(--radius-sm);margin-bottom:24px;background:var(--card);
+  }
+  .client-meta div{font-size:13px;color:var(--ink-faint);}
+  .client-meta div b{display:block;color:var(--ink);font-size:15px;font-weight:600;margin-top:2px;}
+
+  .section-h{font-size:13px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-faint);margin:32px 0 14px;}
+
+  /* domain breakdown bars */
+  .breakdown{display:flex;flex-direction:column;gap:14px;}
+  .brow{display:grid;grid-template-columns:150px 1fr 64px;gap:14px;align-items:center;}
+  @media (max-width:560px){ .brow{grid-template-columns:110px 1fr 48px;gap:10px;} }
+  .brow .bname{font-size:14px;font-weight:500;}
+  .brow .btrack{height:8px;background:var(--line);border-radius:99px;overflow:hidden;}
+  .brow .bfill{height:100%;border-radius:99px;transition:width .5s ease;}
+  .brow .bval{font-size:13px;color:var(--ink-faint);text-align:right;font-variant-numeric:tabular-nums;}
+
+  .rec-list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:12px;}
+  .rec-list li{
+    padding:14px 16px;border:1px solid var(--line);border-radius:var(--radius-sm);
+    font-size:14.5px;color:var(--ink-soft);background:var(--card);
+  }
+  .rec-list li b{color:var(--ink);font-weight:600;}
+
+  .spm-block{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;margin-top:8px;}
+  .spm-block .spm-head{
+    background:rgba(91,91,246,.06);border-bottom:1px solid var(--line);
+    padding:16px 18px;font-size:14px;color:var(--ink-soft);
+  }
+  .spm-block .spm-head b{color:var(--ink);}
+  .spm-map{list-style:none;margin:0;padding:0;}
+  .spm-map li{padding:16px 18px;border-bottom:1px solid var(--line);}
+  .spm-map li:last-child{border-bottom:none;}
+  .spm-map .issue{font-size:13px;color:var(--ink-faint);}
+  .spm-map .issue b{color:var(--ink);font-weight:600;}
+  .spm-map .benefit{font-size:14.5px;color:var(--ink-soft);margin-top:4px;}
+
+  .cta-row{margin-top:22px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;}
+  .cta-row a.btn-primary{text-decoration:none;display:inline-block;}
+
+  .healthy-note{
+    padding:18px 20px;border:1px dashed var(--line-strong);border-radius:var(--radius-sm);
+    color:var(--ink-soft);font-size:14.5px;background:#fff;
+  }
+
+  .results-actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:32px;padding-top:24px;border-top:1px solid var(--line);}
+
+  /* ---------- Footer ---------- */
+  footer.site{border-top:1px solid var(--line);padding:24px 0;color:var(--ink-faint);font-size:13px;}
+  footer.site .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px;}
+  footer.site a{color:var(--ink-soft);}
+
+  .hidden{display:none !important;}
+
+  @media (prefers-reduced-motion:reduce){
+    *{transition:none !important;}
+  }
+
+  /* ---------- Print ---------- */
+  @media print{
+    header.site,footer.site,.progress,.results-actions,.cta-row{display:none !important;}
+    body{background:#fff;}
+    .card{border:none;box-shadow:none;padding:0;}
+    .verdict{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    .brow .bfill,.spm-block .spm-head,.verdict{ -webkit-print-color-adjust:exact;print-color-adjust:exact;}
+  }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <div class="logo" id="logo"></div>
+    <span class="kicker">Client cleanup assessment</span>
+  </div>
+</header>
+
+<main>
+  <div class="wrap">
+
+    <!-- Progress -->
+    <div class="progress hidden" id="progress">
+      <div class="track"><div class="fill" id="progressFill"></div></div>
+      <div class="meta">
+        <span id="progressStep"></span>
+        <strong id="progressPct"></strong>
+      </div>
+    </div>
+
+    <!-- Step container -->
+    <div id="stepHost"></div>
+
+  </div>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span id="footerContact"></span>
+    <span id="footerDisclaimer"></span>
+  </div>
+</footer>
+
+<script>
+/* =====================================================================
+   ASSESSMENT MODEL
+   Five diagnostic domains, each with a symptom checklist and, where
+   useful, a frequency radio. Weights reflect commercial impact:
+   margin issues (late payment, scope creep, constant chasing) carry
+   the most. Thresholds are percentage based, so editing weights here
+   keeps the banding sensible without touching the logic below.
+
+   Question types: "text", "select", "radio", "checkbox".
+   Only radio/checkbox questions carry weights and feed the score.
+   "cap" on a checkbox limits its maximum contribution.
+===================================================================== */
+
+const SETUP = {
+  id: "setup",
+  eyebrow: "Step 1 of 6",
+  title: "Client details",
+  lead: "Start with who you are reviewing. Only the client name is required.",
+  questions: [
+    { id:"clientName", type:"text", label:"Client name", required:true, placeholder:"e.g. Harbour Trades Pty Ltd" },
+    { id:"industry", type:"select", label:"Industry", options:[
+      "Not specified","Trades and construction","Retail and hospitality","Professional services",
+      "Health and allied health","Property and real estate","Transport and logistics",
+      "Agriculture","Not-for-profit","Other"
+    ]},
+    { id:"revenue", type:"select", label:"Annual revenue (optional)", options:[
+      "Not specified","Under $500k","$500k to $2m","$2m to $10m","Over $10m"
+    ]},
+    { id:"staff", type:"select", label:"Number of employees (optional)", options:[
+      "Not specified","Sole operator","1 to 4","5 to 19","20 to 99","100+"
+    ]}
+  ]
+};
+
+const DOMAINS = [
+  {
+    id:"documents", name:"Documents", eyebrow:"Step 2 of 6",
+    title:"Document collection",
+    lead:"How this client gets records to you, and how much chasing that takes.",
+    questions:[
+      { id:"doc_channels", type:"checkbox", label:"How does this client submit documents?", hint:"Select all that apply. More channels usually means more friction.",
+        cap:5, options:[
+          {label:"Client portal", weight:0},
+          {label:"Secure cloud storage", weight:0},
+          {label:"Email", weight:1},
+          {label:"WhatsApp or text", weight:2},
+          {label:"Paper", weight:3},
+          {label:"Other or ad hoc", weight:1}
+      ]},
+      { id:"doc_chasing", type:"radio", label:"How often do you chase documents from this client?",
+        options:[
+          {label:"Never, they send everything on time", weight:0},
+          {label:"Sometimes", weight:2},
+          {label:"Most periods", weight:4},
+          {label:"Constantly", weight:6}
+      ]}
+    ]
+  },
+  {
+    id:"communication", name:"Communication", eyebrow:"Step 3 of 6",
+    title:"Communication",
+    lead:"How responsive the client is, and how much effort a normal exchange takes.",
+    questions:[
+      { id:"comm_followup", type:"radio", label:"How often do you have to follow up to get a response?",
+        options:[
+          {label:"Rarely, they reply promptly", weight:0},
+          {label:"Sometimes", weight:2},
+          {label:"Often", weight:4},
+          {label:"Every single time", weight:6}
+      ]},
+      { id:"comm_symptoms", type:"checkbox", label:"Which of these apply?", hint:"Select all that apply.",
+        options:[
+          {label:"Slow to respond", weight:2},
+          {label:"Goes quiet near deadlines", weight:3},
+          {label:"Hard to reach or only on one channel", weight:2},
+          {label:"Frequently changes instructions", weight:2}
+      ]}
+    ]
+  },
+  {
+    id:"records", name:"Record quality", eyebrow:"Step 4 of 6",
+    title:"Record quality",
+    lead:"The state of what actually arrives.",
+    questions:[
+      { id:"rec_symptoms", type:"checkbox", label:"What problems do you see in this client's records?", hint:"Select all that apply.",
+        options:[
+          {label:"Missing receipts or source documents", weight:3},
+          {label:"Incomplete records", weight:3},
+          {label:"Duplicate information", weight:2},
+          {label:"Poorly organised", weight:2},
+          {label:"Records arrive late", weight:3}
+      ]}
+    ]
+  },
+  {
+    id:"workflow", name:"Workflow", eyebrow:"Step 5 of 6",
+    title:"Workflow",
+    lead:"How the work moves through your practice for this client.",
+    questions:[
+      { id:"wf_symptoms", type:"checkbox", label:"Which of these describe how you work with this client?", hint:"Select all that apply.",
+        options:[
+          {label:"Manual approvals", weight:2},
+          {label:"Long email chains", weight:2},
+          {label:"No standard onboarding", weight:3},
+          {label:"No document collection process", weight:3},
+          {label:"Ad hoc, nothing repeatable", weight:3}
+      ]}
+    ]
+  },
+  {
+    id:"billing", name:"Billing", eyebrow:"Step 6 of 6",
+    title:"Billing and payments",
+    lead:"Where money and scope create friction.",
+    questions:[
+      { id:"bill_symptoms", type:"checkbox", label:"Which of these apply to billing this client?", hint:"Select all that apply.",
+        options:[
+          {label:"Pays invoices late", weight:4},
+          {label:"Frequent billing disputes", weight:3},
+          {label:"Manual invoicing", weight:2},
+          {label:"Scope creep beyond the engagement", weight:4},
+          {label:"Needs chasing for payment", weight:3}
+      ]}
+    ]
+  }
+];
+
+/* Neutral, vendor-agnostic recommendations shown when a domain is flagged. */
+const RECOMMENDATIONS = {
+  documents:     { head:"Consolidate document collection", body:"Move to a single channel (a portal or shared cloud folder) and set standard submission deadlines, rather than accepting documents across email, paper and messaging." },
+  communication: { head:"Set communication expectations", body:"Agree one primary channel and a response expectation in writing, so follow-ups stop absorbing billable time." },
+  records:       { head:"Introduce a record standard", body:"Provide a source-document checklist and run a pre-lodgement review so gaps surface early rather than at deadline." },
+  workflow:      { head:"Make the process repeatable", body:"Document a standard onboarding and recurring-work process with clear approval points, so the client is not handled ad hoc each period." },
+  billing:       { head:"Tighten billing and scope", body:"Confirm scope against the engagement, automate invoicing, and set payment terms with reminders to reduce late payment and disputes." }
+};
+
+/* Short issue labels used in the SPM mapping, per domain. */
+const ISSUE_SUMMARY = {
+  documents:     "Time lost collecting and chasing documents",
+  communication: "Effort spent following up for responses",
+  records:       "Incomplete or disorganised records",
+  workflow:      "No repeatable process for this client",
+  billing:       "Late payment, disputes or scope creep"
+};
+
+/* =====================================================================
+   ENGINE
+===================================================================== */
+
+const state = { stepIndex: -1, answers: {} }; // -1 = intro
+const host = document.getElementById("stepHost");
+
+function questionMax(q){
+  if(q.type === "radio"){ return Math.max.apply(null, q.options.map(function(o){return o.weight;})); }
+  if(q.type === "checkbox"){
+    const sum = q.options.reduce(function(a,o){return a+o.weight;},0);
+    return q.cap ? Math.min(q.cap, sum) : sum;
+  }
+  return 0;
+}
+function domainMax(d){ return d.questions.reduce(function(a,q){return a+questionMax(q);},0); }
+const TOTAL_MAX = DOMAINS.reduce(function(a,d){return a+domainMax(d);},0);
+
+const BANDS = [
+  { key:"healthy",   label:"Healthy client",   max:0.12, cls:"v-healthy" },
+  { key:"attention", label:"Needs attention",  max:0.32, cls:"v-attention" },
+  { key:"high",      label:"High maintenance", max:0.58, cls:"v-high" },
+  { key:"critical",  label:"Critical",         max:1.01, cls:"v-critical" }
+];
+const DOMAIN_FLAG_THRESHOLD = 0.34;
+
+/* ---- branding ---- */
+function applyBranding(){
+  const r = document.documentElement.style;
+  r.setProperty("--accent", CONFIG.colours.accent);
+  r.setProperty("--accent-dark", CONFIG.colours.accentDark);
+
+  const logo = document.getElementById("logo");
+  if(CONFIG.logoImageUrl){
+    logo.innerHTML = '<img src="'+CONFIG.logoImageUrl+'" alt="'+esc(CONFIG.firmName)+'">';
+  } else {
+    const initials = (CONFIG.logoText || CONFIG.firmName || "F").trim().charAt(0).toUpperCase();
+    logo.innerHTML = '<span class="mark" style="display:flex">'+esc(initials)+'</span><span>'+esc(CONFIG.logoText || CONFIG.firmName)+'</span>';
+  }
+
+  const parts = [];
+  if(CONFIG.contact.email) parts.push('<a href="mailto:'+CONFIG.contact.email+'">'+esc(CONFIG.contact.email)+'</a>');
+  if(CONFIG.contact.phone) parts.push(esc(CONFIG.contact.phone));
+  if(CONFIG.contact.website) parts.push('<a href="'+CONFIG.contact.website+'">'+esc(CONFIG.contact.website)+'</a>');
+  document.getElementById("footerContact").innerHTML = parts.join("&nbsp;&nbsp;·&nbsp;&nbsp;");
+  document.getElementById("footerDisclaimer").textContent = CONFIG.disclaimer;
+  document.title = CONFIG.firmName + " · Client cleanup assessment";
+}
+
+/* ---- helpers ---- */
+function esc(s){ return String(s).replace(/[&<>"]/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]; }); }
+
+function renderIntro(){
+  hideProgress();
+  host.innerHTML =
+    '<div class="card intro">' +
+      '<div class="step-eyebrow">Client review</div>' +
+      '<h1>Assess one client in a few minutes</h1>' +
+      '<p>Work through five areas of the relationship and get a straight verdict on how much admin, margin leakage and workflow friction this client is creating, plus what to do about it.</p>' +
+      '<ol>' +
+        '<li>Answer a short set of questions per area.</li>' +
+        '<li>Get a client health verdict with the reasons behind it.</li>' +
+        '<li>See recommended actions, and where ' + esc(CONFIG.product.name) + ' fits.</li>' +
+      '</ol>' +
+      '<div class="nav" style="justify-content:flex-start;">' +
+        '<button class="btn btn-primary" id="startBtn">Start assessment</button>' +
+      '</div>' +
+    '</div>';
+  document.getElementById("startBtn").onclick = function(){ state.stepIndex = 0; render(); window.scrollTo({top:0}); };
+}
+
+function currentSteps(){ return [SETUP].concat(DOMAINS); }
+
+function renderStep(){
+  showProgress();
+  const steps = currentSteps();
+  const step = steps[state.stepIndex];
+  const body = step.questions.map(function(q){ return renderQuestion(q); }).join("");
+
+  host.innerHTML =
+    '<div class="card">' +
+      '<div class="step-eyebrow">' + esc(step.eyebrow) + '</div>' +
+      '<h1 class="step-title">' + esc(step.title) + '</h1>' +
+      '<p class="step-lead">' + esc(step.lead) + '</p>' +
+      body +
+      '<p class="required-note" id="reqNote">Please enter a client name to continue.</p>' +
+      '<div class="nav">' +
+        '<button class="btn btn-ghost" id="backBtn">Back</button>' +
+        '<button class="btn btn-primary" id="nextBtn">' + (state.stepIndex === steps.length-1 ? "View results" : "Continue") + '</button>' +
+      '</div>' +
+    '</div>';
+
+  wireQuestions(step);
+  document.getElementById("backBtn").onclick = goBack;
+  document.getElementById("nextBtn").onclick = function(){ goNext(step); };
+  updateProgress();
+}
+
+function renderQuestion(q){
+  const val = state.answers[q.id];
+  if(q.type === "text"){
+    return '<div class="field">' +
+      '<label class="q" for="'+q.id+'">'+esc(q.label)+(q.required?' *':'')+'</label>' +
+      '<input class="text-input" id="'+q.id+'" type="text" placeholder="'+esc(q.placeholder||'')+'" value="'+(val?esc(val):'')+'">' +
+    '</div>';
+  }
+  if(q.type === "select"){
+    const opts = q.options.map(function(o){ return '<option value="'+esc(o)+'" '+(val===o?'selected':'')+'>'+esc(o)+'</option>'; }).join("");
+    return '<div class="field">' +
+      '<label class="q" for="'+q.id+'">'+esc(q.label)+'</label>' +
+      '<select id="'+q.id+'">'+opts+'</select>' +
+    '</div>';
+  }
+  const chosen = q.type==="checkbox" ? (Array.isArray(val)?val:[]) : val;
+  const rows = q.options.map(function(o,i){
+    const isSel = q.type==="checkbox" ? chosen.indexOf(i)>=0 : chosen===i;
+    return '<label class="opt '+(isSel?'selected':'')+'" data-q="'+q.id+'" data-i="'+i+'">' +
+      '<input type="'+q.type+'" name="'+q.id+'" '+(isSel?'checked':'')+'>' +
+      '<span class="opt-label">'+esc(o.label)+'</span>' +
+    '</label>';
+  }).join("");
+  return '<div class="field">' +
+    '<label class="q">'+esc(q.label)+'</label>' +
+    (q.hint?'<p class="hint">'+esc(q.hint)+'</p>':'') +
+    '<div class="options" data-group="'+q.id+'">'+rows+'</div>' +
+  '</div>';
+}
+
+function wireQuestions(step){
+  step.questions.forEach(function(q){
+    if(q.type==="text"){
+      const el=document.getElementById(q.id);
+      el.addEventListener("input", function(e){ state.answers[q.id]=e.target.value.trim(); });
+    } else if(q.type==="select"){
+      const el=document.getElementById(q.id);
+      state.answers[q.id] = state.answers[q.id] || el.value;
+      el.addEventListener("change", function(e){ state.answers[q.id]=e.target.value; });
+    } else {
+      host.querySelectorAll('.opt[data-q="'+q.id+'"]').forEach(function(opt){
+        opt.addEventListener("click", function(){
+          const i = parseInt(opt.dataset.i,10);
+          if(q.type==="radio"){
+            state.answers[q.id]=i;
+          } else {
+            const arr = Array.isArray(state.answers[q.id])?state.answers[q.id]:[];
+            const at = arr.indexOf(i);
+            if(at>=0) arr.splice(at,1); else arr.push(i);
+            state.answers[q.id]=arr;
+          }
+          host.querySelectorAll('.opt[data-q="'+q.id+'"]').forEach(function(o){
+            const oi=parseInt(o.dataset.i,10);
+            const sel = q.type==="checkbox" ? (state.answers[q.id]||[]).indexOf(oi)>=0 : state.answers[q.id]===oi;
+            o.classList.toggle("selected",sel);
+            o.querySelector("input").checked = sel;
+          });
+        });
+      });
+    }
+  });
+}
+
+function goBack(){
+  if(state.stepIndex===0){ state.stepIndex=-1; renderIntro(); }
+  else { state.stepIndex--; renderStep(); }
+  window.scrollTo({top:0});
+}
+
+function goNext(step){
+  if(step.id==="setup" && !state.answers.clientName){
+    document.getElementById("reqNote").classList.add("show");
+    document.getElementById("clientName").focus();
+    return;
+  }
+  const steps = currentSteps();
+  if(state.stepIndex===steps.length-1){ renderResults(); }
+  else { state.stepIndex++; renderStep(); }
+  window.scrollTo({top:0});
+}
+
+/* ---- progress ---- */
+function showProgress(){ document.getElementById("progress").classList.remove("hidden"); }
+function hideProgress(){ document.getElementById("progress").classList.add("hidden"); }
+function updateProgress(){
+  const total = currentSteps().length;
+  const pct = Math.round((state.stepIndex / total) * 100);
+  document.getElementById("progressFill").style.width = pct + "%";
+  document.getElementById("progressStep").textContent = "Step " + (state.stepIndex+1) + " of " + total;
+  document.getElementById("progressPct").textContent = pct + "% complete";
+}
+
+/* ---- scoring ---- */
+function scoreDomain(d){
+  let s = 0;
+  d.questions.forEach(function(q){
+    const v = state.answers[q.id];
+    if(q.type==="radio" && typeof v==="number" && q.options[v]){ s += q.options[v].weight; }
+    if(q.type==="checkbox" && Array.isArray(v)){
+      let qs = v.reduce(function(a,i){ return a + (q.options[i]?q.options[i].weight:0); },0);
+      if(q.cap) qs = Math.min(q.cap, qs);
+      s += qs;
+    }
+  });
+  return s;
+}
+
+function selectedLabels(d){
+  const out=[];
+  d.questions.forEach(function(q){
+    const v=state.answers[q.id];
+    if(q.type==="radio" && typeof v==="number" && q.options[v] && q.options[v].weight>0){ out.push(q.options[v].label.toLowerCase()); }
+    if(q.type==="checkbox" && Array.isArray(v)){ v.forEach(function(i){ if(q.options[i] && q.options[i].weight>0) out.push(q.options[i].label.toLowerCase()); }); }
+  });
+  return out;
+}
+
+function computeResult(){
+  const domainScores = DOMAINS.map(function(d){
+    const raw = scoreDomain(d);
+    const max = domainMax(d);
+    return { d:d, raw:raw, max:max, pct: max? raw/max : 0 };
+  });
+  const total = domainScores.reduce(function(a,x){return a+x.raw;},0);
+  const totalPct = TOTAL_MAX ? total/TOTAL_MAX : 0;
+  let band = BANDS[BANDS.length-1];
+  for(let i=0;i<BANDS.length;i++){ if(totalPct < BANDS[i].max){ band=BANDS[i]; break; } }
+  const flagged = domainScores.filter(function(x){return x.pct >= DOMAIN_FLAG_THRESHOLD;})
+                              .sort(function(a,b){return b.pct-a.pct;});
+  return { domainScores:domainScores, total:total, totalPct:totalPct, band:band, flagged:flagged };
+}
+
+function joinList(a){
+  if(a.length===1) return a[0];
+  if(a.length===2) return a[0]+" and "+a[1];
+  return a.slice(0,-1).join(", ")+" and "+a[a.length-1];
+}
+
+function buildExplanation(res){
+  const cn = state.answers.clientName || "This client";
+  if(res.band.key==="healthy"){
+    return esc(cn)+" is running cleanly. The answers show little admin overhead, few record problems and no significant billing friction. There is no pressing need to change how this client is handled.";
+  }
+  const drivers = res.flagged.slice(0,3).map(function(f){
+    const labels = selectedLabels(f.d).slice(0,2);
+    return labels.length ? f.d.name.toLowerCase()+" ("+labels.join(", ")+")" : f.d.name.toLowerCase();
+  });
+  const driverText = drivers.length ? "driven mainly by "+joinList(drivers) : "spread across several areas";
+
+  let ctx = "";
+  const bill = res.flagged.find(function(f){return f.d.id==="billing";});
+  const larger = ["$2m to $10m","Over $10m"].indexOf(state.answers.revenue)>=0 || ["20 to 99","100+"].indexOf(state.answers.staff)>=0;
+  if(bill && larger){ ctx = " At this client's size, scope and payment issues carry a larger dollar impact and are worth addressing first."; }
+
+  return esc(cn)+" scores as "+res.band.label.toLowerCase()+", "+driverText+"."+ctx;
+}
+
+/* ---- results view ---- */
+function renderResults(){
+  hideProgress();
+  const res = computeResult();
+  const cn = state.answers.clientName || "Client";
+
+  const meta = [];
+  meta.push('<div>Client<b>'+esc(cn)+'</b></div>');
+  if(state.answers.industry && state.answers.industry!=="Not specified") meta.push('<div>Industry<b>'+esc(state.answers.industry)+'</b></div>');
+  if(state.answers.revenue && state.answers.revenue!=="Not specified") meta.push('<div>Revenue<b>'+esc(state.answers.revenue)+'</b></div>');
+  if(state.answers.staff && state.answers.staff!=="Not specified") meta.push('<div>Employees<b>'+esc(state.answers.staff)+'</b></div>');
+
+  const bars = res.domainScores.map(function(x){
+    const p = Math.round(x.pct*100);
+    const colour = p>=58?"var(--critical)": p>=34?"var(--high)": p>=15?"var(--attention)":"var(--healthy)";
+    return '<div class="brow">' +
+      '<span class="bname">'+esc(x.d.name)+'</span>' +
+      '<span class="btrack"><span class="bfill" style="width:'+p+'%;background:'+colour+'"></span></span>' +
+      '<span class="bval">'+x.raw+'/'+x.max+'</span>' +
+    '</div>';
+  }).join("");
+
+  let recSection;
+  if(res.flagged.length){
+    const items = res.flagged.map(function(f){
+      const r = RECOMMENDATIONS[f.d.id];
+      return '<li><b>'+esc(r.head)+'.</b> '+esc(r.body)+'</li>';
+    }).join("");
+    recSection = '<div class="section-h">Recommended actions</div><ul class="rec-list">'+items+'</ul>';
+  } else {
+    recSection = '<div class="section-h">Recommended actions</div>' +
+      '<div class="healthy-note">No priority actions. Keep the current arrangement and revisit at the next review.</div>';
+  }
+
+  let spmSection;
+  if(res.flagged.length){
+    const rows = res.flagged.map(function(f){
+      return '<li>' +
+        '<div class="issue">Issue: <b>'+esc(ISSUE_SUMMARY[f.d.id])+'</b></div>' +
+        '<div class="benefit">'+esc(CONFIG.product.name)+': '+esc(CONFIG.product.benefits[f.d.id])+'</div>' +
+      '</li>';
+    }).join("");
+    spmSection =
+      '<div class="section-h">Where '+esc(CONFIG.product.name)+' helps</div>' +
+      '<div class="spm-block">' +
+        '<div class="spm-head">Based on the issues above, here is where <b>'+esc(CONFIG.product.name)+'</b> would reduce the load for this client.</div>' +
+        '<ul class="spm-map">'+rows+'</ul>' +
+      '</div>' +
+      '<div class="cta-row">' +
+        '<a class="btn btn-primary" href="'+esc(CONFIG.cta.url)+'" target="_blank" rel="noopener">'+esc(CONFIG.cta.text)+'</a>' +
+      '</div>';
+  } else {
+    spmSection =
+      '<div class="section-h">Where '+esc(CONFIG.product.name)+' helps</div>' +
+      '<div class="healthy-note">This client is not creating problems worth solving with new tooling right now. '+esc(CONFIG.product.name)+' is most useful for the clients that scored higher in this assessment.</div>';
+  }
+
+  host.innerHTML =
+    '<div class="card">' +
+      '<div class="step-eyebrow">Assessment result</div>' +
+      '<div class="verdict '+res.band.cls+'">' +
+        '<div class="band-label">Client health</div>' +
+        '<h2>'+esc(res.band.label)+'</h2>' +
+        '<p>'+buildExplanation(res)+'</p>' +
+      '</div>' +
+      '<div class="client-meta">'+meta.join("")+'</div>' +
+      '<div class="section-h">Where the friction sits</div>' +
+      '<div class="breakdown">'+bars+'</div>' +
+      recSection +
+      spmSection +
+      '<div class="results-actions">' +
+        '<button class="btn btn-ghost" id="printBtn">Print or save as PDF</button>' +
+        '<button class="btn btn-primary" id="restartBtn">Assess another client</button>' +
+      '</div>' +
+    '</div>';
+
+  document.getElementById("printBtn").onclick = function(){ window.print(); };
+  document.getElementById("restartBtn").onclick = function(){
+    state.answers={}; state.stepIndex=-1; renderIntro(); window.scrollTo({top:0});
+  };
+}
+
+/* ---- master render ---- */
+function render(){
+  if(state.stepIndex===-1) renderIntro();
+  else renderStep();
+}
+
+/* ---- boot ---- */
+applyBranding();
+renderIntro();
+</script>
+</body>
+</html>

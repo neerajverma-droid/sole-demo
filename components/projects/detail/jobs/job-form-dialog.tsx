@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { PrefixInput } from "@/components/ui/prefix-input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Field } from "@/components/documents/field";
@@ -120,16 +121,18 @@ export function JobFormDialog({
           </DialogHeader>
 
           <div className="mt-5 space-y-4">
-            <Field label="Job name" htmlFor="job-name" required error={issueFor("name")}>
-              <Input
-                id="job-name"
-                value={draft.name}
-                onChange={(event) => set("name", event.target.value)}
-                placeholder="Enter job name"
-                aria-invalid={!!issueFor("name")}
-                className={cn(issueFor("name") && "border-destructive focus-visible:ring-destructive")}
-              />
-            </Field>
+            <div data-usertour="project-job-name">
+              <Field label="Job name" htmlFor="job-name" required error={issueFor("name")}>
+                <Input
+                  id="job-name"
+                  value={draft.name}
+                  onChange={(event) => set("name", event.target.value)}
+                  placeholder="Enter job name"
+                  aria-invalid={!!issueFor("name")}
+                  className={cn(issueFor("name") && "border-destructive focus-visible:ring-destructive")}
+                />
+              </Field>
+            </div>
 
             <Field
               label="Job code"
@@ -168,7 +171,10 @@ export function JobFormDialog({
               />
             </Field>
 
-            <div className="space-y-4 rounded-md border border-border bg-muted/30 p-3">
+            <div
+              className="space-y-4 rounded-md border border-border bg-muted/30 p-3"
+              data-usertour="project-job-budget-box"
+            >
               <label className="flex cursor-pointer items-start justify-between gap-4">
                 <span>
                   <span className="block text-sm font-medium">Budget allocated</span>
@@ -190,23 +196,16 @@ export function JobFormDialog({
 
               {draft.budgetEnabled && (
                 <Field label="Job budget" htmlFor="job-budget" error={issueFor("budget")}>
-                  <div className="relative">
-                    <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-                      {activeCurrencySymbol()}
-                    </span>
-                    <Input
-                      id="job-budget"
-                      inputMode="decimal"
-                      value={draft.budget}
-                      onChange={(event) => set("budget", event.target.value.replace(/[^\d.]/g, ""))}
-                      placeholder="10,000"
-                      aria-invalid={!!issueFor("budget")}
-                      className={cn(
-                        "pl-7 tabular",
-                        issueFor("budget") && "border-destructive focus-visible:ring-destructive",
-                      )}
-                    />
-                  </div>
+                  <PrefixInput
+                    prefix={activeCurrencySymbol()}
+                    id="job-budget"
+                    inputMode="decimal"
+                    value={draft.budget}
+                    onChange={(event) => set("budget", event.target.value.replace(/[^\d.]/g, ""))}
+                    placeholder="10,000"
+                    aria-invalid={!!issueFor("budget")}
+                    className="tabular"
+                  />
                 </Field>
               )}
             </div>
@@ -216,7 +215,7 @@ export function JobFormDialog({
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
               Cancel
             </Button>
-            <Button type="submit" disabled={saving}>
+            <Button type="submit" disabled={saving} data-usertour="project-job-submit">
               {saving && <Loader2 className="animate-spin" />}
               {editing ? "Update job" : "Create job"}
             </Button>

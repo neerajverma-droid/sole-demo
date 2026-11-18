@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/table";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CategorySearchSelect } from "@/components/transactions/category-search-select";
+import { SuggestedDocumentChip } from "@/components/transactions/suggested-document-chip";
 import {
   ContactPersonSelect,
   type ContactPick,
@@ -62,9 +63,6 @@ import { useCountryContext } from "@/hooks/use-country-context";
 const HEADER_GRADIENT =
   "bg-[linear-gradient(110deg,hsl(var(--primary)),#8B7CFF,hsl(var(--primary)))]";
 
-/** How close to the bottom (px) the list asks for its next 25. */
-const LOAD_MORE_THRESHOLD = 150;
-
 type Category = { id: string; name: string };
 
 /**
@@ -77,7 +75,10 @@ type Category = { id: string; name: string };
  * for All". Approve one row, Approve All, or Reject All — each validated as
  * sole-webapp validates it, and none touching the server until it passes.
  *
- * Rows load 25 at a time as the list scrolls, as there.
+ * Only unmatched lines the model actually had a suggestion for show up here —
+ * a suggested category or a document to match — not every unmatched line, so
+ * Approve All and Reject All only ever touch rows that genuinely came from the
+ * model.
  */
 export function ReviewSuggestionsDialog({
   open,
@@ -87,19 +88,8 @@ export function ReviewSuggestionsDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const suggestions = useSuggestions(open);
-  const rows = React.useMemo(() => {
-    const seen = new Set<string>();
-    const all: Transaction[] = [];
-    for (const page of suggestions.data?.pages ?? []) {
-      for (const row of page.rows) {
-        if (seen.has(row.id)) continue;
-        seen.add(row.id);
-        all.push(row);
-      }
-    }
-    return all;
-  }, [suggestions.data]);
-  const total = suggestions.data?.pages[0]?.total ?? 0;
+  // Only the unmatched lines the model actually had something to say about.
+  const rows = suggestions.data ?? [];
   // "GST" in AU and NZ, "VAT" in ZA, or the business's own name for it.
   const { country } = useCountryContext();
   const taxName = documentTax(country).word;
@@ -121,6 +111,8 @@ export function ReviewSuggestionsDialog({
   const [categories, setCategories] = React.useState<Record<string, Category>>({});
   const [contacts, setContacts] = React.useState<Record<string, ContactPick>>({});
   const [gst, setGst] = React.useState<Record<string, boolean>>({});
+  // Rows where the model's invoice / expense / asset pairing was set aside.
+  const [dismissed, setDismissed] = React.useState<Record<string, boolean>>({});
 
   // Closing forgets the edits, as sole-webapp resets on close.
   React.useEffect(() => {
@@ -128,7 +120,24 @@ export function ReviewSuggestionsDialog({
     setCategories({});
     setContacts({});
     setGst({});
+    setDismissed({});
   }, [open]);
+
+  /** Who the row is with: picked here, else the client / supplier the model knew. */
+  const contactOf = (row: Transaction): ContactPick | null => {
+    const picked = contacts[row.id];
+    if (picked) return picked;
+    return row.suggestedClient
+      ? { clientId: row.suggestedClient.id, contactId: "", name: row.suggestedClient.name }
+      : null;
+  };
+
+  /**
+   * The invoice, expense or asset Approve would match the row to — the model's
+   * first answer — until a category is chosen instead.
+   */
+  const suggestedDocumentOf = (row: Transaction) =>
+    dismissed[row.id] || categories[row.id] ? null : (row.suggestedDocument ?? null);
 
   const categoryOf = (row: Transaction): Category | null => {
     const picked = categories[row.id];
@@ -141,7 +150,8 @@ export function ReviewSuggestionsDialog({
   const gstOf = (row: Transaction) => gst[row.id] ?? row.gst;
 
   const approvalRow = (row: Transaction): ApprovalRow => {
-    const contact = contacts[row.id];
+    const contact = contactOf(row);
+    const suggestedDocument = suggestedDocumentOf(row);
     return {
       transactionId: row.id,
       categoryId: categoryOf(row)?.id ?? "",
@@ -149,6 +159,9 @@ export function ReviewSuggestionsDialog({
       gstIncluded: gstOf(row),
       contactPersonId: contact?.contactId ?? "",
       contactName: contact?.name ?? "",
+      document: suggestedDocument
+        ? { type: suggestedDocument.type, id: suggestedDocument.id }
+        : null,
     };
   };
 
@@ -186,15 +199,6 @@ export function ReviewSuggestionsDialog({
     approveAll.mutate(input);
   };
 
-  const onScroll = (event: React.UIEvent<HTMLDivElement>) => {
-    const box = event.currentTarget;
-    const nearBottom =
-      box.scrollHeight - box.scrollTop - box.clientHeight < LOAD_MORE_THRESHOLD;
-    if (nearBottom && suggestions.hasNextPage && !suggestions.isFetchingNextPage) {
-      void suggestions.fetchNextPage();
-    }
-  };
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -214,7 +218,7 @@ export function ReviewSuggestionsDialog({
             <div className="min-w-0 space-y-1">
               <DialogTitle className="text-base text-white">Review suggestions</DialogTitle>
               <DialogDescription className="text-white/80">
-                Review and approve AI suggested sub-categories for your transactions
+                Review and approve AI suggested matches and sub-categories for your transactions
               </DialogDescription>
             </div>
           </div>
@@ -238,7 +242,7 @@ export function ReviewSuggestionsDialog({
         </div>
 
         <TooltipProvider delayDuration={200}>
-          <div className="min-h-0 flex-1 overflow-y-auto p-5" onScroll={onScroll}>
+          <div className="min-h-0 flex-1 overflow-y-auto p-5">
             {suggestions.isPending ? (
               <div className="space-y-2" aria-hidden>
                 {[0, 1, 2, 3, 4, 5].map((key) => (
@@ -263,7 +267,7 @@ export function ReviewSuggestionsDialog({
                       <TableHead>Type</TableHead>
                       <TableHead className="text-right">Amount</TableHead>
                       <TableHead>Client / Supplier</TableHead>
-                      <TableHead>Suggested category</TableHead>
+                      <TableHead>Suggested match / category</TableHead>
                       <TableHead className="text-center">{taxName}</TableHead>
                       <TableHead className="text-right">Approve</TableHead>
                     </TableRow>
@@ -271,6 +275,7 @@ export function ReviewSuggestionsDialog({
                   <TableBody>
                     {rows.map((row) => {
                       const category = categoryOf(row);
+                      const suggestedDocument = suggestedDocumentOf(row);
                       const approving =
                         approveOne.isPending &&
                         approveOne.variables?.transactionId === row.id;
@@ -294,25 +299,34 @@ export function ReviewSuggestionsDialog({
                             <ContactPersonSelect
                               compact
                               type={row.type === "Credit" ? "Client" : "Supplier"}
-                              contactId={contacts[row.id]?.contactId ?? ""}
-                              name={contacts[row.id]?.name ?? ""}
+                              contactId={contactOf(row)?.contactId ?? ""}
+                              name={contactOf(row)?.name ?? ""}
                               onSelect={(pick) =>
                                 setContacts((current) => ({ ...current, [row.id]: pick }))
                               }
                             />
                           </TableCell>
                           <TableCell className="w-[230px] min-w-[230px]">
-                            <CategorySearchSelect
-                              groups={groups[row.type] as CategoryGroup[]}
-                              loading={accountsQuery.isLoading}
-                              value={category?.id ?? ""}
-                              label={category?.name ?? ""}
-                              ariaLabel={`Category for ${row.reference}`}
-                              ai={row.aiSuggestions}
-                              onSelect={(picked) =>
-                                setCategories((current) => ({ ...current, [row.id]: picked }))
-                              }
-                            />
+                            {suggestedDocument ? (
+                              <SuggestedDocumentChip
+                                suggestion={suggestedDocument}
+                                onChooseCategory={() =>
+                                  setDismissed((current) => ({ ...current, [row.id]: true }))
+                                }
+                              />
+                            ) : (
+                              <CategorySearchSelect
+                                groups={groups[row.type] as CategoryGroup[]}
+                                loading={accountsQuery.isLoading}
+                                value={category?.id ?? ""}
+                                label={category?.name ?? ""}
+                                ariaLabel={`Category for ${row.reference}`}
+                                ai={row.aiSuggestions}
+                                onSelect={(picked) =>
+                                  setCategories((current) => ({ ...current, [row.id]: picked }))
+                                }
+                              />
+                            )}
                           </TableCell>
                           <TableCell className="text-center">
                             <Switch
@@ -344,14 +358,6 @@ export function ReviewSuggestionsDialog({
                         </TableRow>
                       );
                     })}
-                    {suggestions.isFetchingNextPage &&
-                      [0, 1, 2].map((key) => (
-                        <TableRow key={`more-${key}`} aria-hidden>
-                          <TableCell colSpan={8}>
-                            <div className="h-7 animate-pulse rounded bg-muted" />
-                          </TableCell>
-                        </TableRow>
-                      ))}
                   </TableBody>
                 </Table>
               </div>
@@ -361,16 +367,9 @@ export function ReviewSuggestionsDialog({
 
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-border p-4">
           <p className="text-xs text-muted-foreground tabular">
-            Showing {rows.length} of {total} suggestions
-            {rows.length > 0 && (
-              <span className="ml-1.5">
-                ·{" "}
-                {suggestions.isFetchingNextPage
-                  ? "Loading more..."
-                  : suggestions.hasNextPage
-                    ? "Scroll down to load more"
-                    : "All suggestions loaded"}
-              </span>
+            {rows.length} {rows.length === 1 ? "suggestion" : "suggestions"} to review
+            {suggestions.isFetching && !suggestions.isPending && (
+              <span className="ml-1.5">· Refreshing...</span>
             )}
           </p>
           <div className="flex items-center gap-2">

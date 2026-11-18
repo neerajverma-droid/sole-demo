@@ -27,6 +27,8 @@ const {
   sendAssetInsuranceReportApi,
   newAssetInsurance,
   fetchAssetDisposal,
+  hasDisposal,
+  suggestedDisposalSaleValue,
   recordAssetDisposalApi,
   deleteAssetDisposalApi,
   fetchAssetRegistry,
@@ -109,6 +111,22 @@ describe("insurance", () => {
     expect(created.id).toBe("9");
   });
 
+  it("sends comma-formatted coverage and premium as plain numbers", async () => {
+    apiMock.post.mockResolvedValue({ data: { success: true, data: API_POLICY } });
+    const record = {
+      ...newAssetInsurance(),
+      coverageAmount: "50,000",
+      premiumAmount: "1,200.50",
+    };
+
+    await createAssetInsuranceApi("42", record);
+
+    expect(apiMock.post.mock.calls[0][1]).toMatchObject({
+      coverage_amount: "50000",
+      premium_amount: "1200.5",
+    });
+  });
+
   it("throws the server's message when a create fails", async () => {
     apiMock.post.mockResolvedValue({ data: { success: false, message: "End date before start" } });
     await expect(createAssetInsuranceApi("42", newAssetInsurance())).rejects.toThrow(
@@ -162,15 +180,43 @@ describe("disposal", () => {
       disposedDate: "2026-03-31",
       saleValue: "1500",
       suggestedSaleValue: "1800.00",
+      insuranceEndDate: "",
     });
     expect(apiMock.get).toHaveBeenCalledWith(apiRoutes.asset.disposal.byAsset + "42");
   });
 
-  it("is null for a row with no disposed date — the date is the disposal", async () => {
+  it("keeps the insurance suggestion when nothing's been disposed — the date is the disposal", async () => {
     apiMock.get.mockResolvedValue({
-      data: { success: true, data: { disposed_date: null, suggested_sale_value: 1800 } },
+      data: {
+        success: true,
+        data: {
+          disposed_date: null,
+          sale_value: null,
+          suggested_sale_value: 1800,
+          insurance_end_date: "2026-12-31",
+        },
+      },
     });
-    expect(await fetchAssetDisposal("42")).toBeNull();
+    const record = await fetchAssetDisposal("42");
+    expect(record).toEqual({
+      disposedDate: "",
+      saleValue: "",
+      suggestedSaleValue: "1800",
+      insuranceEndDate: "2026-12-31",
+    });
+    expect(hasDisposal(record)).toBe(false);
+    expect(hasDisposal({ disposedDate: "2026-03-31" })).toBe(true);
+    expect(hasDisposal(null)).toBe(false);
+  });
+
+  it("suggests a sale value from the server's insurance cover, then the first policy on file", () => {
+    expect(
+      suggestedDisposalSaleValue({ suggestedSaleValue: "1800" }, [{ coverageAmount: "900" }]),
+    ).toBe("1800");
+    expect(
+      suggestedDisposalSaleValue({ suggestedSaleValue: "" }, [{ coverageAmount: "900" }]),
+    ).toBe("900");
+    expect(suggestedDisposalSaleValue(null, [])).toBe("");
   });
 
   it("is null on a 404, and rethrows anything else", async () => {
@@ -192,6 +238,14 @@ describe("disposal", () => {
       disposed_date: "2026-03-31",
       sale_value: null,
     });
+  });
+
+  it("sends a comma-formatted sale value as a plain number", async () => {
+    apiMock.post.mockResolvedValue({ data: { success: true } });
+
+    await recordAssetDisposalApi("42", { disposedDate: "2026-03-31", saleValue: "1,250.50" });
+
+    expect(apiMock.post.mock.calls[0][1]).toMatchObject({ sale_value: "1250.5" });
   });
 
   it("throws the server's message when recording fails", async () => {
@@ -292,10 +346,10 @@ describe("depreciation — save failure and delete", () => {
     );
   });
 
-  it("deletes by the depreciation record's id, not the asset's", async () => {
+  it("deletes by the asset's id — the endpoint finds the asset's active record itself", async () => {
     apiMock.delete.mockResolvedValue({ data: { success: true } });
-    await deleteAssetDepreciationApi("5");
-    expect(apiMock.delete).toHaveBeenCalledWith(apiRoutes.asset.depreciation.delete + "5");
+    await deleteAssetDepreciationApi("42");
+    expect(apiMock.delete).toHaveBeenCalledWith(apiRoutes.asset.depreciation.delete + "42");
 
     apiMock.delete.mockResolvedValue({ data: { success: false, message: "Nope" } });
     await expect(deleteAssetDepreciationApi("5")).rejects.toThrow("Nope");
@@ -378,6 +432,32 @@ describe("extractAssetApi", () => {
       category: "Tools",
       gst: true,
     });
+  });
+
+  it("only takes a real YYYY-MM-DD purchase date and warranty expiry", async () => {
+    apiMock.post
+      .mockResolvedValueOnce({ data: { success: true, url: "u", key: "k" } })
+      .mockResolvedValueOnce({
+        data: {
+          success: true,
+          extractedData: { date_of_purchase: "15/03/2026", warranty_expiry: "2026-02-30" },
+        },
+      });
+    const unreadable = await extractAssetApi(file, "2026-10-08");
+    expect(unreadable.fields.purchaseDate).toBe("2026-10-08");
+    expect(unreadable.fields.warrantyExpiry).toBe("");
+
+    apiMock.post
+      .mockResolvedValueOnce({ data: { success: true, url: "u", key: "k" } })
+      .mockResolvedValueOnce({
+        data: {
+          success: true,
+          extractedData: { date_of_purchase: "2026-03-15", warranty_expiry: "2028-03-15" },
+        },
+      });
+    const valid = await extractAssetApi(file, "2026-10-08");
+    expect(valid.fields.purchaseDate).toBe("2026-03-15");
+    expect(valid.fields.warrantyExpiry).toBe("2028-03-15");
   });
 
   it("leaves a zero or unreadable price blank rather than '0'", async () => {

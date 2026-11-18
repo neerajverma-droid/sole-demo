@@ -12,6 +12,7 @@ const {
   AUDIT_COLUMNS,
   auditTrailSource,
   cellAlignment,
+  columnLabel,
   fetchTabularReport,
   formatReportCell,
   isBlankCell,
@@ -32,7 +33,10 @@ const {
   gstTreatmentTone,
   isHeaderOnlyRow,
   RECORD_TYPE_OF,
+  transactionListingConfig,
 } = await import("@/lib/report-configs");
+
+const { FALLBACK_COUNTRY_CONTEXT } = await import("@/lib/country-context");
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -573,5 +577,55 @@ describe("audit trail", () => {
     for (const column of auditTrailConfig.columns) {
       expect(Object.keys(result.rows[0].cells)).toContain(column.key);
     }
+  });
+});
+
+describe("columnLabel — jurisdiction headings", () => {
+  const abnColumn = () => customerSupplierConfig("Contacts").columns.find((c) => c.key === "Contact ABN")!;
+  const nz = { ...FALLBACK_COUNTRY_CONTEXT, iso2: "NZ", labels: { business_id: "NZBN", tax_id: "GST number" } };
+
+  it("heads the business-number column NZBN for a New Zealand business", () => {
+    expect(columnLabel(abnColumn(), nz)).toBe("NZBN");
+  });
+
+  it("keeps ABN for an Australian business", () => {
+    expect(columnLabel(abnColumn(), FALLBACK_COUNTRY_CONTEXT)).toBe("ABN");
+  });
+
+  it("leaves every other column on its own label", () => {
+    const name = customerSupplierConfig("Contacts").columns.find((c) => c.key === "Contact Mail")!;
+    expect(columnLabel(name, nz)).toBe("Email");
+    expect(columnLabel({ key: "Transactions" }, nz)).toBe("Transactions");
+  });
+});
+
+describe("transactionListingConfig — the flat listing, as the original Reports page had it", () => {
+  const column = (key: string) => transactionListingConfig.columns.find((c) => c.key === key)!;
+
+  it("lists every column getTransactionReport sends, one row per transaction", () => {
+    expect(transactionListingConfig.columns.map((c) => c.key).sort()).toEqual(
+      [
+        "Amount (EX GST)",
+        "Amount (INC. GST)",
+        "Category Name",
+        "Client/Supplier",
+        "Description",
+        "Reconcile Date",
+        "Transaction Date",
+        "Transaction Name",
+        "Type",
+      ].sort(),
+    );
+    expect(transactionListingConfig.reportTypeId).toBe("4");
+  });
+
+  it("reads the backend's DD/MM/YYYY dates rather than showing a dash", () => {
+    expect(formatReportCell("10/08/2026", column("Transaction Date"))).not.toBe("—");
+    expect(formatReportCell("10/08/2026", column("Transaction Date"))).toContain("2026");
+  });
+
+  it("formats the amounts as money and names the tax for the country", () => {
+    expect(formatReportCell("1150", column("Amount (INC. GST)"))).toContain("1,150.00");
+    expect(columnLabel(column("Amount (EX GST)"), FALLBACK_COUNTRY_CONTEXT)).toBe("Amount (ex GST)");
   });
 });

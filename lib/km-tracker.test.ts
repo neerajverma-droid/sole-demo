@@ -365,7 +365,7 @@ describe("kmTripFigures", () => {
   it("splits only the expenses marked split by the business share", () => {
     const figures = kmTripFigures(
       draft({
-        isSplit: true,
+        tripType: "split",
         businessPercentage: "25",
         tollAmount: "20",
         splitToll: false,
@@ -386,6 +386,35 @@ describe("kmTripFigures", () => {
     expect(kmTripFigures(draft({ businessPercentage: "10" }), "logbook", 0).businessPercentage).toBe(
       100,
     );
+  });
+
+  it("records a personal trip's costs but claims none of them", () => {
+    const figures = kmTripFigures(
+      draft({
+        tripType: "personal",
+        tollAmount: "20",
+        splitToll: false,
+        parkingAmount: "10",
+        splitParking: false,
+        fuelCost: "50",
+        splitFuel: false,
+        otherExpenses: "30",
+        splitOther: true,
+      }),
+      "logbook",
+      0,
+    );
+    expect(figures.businessPercentage).toBe(0);
+    expect(figures.deductibleKm).toBe(0);
+    expect(figures.personalKm).toBe(24);
+    expect(figures.expensesTotal).toBe(110);
+    expect(figures.estimatedDeduction).toBe(0);
+  });
+
+  it("claims no distance on a personal trip under a statutory rate", () => {
+    const figures = kmTripFigures(draft({ tripType: "personal" }), "cents_per_kilometre", 0.88);
+    expect(figures.estimatedDeduction).toBe(0);
+    expect(figures.deductibleKm).toBe(0);
   });
 });
 
@@ -444,13 +473,20 @@ describe("kmTripIssues", () => {
     expect(issues[0].message).toMatch(/expense/);
   });
 
-  it("bounds a split share to 0–100", () => {
-    expect(keys(kmTripIssues(draft({ isSplit: true, businessPercentage: "101" }), logbook, AU))).toContain(
-      "businessPercentage",
-    );
-    expect(keys(kmTripIssues(draft({ isSplit: true, businessPercentage: "0" }), logbook, AU))).not.toContain(
-      "businessPercentage",
-    );
+  it("needs a split share strictly between 0 and 100", () => {
+    for (const businessPercentage of ["101", "0", "100", "-5", "", "abc"]) {
+      expect(
+        keys(kmTripIssues(draft({ tripType: "split", businessPercentage }), logbook, AU)),
+      ).toContain("businessPercentage");
+    }
+    expect(
+      keys(kmTripIssues(draft({ tripType: "split", businessPercentage: "40" }), logbook, AU)),
+    ).not.toContain("businessPercentage");
+  });
+
+  it("doesn't ask a personal trip for a cost", () => {
+    const personal = draft({ tripType: "personal", tollAmount: "", parkingAmount: "", fuelCost: "" });
+    expect(kmTripIssues(personal, logbook, AU)).toEqual([]);
   });
 });
 
@@ -503,17 +539,35 @@ describe("kmTripPayload", () => {
     expect(linked).toMatchObject({ client_id: "42", project_id: "3", job_id: "5", start_latitude: -33.8 });
   });
 
-  it("sends a split trip as split, and a fully-personal split as personal", () => {
+  it("sends a split trip as split", () => {
     const context = { method: "logbook" as const, ratePerKm: 0 };
-    expect(kmTripPayload(draft({ isSplit: true, businessPercentage: "60" }), context, AU)).toMatchObject({
+    expect(kmTripPayload(draft({ tripType: "split", businessPercentage: "60" }), context, AU)).toMatchObject({
       trip_type: "split",
       business_percentage: 60,
       personal_percentage: 40,
       deductible_km: 14.4,
     });
-    expect(
-      kmTripPayload(draft({ isSplit: true, businessPercentage: "0" }), context, AU).trip_type,
-    ).toBe("personal");
+  });
+
+  it("sends a personal trip with no share or deduction, its costs as typed, and no billing", () => {
+    const context = { method: "logbook" as const, ratePerKm: 0 };
+    const payload = kmTripPayload(
+      draft({ tripType: "personal", tollAmount: "20", parkingAmount: "10", fuelCost: "5", isBillable: true }),
+      context,
+      AU,
+    );
+    expect(payload).toMatchObject({
+      trip_type: "personal",
+      business_percentage: 0,
+      personal_percentage: 100,
+      deductible_km: 0,
+      estimated_deduction: 0,
+      toll_amount: 20,
+      parking_amount: 10,
+      fuel_cost: 5,
+      other_expenses: 0,
+      is_billable: false,
+    });
   });
 
   it("never carries invoice fields, so a duplicate isn't linked to the original's invoice", () => {
@@ -578,12 +632,24 @@ describe("trip writes", () => {
   });
 });
 
+describe("kmTripDraftFromTrip trip type", () => {
+  it("keeps a personal trip personal, even when it was saved at 100%", () => {
+    expect(kmTripDraftFromTrip(trip({ tripType: "personal", businessPercentage: 0 })).tripType).toBe("personal");
+    expect(kmTripDraftFromTrip(trip({ tripType: "personal", businessPercentage: 100 })).tripType).toBe("personal");
+  });
+
+  it("reads the share for everything else", () => {
+    expect(kmTripDraftFromTrip(trip({ tripType: "business", businessPercentage: 100 })).tripType).toBe("business");
+    expect(kmTripDraftFromTrip(trip({ tripType: "business", businessPercentage: 40 })).tripType).toBe("split");
+    expect(kmTripDraftFromTrip(trip({ tripType: "business", businessPercentage: 0 })).tripType).toBe("personal");
+  });
+});
+
 describe("kmTripDraftFromTrip", () => {
   it("round-trips a saved trip into the form", () => {
     const form = kmTripDraftFromTrip(trip());
     expect(form).toMatchObject({
-      isSplit: true,
-      tripType: "business",
+      tripType: "split",
       businessPercentage: "75",
       distanceKm: "160.5",
       tollAmount: "10",
@@ -1184,7 +1250,7 @@ describe("kmTripRate and the New Zealand preview", () => {
     const figures = kmTripFigures(draft({ fuelCost: "30" }), "kilometre_rate", rate);
     expect(figures.totalAmount).toBeCloseTo(38.8);
     expect(figures.estimatedDeduction).toBeCloseTo(38.8);
-    const split = kmTripFigures(draft({ isSplit: true, businessPercentage: "50", parkingAmount: "" }), "kilometre_rate", rate);
+    const split = kmTripFigures(draft({ tripType: "split", businessPercentage: "50", parkingAmount: "" }), "kilometre_rate", rate);
     expect(split.estimatedDeduction).toBeCloseTo(12 * 1.2);
   });
 

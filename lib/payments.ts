@@ -550,6 +550,10 @@ type NexxtapApiTransaction = {
   total?: string | number | null;
   status?: string | null;
   settled?: boolean | null;
+  /** 0 is a payment, 20 a refund. */
+  transaction_type?: number | null;
+  /** The terminal gave money back to the cardholder (transaction_type 20). */
+  is_refund?: boolean | null;
 };
 
 /** Pagination envelope shared by both endpoints */
@@ -678,9 +682,14 @@ function titleCaseStatus(raw?: string | null): string {
  * what the customer paid on top of the sale. The net is the charge less that
  * surcharge (sale plus any tip) — the same sum sole-ocr's summary uses, so the
  * rows add up to the Net amount card.
+ *
+ * A refund arrives on the same feed as a payment. It's shown as a debit with a
+ * negative net, so it reads as money going back to the cardholder rather than
+ * as another payment received.
  */
 function mapNexxtapTransaction(t: NexxtapApiTransaction): Payment {
   const settled = Boolean(t.settled);
+  const refund = Boolean(t.is_refund) || Number(t.transaction_type) === 20;
   const amount = Number(t.amount || 0);
   const surcharge = Number(t.surcharge || 0);
   const total = Number(t.total || 0) || amount + surcharge + Number(t.gratuity || 0);
@@ -688,6 +697,28 @@ function mapNexxtapTransaction(t: NexxtapApiTransaction): Payment {
   const description =
     [t.card_label, t.display_message].filter(Boolean).join(" — ") ||
     `Tap to pay${t.module_id ? ` · ${t.module_id}` : ""}`;
+
+  if (refund) {
+    return {
+      id: String(t.id),
+      date: t.date || "",
+      category: settled ? "Refund Issued" : "Refund Declined",
+      categoryType: "expense",
+      invoiceNo,
+      invoiceNumber: invoiceNo !== "N/A" ? invoiceNo : null,
+      description: [t.card_label, "Refund"].filter(Boolean).join(" — "),
+      type: "debit",
+      amount: total,
+      processingFee: 0,
+      fee: 0,
+      netAmount: settled ? -total : 0,
+      status: settled ? "Refunded" : titleCaseStatus(t.status),
+      currency: t.currency || "AUD",
+      transactionId: t.transaction_id || undefined,
+      originalAmount: amount,
+      gatewayId: "nexttap",
+    };
+  }
 
   return {
     id: String(t.id),
@@ -855,12 +886,17 @@ export async function fetchStripeStats(): Promise<StripeStats | null> {
  * Totals returned alongside `/payments/nexxtap/transactions`. They cover every
  * capture, not just the page on screen, and exclude declined ones. Shares the
  * Stripe stats field names (`total_credits`, `processing_fees`, `net_amount`)
- * because sole-ocr shaped it for the same table.
+ * because sole-ocr shaped it for the same table. Approved refunds are kept out
+ * of `total_credits`, totalled in `total_refunds` and taken off `net_amount`.
  */
 export type NexxtapSummary = StripeStats & {
   /** Every capture, declined included. */
   count?: number | null;
+  /** Approved payments (refunds excluded). */
   settled_count?: number | null;
+  /** Approved refunds. */
+  refund_count?: number | null;
+  total_refunds?: number | null;
   gratuity?: number | null;
 };
 

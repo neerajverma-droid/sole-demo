@@ -7,6 +7,7 @@ import {
   fetchAssetDisposal,
   recordAssetDisposalApi,
 } from "@/lib/assets";
+import { invalidateAssetQueries } from "@/hooks/use-assets-query";
 
 /** The disposal record for one asset, or `null` while it's still held. */
 export function useAssetDisposalQuery(assetId: string | undefined) {
@@ -21,8 +22,10 @@ function useInvalidateDisposal(assetId: string) {
   const queryClient = useQueryClient();
   return () => {
     queryClient.invalidateQueries({ queryKey: ["asset-disposal", assetId] });
-    queryClient.invalidateQueries({ queryKey: ["asset", assetId] });
-    queryClient.invalidateQueries({ queryKey: ["assets"] });
+    // Disposal and lost/stolen share one backend row.
+    queryClient.invalidateQueries({ queryKey: ["asset-status", assetId] });
+    // Disposing stops depreciation, so the schedule and report move too.
+    void invalidateAssetQueries(queryClient);
   };
 }
 

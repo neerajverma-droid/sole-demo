@@ -2,7 +2,14 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { CreditCard, Loader2, Percent, Receipt, Wallet } from "lucide-react";
+import {
+  CreditCard,
+  Loader2,
+  Percent,
+  Receipt,
+  Undo2,
+  Wallet,
+} from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -99,7 +106,10 @@ function TransactionsSkeleton() {
 function StatsGrid({ payments }: { payments: Payment[] }) {
   const stats = paymentStats(payments);
   return (
-    <dl className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <dl
+      className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
+      data-usertour="payments-stats"
+    >
       <Stat
         icon={<Wallet aria-hidden />}
         tone="primary"
@@ -172,7 +182,10 @@ function StripeStatsGrid({
     total > 0 ? `${((fees / total) * 100).toFixed(2)}% of total` : "0.00% of total";
 
   return (
-    <dl className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <dl
+      className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
+      data-usertour="payments-stats"
+    >
       <Stat
         icon={<Wallet aria-hidden />}
         tone="primary"
@@ -214,7 +227,8 @@ function StripeStatsGrid({
  *
  * Declined taps are left out of the money figures (same as the backend). The
  * fee card is the cardholder's surcharge, not a cost to the merchant, so it's
- * labelled as such rather than as a processing fee.
+ * labelled as such rather than as a processing fee. Refunds get their own card
+ * and come off the net, never added to Total payments.
  */
 function NexxtapStatsGrid({
   payments,
@@ -226,8 +240,10 @@ function NexxtapStatsGrid({
   totalCount: number;
 }) {
   const approved = payments.filter((p) => p.categoryType !== "expense");
+  const refunds = payments.filter((p) => p.status === "Refunded");
   const localTotal = approved.reduce((sum, p) => sum + p.amount, 0);
   const localFees = approved.reduce((sum, p) => sum + p.processingFee, 0);
+  const localRefunds = refunds.reduce((sum, p) => sum + p.amount, 0);
 
   const total =
     summary?.total_credits != null ? Number(summary.total_credits) : localTotal;
@@ -235,8 +251,14 @@ function NexxtapStatsGrid({
     summary?.processing_fees != null
       ? Number(summary.processing_fees)
       : localFees;
+  const refunded =
+    summary?.total_refunds != null ? Number(summary.total_refunds) : localRefunds;
+  const refundCount =
+    summary?.refund_count != null ? Number(summary.refund_count) : refunds.length;
   const net =
-    summary?.net_amount != null ? Number(summary.net_amount) : total - surcharges;
+    summary?.net_amount != null
+      ? Number(summary.net_amount)
+      : total - surcharges - refunded;
   const count = summary?.count != null ? Number(summary.count) : totalCount;
   const approvedCount =
     summary?.settled_count != null
@@ -244,7 +266,10 @@ function NexxtapStatsGrid({
       : approved.length;
 
   return (
-    <dl className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <dl
+      className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5"
+      data-usertour="payments-stats"
+    >
       <Stat
         icon={<Wallet aria-hidden />}
         tone="primary"
@@ -252,6 +277,14 @@ function NexxtapStatsGrid({
         value={total}
         format={invoiceMoney}
         meta="Approved taps, all pages"
+      />
+      <Stat
+        icon={<Undo2 aria-hidden />}
+        tone="danger"
+        label="Refunds"
+        value={refunded}
+        format={invoiceMoney}
+        meta={`${refundCount} refunded`}
       />
       <Stat
         icon={<Percent aria-hidden />}
@@ -266,7 +299,7 @@ function NexxtapStatsGrid({
         tone="accent"
         label="Transactions"
         value={count}
-        meta={`${approvedCount} approved`}
+        meta={`${approvedCount} approved · ${refundCount} refunded`}
       />
       <Stat
         icon={<CreditCard aria-hidden />}
@@ -274,7 +307,7 @@ function NexxtapStatsGrid({
         label="Net amount"
         value={net}
         format={invoiceMoney}
-        meta="Total less surcharges"
+        meta="Total less surcharges and refunds"
       />
     </dl>
   );
@@ -303,16 +336,18 @@ function TransactionsTable({
 }) {
   if (!loading && payments.length === 0) {
     return (
-      <Empty>
-        <EmptyMedia>
-          <Receipt aria-hidden />
-        </EmptyMedia>
-        <div className="space-y-1">
-          <EmptyTitle>{emptyTitle}</EmptyTitle>
-          <EmptyDescription>{emptyDescription}</EmptyDescription>
-        </div>
-        {emptyAction && <EmptyActions>{emptyAction}</EmptyActions>}
-      </Empty>
+      <div data-usertour="payments-empty">
+        <Empty>
+          <EmptyMedia>
+            <Receipt aria-hidden />
+          </EmptyMedia>
+          <div className="space-y-1">
+            <EmptyTitle>{emptyTitle}</EmptyTitle>
+            <EmptyDescription>{emptyDescription}</EmptyDescription>
+          </div>
+          {emptyAction && <EmptyActions>{emptyAction}</EmptyActions>}
+        </Empty>
+      </div>
     );
   }
 
@@ -430,15 +465,12 @@ function TransactionsTable({
 export function SolePayTransactions({
   payments,
   loading,
-  empty = false,
   pagination,
   onPageChange,
   onPageSizeChange,
 }: {
   payments: Payment[];
   loading: boolean;
-  /** Loaded, and this gateway has never taken a payment. */
-  empty?: boolean;
   pagination: GatewayPagination;
   onPageChange: (page: number) => void;
   onPageSizeChange: (size: number) => void;
@@ -458,9 +490,10 @@ export function SolePayTransactions({
   const pageInfo = toPageInfo(pagination, payments.length);
 
   return (
-    <div className="space-y-4">
-      {/* Four zeroes say nothing the empty state below doesn't. */}
-      {!empty && <StatsGrid payments={payments} />}
+    <div className="space-y-4" data-usertour="payments-tab-solepay">
+      {/* The totals show even before the first payment — zeroes and all —
+          with the empty state beneath, the way Invoices lays it out. */}
+      <StatsGrid payments={payments} />
 
       <TransactionsTable
         payments={payments}
@@ -504,7 +537,6 @@ export function StripeTransactions({
   payments,
   stats,
   loading,
-  empty = false,
   pagination,
   onPageChange,
   onPageSizeChange,
@@ -512,8 +544,6 @@ export function StripeTransactions({
   payments: Payment[];
   stats: StripeStats | null;
   loading: boolean;
-  /** Loaded, and this gateway has never taken a payment. */
-  empty?: boolean;
   pagination: GatewayPagination;
   onPageChange: (page: number) => void;
   onPageSizeChange: (size: number) => void;
@@ -533,10 +563,10 @@ export function StripeTransactions({
   const pageInfo = toPageInfo(pagination, payments.length);
 
   return (
-    <div className="space-y-4">
-      {/* Backend stats when available, frontend fallback otherwise — and
-          none at all before the first payment, where they'd only be zeroes. */}
-      {!empty && <StripeStatsGrid payments={payments} stats={stats} />}
+    <div className="space-y-4" data-usertour="payments-tab-stripe">
+      {/* Backend stats when available, frontend fallback otherwise. Shown
+          before the first payment too, with the empty state beneath. */}
+      <StripeStatsGrid payments={payments} stats={stats} />
 
       <TransactionsTable
         payments={payments}
@@ -583,7 +613,6 @@ export function NexxtapTransactions({
   summary,
   merchantId,
   loading,
-  empty = false,
   pagination,
   onPageChange,
   onPageSizeChange,
@@ -592,8 +621,6 @@ export function NexxtapTransactions({
   summary: NexxtapSummary | null;
   merchantId: string | null;
   loading: boolean;
-  /** Loaded, and this gateway has never taken a payment. */
-  empty?: boolean;
   pagination: GatewayPagination;
   onPageChange: (page: number) => void;
   onPageSizeChange: (size: number) => void;
@@ -613,7 +640,7 @@ export function NexxtapTransactions({
   const pageInfo = toPageInfo(pagination, payments.length);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" data-usertour="payments-tab-nexttap">
       {merchantId && (
         <p className="text-sm text-muted-foreground">
           Merchant ID{" "}
@@ -623,13 +650,11 @@ export function NexxtapTransactions({
         </p>
       )}
 
-      {!empty && (
-        <NexxtapStatsGrid
-          payments={payments}
-          summary={summary}
-          totalCount={pagination.total}
-        />
-      )}
+      <NexxtapStatsGrid
+        payments={payments}
+        summary={summary}
+        totalCount={pagination.total}
+      />
 
       <TransactionsTable
         payments={payments}

@@ -3,6 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 
+import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -23,9 +24,22 @@ import {
  * `beforeunload` covers the browser's own exit, which JavaScript can't intercept
  * beyond asking the browser to prompt.
  */
-export function useUnsavedChanges(dirty: boolean) {
+export function useUnsavedChanges(
+  dirty: boolean,
+  options: {
+    /**
+     * Offers a third choice, "Save as draft", for a form that can keep its work
+     * as a draft. Called with what the person was leaving for; it should save
+     * and, once that has worked, call `proceed`. If it can't save — the form
+     * has errors to fix first — it just returns, and the person stays put.
+     */
+    onSaveDraft?: (proceed: () => void) => void | Promise<void>;
+  } = {},
+) {
+  const { onSaveDraft } = options;
   const router = useRouter();
   const [pending, setPending] = React.useState<null | (() => void)>(null);
+  const [savingDraft, setSavingDraft] = React.useState(false);
 
   // The browser's own dialog for a tab close or reload. Its wording isn't ours to
   // choose — every browser shows its own — but without this the work vanishes.
@@ -61,7 +75,7 @@ export function useUnsavedChanges(dirty: boolean) {
   const dialog = (
     <AlertDialog
       open={pending !== null}
-      onOpenChange={(open) => !open && setPending(null)}
+      onOpenChange={(open) => !open && !savingDraft && setPending(null)}
     >
       <AlertDialogContent>
         <AlertDialogHeader>
@@ -72,8 +86,31 @@ export function useUnsavedChanges(dirty: boolean) {
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>Keep editing</AlertDialogCancel>
+          <AlertDialogCancel disabled={savingDraft}>Keep editing</AlertDialogCancel>
+          {/* A plain Button rather than an AlertDialogAction: that would close
+              the dialog the instant it's pressed, before the draft is saved. */}
+          {onSaveDraft && (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={savingDraft}
+              onClick={async () => {
+                const action = pending;
+                if (!action) return;
+                setSavingDraft(true);
+                try {
+                  await onSaveDraft(action);
+                } finally {
+                  setSavingDraft(false);
+                  setPending(null);
+                }
+              }}
+            >
+              {savingDraft ? "Saving draft…" : "Save as draft"}
+            </Button>
+          )}
           <AlertDialogAction
+            disabled={savingDraft}
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             onClick={() => {
               const action = pending;

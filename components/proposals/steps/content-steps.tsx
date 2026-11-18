@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Field } from "@/components/documents/field";
+import { EmailAttachmentsField } from "@/components/proposals/email-attachments-field";
 import { RichTextEditor } from "@/components/proposals/rich-text-editor";
 import {
   StepFooter,
@@ -21,7 +22,9 @@ import {
   ToggleCard,
   useTouched,
 } from "@/components/proposals/steps/step-parts";
+import { SUBJECT_MAX } from "@/lib/proposal-templates";
 import {
+  DEFAULT_EMAIL_SUBJECT,
   EMAIL_PATTERN,
   termsIssues,
   thankYouIssues,
@@ -70,6 +73,7 @@ export function TermsStep({
   saving,
   mergeValues,
   editorKey,
+  templatePicker,
 }: {
   terms: TermsData;
   onChange: (patch: Partial<TermsData>) => void;
@@ -77,6 +81,8 @@ export function TermsStep({
   saving: boolean;
   mergeValues: MergeValues;
   editorKey: string;
+  /** The "Template" dropdown that fills the terms from a saved template. */
+  templatePicker?: React.ReactNode;
 }) {
   const { show, submit } = useTouched();
   const issues = termsIssues(terms);
@@ -92,6 +98,7 @@ export function TermsStep({
         title="Terms & Sign"
         description="Add the agreement terms and choose whether the client signature is required."
       />
+      {templatePicker}
       <Field
         label="Title"
         htmlFor="terms_title"
@@ -140,7 +147,7 @@ export function TermsStep({
           />
         </Field>
       )}
-      <StepFooter saving={saving} nextLabel="Notification" onSave={save} />
+      <StepFooter saving={saving} nextLabel="Thank You" onSave={save} />
     </section>
   );
 }
@@ -154,6 +161,9 @@ export function NotificationStep({
   clientEmail,
   mergeValues,
   editorKey,
+  templatePicker,
+  submitLabel = "Save",
+  finishBlockedBy = [],
 }: {
   notification: NotificationData;
   onChange: (patch: Partial<NotificationData>) => void;
@@ -163,6 +173,12 @@ export function NotificationStep({
   clientEmail?: string;
   mergeValues: MergeValues;
   editorKey: string;
+  /** The "Template" dropdown — the builder's system and saved proposal emails. */
+  templatePicker?: React.ReactNode;
+  /** The final button — "Save & finish", or "Save Template" when building a template. */
+  submitLabel?: string;
+  /** Required steps still to complete; the final button stays disabled until there are none. */
+  finishBlockedBy?: readonly string[];
 }) {
   const [cc, setCc] = React.useState("");
   const [ccError, setCcError] = React.useState("");
@@ -265,6 +281,18 @@ export function NotificationStep({
               </ul>
             )}
 
+            {templatePicker}
+
+            <Field label="Subject">
+              <Input
+                value={notification.subject}
+                maxLength={SUBJECT_MAX}
+                placeholder={DEFAULT_EMAIL_SUBJECT}
+                className="bg-background"
+                onChange={(event) => onChange({ subject: event.target.value })}
+              />
+            </Field>
+
             <RichTextEditor
               key={editorKey}
               initialValue={notification.email_body}
@@ -272,11 +300,24 @@ export function NotificationStep({
               minHeight={300}
               onChange={(html) => onChange({ email_body: html })}
             />
+
+            <Field label="Attachments">
+              <EmailAttachmentsField
+                value={notification.attachments ?? []}
+                disabled={saving}
+                onChange={(attachments) => onChange({ attachments })}
+              />
+            </Field>
           </div>
         )}
       </ToggleCard>
 
-      <StepFooter saving={saving} nextLabel="Thank You" onSave={onSave} />
+      {finishBlockedBy.length > 0 && (
+        <p className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning" role="status">
+          Complete the required steps first: {finishBlockedBy.join(", ")}.
+        </p>
+      )}
+      <StepFooter saving={saving} disabled={finishBlockedBy.length > 0} nextLabel={submitLabel} onSave={onSave} />
     </section>
   );
 }
@@ -286,11 +327,14 @@ export function ThankYouStep({
   onChange,
   onSave,
   saving,
+  templatePicker,
 }: {
   data: ThankYouData;
   onChange: (patch: Partial<ThankYouData>) => void;
   onSave: () => void;
   saving: boolean;
+  /** The "Template" dropdown that fills this screen from a saved template. */
+  templatePicker?: React.ReactNode;
 }) {
   const { show, submit } = useTouched();
   const issues = thankYouIssues(data);
@@ -306,6 +350,7 @@ export function ThankYouStep({
         title="Thank You"
         description="Configure the screen shown after the client accepts the proposal."
       />
+      {templatePicker}
       <Field label="Title" htmlFor="thank_you_title" required error={show("title") ? issues.title : undefined}>
         <Input
           id="thank_you_title"
@@ -353,7 +398,7 @@ export function ThankYouStep({
           />
         </Field>
       </div>
-      <StepFooter saving={saving} nextLabel="Save" onSave={save} />
+      <StepFooter saving={saving} nextLabel="Notification" onSave={save} />
     </section>
   );
 }

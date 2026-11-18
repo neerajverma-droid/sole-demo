@@ -15,6 +15,9 @@ import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
 import { normaliseCurrency, type DocumentCurrency } from "@/lib/invoices";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
+import { ndisNumberError } from "@/lib/settings";
 
 type ApiInvoiceContact = {
   contact_id: string | number;
@@ -226,6 +229,13 @@ export async function createInvoiceClientApi(values: {
     throw new Error("The client saved but the server returned no id.");
   }
 
+  track(EVENTS.CONTACT_CREATED, {
+    contact_type: "Client",
+    business_type: null,
+    contact_name: values.name.trim() || null,
+    contact_email: values.email.trim() || null,
+  });
+
   const created = data.contacts?.[0];
   const contactId = created?.contact_id ?? created?.id;
 
@@ -261,6 +271,27 @@ export function ndisClientIssue(
   return details.participantName
     ? `${details.participantName} has no NDIS number. Add it to their contact record before claiming.`
     : "This client's primary contact has no NDIS number.";
+}
+
+/**
+ * Everything that can stop a claim being raised for the selected participant:
+ * no NDIS number on file (`ndisClientIssue`), or a number on file that isn't a
+ * valid nine-digit NDIS number — one saved before the format was checked, which
+ * the NDIA would reject. Both are fixed in the same place, the participant's
+ * NDIS details dialog, which opens with the saved number filled in.
+ */
+export function ndisClaimIssue(
+  details: ClientNdisDetails | undefined,
+  clientId: string | null,
+): string | undefined {
+  const missing = ndisClientIssue(details, clientId);
+  if (missing) return missing;
+  if (!clientId || !details || details.clientId !== clientId) return undefined;
+
+  const formatProblem = ndisNumberError(details.participantNumber);
+  if (!formatProblem) return undefined;
+  const who = details.participantName || "This participant";
+  return `${who}'s NDIS number "${details.participantNumber}" isn't valid. ${formatProblem} Fix it before claiming.`;
 }
 
 /* ------------------------------------------------------------------ *

@@ -11,8 +11,6 @@
  * is always something that can be shown to a person as-is.
  */
 
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { apiPost, apiGet, type ApiResponse } from "@/lib/api/client";
 import { ensureDeviceId } from "@/lib/api/device";
 import { getAuthTenantSlug, PLATFORM } from "@/lib/api/env";
@@ -25,6 +23,7 @@ import {
   setSession,
 } from "@/lib/api/session";
 import type { AuthUser } from "@/lib/api/types";
+import type { SpmReferralPayload } from "@/lib/spm-referral";
 
 export type { AuthUser };
 
@@ -71,27 +70,6 @@ export type SessionResult =
   | { ok: false; message: string };
 
 /* ------------------------------------------------------------------ *
- * The top of the signup funnel
- * ------------------------------------------------------------------ */
-
-/**
- * Someone on the register screen has submitted a valid address.
- *
- * Not "the signup screen rendered" — someone who lands on it and leaves has
- * not started anything. This fires on the first real attempt to create an
- * account, password or code, which is the first point at which there is a
- * signup to convert.
- *
- * The old app's equivalent step was `setup_business_profile_created`, which
- * also fires from the sidebar and the business-profile page. Signup
- * conversion there read about 1% until that was found; the real figure was
- * 33%. Measuring at one named call is what stops that happening again.
- */
-export function trackSignupInitiated(): void {
-  track(EVENTS.SIGNUP_INITIATED, { method: "email" });
-}
-
-/* ------------------------------------------------------------------ *
  * Codes
  * ------------------------------------------------------------------ */
 
@@ -107,11 +85,22 @@ export type RequestOtpParams = {
    */
   coupon_code?: string;
   ref_code?: string;
+  /** A partner link's ?partner=&ref= (lib/partner-attribution). */
+  attribution_partner?: string;
+  attribution_code?: string;
+  /** Where the new account's business starts (ISO 3166-1 alpha-2). A hint: the backend checks it and falls back to Australia. */
+  country_iso2?: string;
   accountant_email?: string;
   has_accountant_email?: number;
   /** The name given on the "new" step, split via `splitFullName`. */
   first_name?: string;
   last_name?: string | null;
+  /**
+   * An accountant's invite, if this browser arrived through one. Parked on the
+   * code and recorded once it's redeemed; the backend verifies it, so nothing
+   * here is trusted for attribution.
+   */
+  spm_referral?: SpmReferralPayload;
 };
 
 export type RequestOtpResult =
@@ -154,8 +143,6 @@ export async function requestOtp(
     };
   }
 
-  track(EVENTS.SIGNUP_OTP_REQUESTED, { purpose: params.purpose });
-
   return {
     ok: true,
     resendAfter: Number(result.data?.resend_after) || RESEND_COOLDOWN_SECONDS,
@@ -166,24 +153,9 @@ export async function requestOtp(
  * Redeem a typed code. On success the response carries the same `data.user`
  * shape login does, so the session is persisted through the identical path.
  */
-/**
- * Which screen is redeeming the code.
- *
- * One endpoint serves three different moments — finishing a signup, clearing a
- * two-step challenge, and confirming an address — and they are three different
- * funnels. Without this the two-step codes would be counted as signup
- * verifications and inflate signup conversion, which is the same shape of
- * mistake that had the old app reading 1% where the truth was 33%.
- *
- * Defaulted rather than required because the main auth screen is the common
- * case and the other two are the ones that have to say so.
- */
-export type OtpContext = "auth" | "two_factor" | "verify_email";
-
 export async function verifyOtp(
   email: string,
   code: string,
-  context: OtpContext = "auth",
 ): Promise<SessionResult> {
   const device_id = await ensureDeviceId();
   if (!device_id) return { ok: false, message: DEVICE_FAILURE };
@@ -210,19 +182,6 @@ export async function verifyOtp(
 
   setSession(result.data?.user);
   const isNewAccount = Boolean(result.data?.is_new_account);
-
-  if (context === "two_factor") {
-    track(EVENTS.TWO_FACTOR_VERIFIED);
-    track(EVENTS.SIGNIN_COMPLETED, { method: "two_factor" });
-  } else {
-    track(EVENTS.SIGNUP_OTP_VERIFIED, {
-      context,
-      is_new_account: isNewAccount,
-    });
-    // An existing account redeeming a code has signed in, not signed up. Both
-    // are true of the same call, and a funnel needs them apart.
-    if (!isNewAccount) track(EVENTS.SIGNIN_COMPLETED, { method: "otp" });
-  }
 
   return {
     ok: true,
@@ -262,7 +221,6 @@ export async function verifyEmailLink(
   }
 
   setSession(result.data?.user);
-  if (result.data?.user) track(EVENTS.SIGNIN_COMPLETED, { method: "verify_link" });
 
   return { ok: true, user: result.data?.user ?? null, isNewAccount: false };
 }
@@ -345,7 +303,6 @@ export async function signInWithPassword(
   }
 
   setSession(result.data?.user);
-  track(EVENTS.SIGNIN_COMPLETED, { method: "password" });
   return { ok: true, user: result.data?.user ?? null };
 }
 
@@ -375,6 +332,9 @@ export async function signUpWithPassword(
   extras: {
     coupon_code?: string;
     ref_code?: string;
+    attribution_partner?: string;
+    attribution_code?: string;
+    country_iso2?: string;
     accountant_email?: string;
     has_accountant_email?: number;
     first_name?: string;
@@ -413,7 +373,6 @@ export async function signUpWithPassword(
   }
   
   setSession(result.data?.user);
-  track(EVENTS.SIGNUP_PASSWORD_SUBMITTED);
   return { ok: true, user: result.data?.user ?? null };
 }
 
@@ -592,7 +551,10 @@ export async function signOut(): Promise<void> {
   }
 }
 
-/** Re-send the verification code for an address that hasn't confirmed itself. */
+/**
+ * Email a verification link to an address that hasn't confirmed itself — the
+ * default way to verify; a code (`requestOtp`) is the alternative.
+ */
 export async function resendVerification(email: string): Promise<AuthResult> {
   const result = await apiPost(apiRoutes.auth.resendVerification, {
     email: email.trim(),
@@ -604,7 +566,7 @@ export async function resendVerification(email: string): Promise<AuthResult> {
         ok: false,
         message: messageOf(
           result,
-          "We couldn't resend the code. Please try again.",
+          "We couldn't resend the link. Please try again.",
         ),
       };
 }

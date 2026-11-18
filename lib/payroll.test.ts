@@ -24,6 +24,7 @@ const {
   mapMicrokeeperConnection,
   mapPayrollSeats,
   payrollEnabled,
+  payrollLocked,
   payrollErrorCode,
   seatLimitReached,
   seatRecurringTotal,
@@ -84,6 +85,21 @@ describe("payrollEnabled / seatLimitReached", () => {
     expect(seatLimitReached({ ...active, activeEmployees: 5, availableSeats: 0 })).toBe(true);
     // Not "full" when payroll isn't on at all — that's a different block.
     expect(seatLimitReached(NO_PAYROLL_SEATS)).toBe(false);
+  });
+});
+
+describe("payrollLocked", () => {
+  it("locks payroll that was never enabled, or was cancelled", () => {
+    expect(payrollLocked(NO_PAYROLL_SEATS)).toBe(true);
+    expect(payrollLocked({ ...NO_PAYROLL_SEATS, status: "CANCELED" })).toBe(true);
+  });
+
+  it("leaves active, overdue and paused payroll open, and waits for an answer", () => {
+    // Overdue and paused have banners on the overview that explain them.
+    for (const status of ["ACTIVE", "PAST_DUE", "FROZEN"] as const) {
+      expect(payrollLocked({ ...NO_PAYROLL_SEATS, status })).toBe(false);
+    }
+    expect(payrollLocked(undefined)).toBe(false);
   });
 });
 

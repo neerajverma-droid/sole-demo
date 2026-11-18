@@ -48,14 +48,15 @@ export function FirstActionCards({
           <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground/60 transition-all group-hover:translate-x-0.5 group-hover:text-primary" />
         </button>
       ))}
-
-      <button
-        type="button"
-        onClick={onSkip}
-        className="text-sm font-medium text-muted-foreground transition-colors hover:text-primary"
-      >
-        I&apos;ll look around first
-      </button>
+      <div className="flex w-full justify-end">
+        <button
+          type="button"
+          onClick={onSkip}
+          className="text-sm font-medium text-muted-foreground transition-colors hover:text-primary"
+        >
+          I&apos;ll look around first
+        </button>
+      </div>
     </div>
   );
 }

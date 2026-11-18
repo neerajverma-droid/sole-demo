@@ -45,6 +45,7 @@ export function NexxtapBankScreen() {
         <FormSection
           icon={Landmark}
           title="Settlement bank account"
+          tourId="nexttap-bank"
           description="Where NextTap pays the takings."
           headerClassName={NEXXTAP_SECTION_HEADER}
           className="space-y-4 p-4 sm:p-6"

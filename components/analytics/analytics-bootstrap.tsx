@@ -1,20 +1,17 @@
 "use client";
 
 import * as React from "react";
-import { usePathname } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 
 import { useSession } from "@/components/auth/session-provider";
 import {
   identify,
   initAnalytics,
-  normalisePath,
   resetAnalytics,
   setBusinessContext,
-  track,
 } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
-import { derivePlan } from "@/lib/analytics";
-import { useBusinessesStore } from "@/stores/businesses";
+import { fetchIndustries } from "@/lib/industries";
+import { activeBusiness, useBusinessesStore } from "@/stores/businesses";
 import { useSubscriptionStore } from "@/stores/subscription";
 
 /**
@@ -28,27 +25,32 @@ import { useSubscriptionStore } from "@/stores/subscription";
  * wrote to, so it identified nobody for the life of that integration.
  */
 
-/**
- * `/reports/profit-loss` → `"profit-loss"`. Anything else → null.
- *
- * Deliberately only the immediate child of `/reports`: a drill-down deeper
- * inside one report is still that report being read, and splitting it would
- * make the ten reports look like thirty.
- */
-export function reportFromPath(path: string): string | null {
-  const segments = path.split("/").filter(Boolean);
-  if (segments[0] !== "reports" || segments.length < 2) return null;
-  return segments[1] ?? null;
-}
-
 export function AnalyticsBootstrap() {
   const { user, status } = useSession();
-  const pathname = usePathname();
   const businessId = useBusinessesStore((state) => state.activeId);
+  const businessName = useBusinessesStore(
+    (state) => activeBusiness(state)?.name ?? null,
+  );
+  const totalBusinesses = useBusinessesStore(
+    (state) => state.businesses.length,
+  );
+  const industryId = useBusinessesStore(
+    (state) => activeBusiness(state)?.industryId ?? null,
+  );
+  const { data: industries } = useQuery({
+    queryKey: ["industries"],
+    queryFn: fetchIndustries,
+    staleTime: 5 * 60_000,
+    enabled: status === "authenticated" && industryId != null,
+  });
+  const industry =
+    industryId == null
+      ? null
+      : (industries?.find((entry) => entry.id === String(industryId))?.name ??
+        null);
   // `TopBar` fetches this on every authenticated page via
   // `useSubscriptionQuery`; read rather than refetched here.
   const subscription = useSubscriptionStore((state) => state.subscription);
-  const plan = derivePlan(subscription);
 
   /*
    * `user_id`, not `id`. The profile endpoint returns `user_id`; `AuthUser`
@@ -96,13 +98,8 @@ export function AnalyticsBootstrap() {
         userId,
         email: user?.email ?? null,
         name,
-        plan,
-        // Prefer the subscription record once it has loaded — the backend
-        // field this falls back to carries the same gap `plan` does. Used
-        // only before the fetch lands, so the first identify of a session
-        // isn't blocked on it.
-        trialActive: subscription?.isTrialing ?? user?.trial_active ?? null,
-        businessId: businessId || null,
+        subscription,
+        totalBusinesses,
       });
       return;
     }
@@ -116,53 +113,19 @@ export function AnalyticsBootstrap() {
     userId,
     name,
     user?.email,
-    plan,
-    subscription?.isTrialing,
-    user?.trial_active,
-    businessId,
+    subscription,
+    totalBusinesses,
   ]);
 
   // The business can change without the session doing so.
   React.useEffect(() => {
     if (status !== "authenticated") return;
-    setBusinessContext(businessId || null);
-  }, [status, businessId]);
-
-  /*
-   * Page views.
-   *
-   * There is no `router.events` in the App Router, so this comes from
-   * `usePathname()`. The query string is deliberately left out: it carries
-   * filter state and, on the invoice-share routes, a token.
-   *
-   * Latched on the path so Strict Mode's second effect — and any re-render
-   * under the same route — cannot report the same view twice.
-   */
-  const lastPath = React.useRef<string | null>(null);
-
-  React.useEffect(() => {
-    if (!pathname) return;
-    if (lastPath.current === pathname) return;
-    lastPath.current = pathname;
-    track(EVENTS.PAGE_VIEW, {
-      path: pathname,
-      route: normalisePath(pathname),
+    setBusinessContext({
+      id: businessId || null,
+      name: businessName,
+      industry,
     });
-
-    /*
-     * Reports, from the route rather than from ten screens.
-     *
-     * Normally "a screen opened" is not an event — the old app shipped 9,432
-     * `module_used` rows carrying `action: "viewed"` and they answer nothing.
-     * A report is the exception: opening it IS the action. There is nothing
-     * else to do on the page.
-     *
-     * One event with a `report` property, not ten names, so the eleventh
-     * report needs no code here and no change to the chart reading it.
-     */
-    const report = reportFromPath(pathname);
-    if (report) track(EVENTS.REPORT_VIEWED, { report });
-  }, [pathname]);
+  }, [status, businessId, businessName, industry]);
 
   return null;
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { ChevronDown, ChevronUp, Filter } from "lucide-react";
+import { ChevronDown, ChevronRight, Filter, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,18 +11,22 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { RangeSlider } from "@/components/ui/range-slider";
-import { Switch } from "@/components/ui/switch";
-import { AssetsDateRange } from "@/components/assets/assets-date-range";
+import { PrefixInput } from "@/components/ui/prefix-input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { DatePicker } from "@/components/documents/date-picker";
+import { Field } from "@/components/documents/field";
 import { useAccountCategoriesQuery } from "@/hooks/use-account-categories-query";
 import {
   ASSET_MATCH_STATUSES,
@@ -32,89 +36,120 @@ import {
   type AssetMatchStatus,
 } from "@/lib/assets";
 import { activeCurrencySymbol } from "@/lib/country-context";
+import { parseIsoDate } from "@/lib/invoices";
 
-/** The section headings — Paid by Cash, Match Status, Date Range and the rest. */
-const HEADING = "text-base font-semibold";
+/** A typed amount: digits with at most two decimals, or nothing at all. */
+const AMOUNT_PATTERN = /^\d*\.?\d{0,2}$/;
+
+/** An amount field's text as a bound — empty (or a lone ".") is no bound. */
+function amountBound(text: string): number | null {
+  const trimmed = text.trim();
+  if (trimmed === "" || trimmed === ".") return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+const amountText = (value: number | null) =>
+  value == null ? "" : String(value);
 
 /**
- * The asset list's "Filter by" dialog: Paid by Cash, Match Status, Date Range,
- * Asset Value and Category, with Reset and Apply at the foot.
+ * The asset register's "Filter by" popover: Match status, Date range, Price
+ * range, Paid with cash and Category — laid out exactly like the expense
+ * list's own `ExpensesFiltersPopover` so the two registers read the same.
  *
- * Edits are held in a local draft and only reach the list on Apply; closing the
- * dialog any other way (Escape, a click outside) discards them, and reopening
- * starts from what's actually applied. Reset clears every filter and applies
- * that at once.
+ * Edits stay in a local draft until Apply; Cancel, an outside click and Escape
+ * all discard them, and reopening starts from what's actually applied.
  *
- * Category is the register's own category list rather than the chart of
- * accounts. An asset only carries a chart-of-accounts subcategory when it's
- * Inventory; every one of them carries `asset_category`, so filtering on
- * subcategories would match almost nothing.
+ * Category is the chart-of-accounts subcategories under "Assets" — what the
+ * register's Category column shows and what `account_subcategory_id` filters
+ * on — so the draft holds subcategory ids, searched and shown by name.
  *
- * `ceiling` is the top of the value slider. Left at either end the range stays
- * open (null) rather than being pinned to a number, so it never hides an asset
- * dearer than the dearest one that was there when this opened.
+ * The price fields are held as typed and only become numbers on Apply; an
+ * empty field leaves that end of the range open (null).
  */
-export function AssetsFiltersDialog({
+export function AssetsFiltersPopover({
   value,
   onChange,
-  ceiling,
 }: {
   value: AssetAdvancedFilters;
   onChange: (next: AssetAdvancedFilters) => void;
-  ceiling: number;
 }) {
   const [open, setOpen] = React.useState(false);
   const [draft, setDraft] = React.useState(value);
-  const [categoryOpen, setCategoryOpen] = React.useState(true);
+  const [minText, setMinText] = React.useState(amountText(value.minValue));
+  const [maxText, setMaxText] = React.useState(amountText(value.maxValue));
+  const [categoryOpen, setCategoryOpen] = React.useState(false);
+  const [categoryQuery, setCategoryQuery] = React.useState("");
   const count = assetAdvancedFilterCount(value);
+
   const categoriesQuery = useAccountCategoriesQuery("Assets");
   const categoryOptions = categoriesQuery.data ?? [];
+
+  // Opening always starts from what's actually applied — an edit left over
+  // from a cancelled session shouldn't reappear next time this opens.
+  React.useEffect(() => {
+    if (!open) return;
+    setDraft(value);
+    setMinText(amountText(value.minValue));
+    setMaxText(amountText(value.maxValue));
+  }, [open, value]);
+
+  const minValue = amountBound(minText);
+  const maxValue = amountBound(maxText);
+  const rangeInvalid =
+    minValue != null && maxValue != null && minValue > maxValue;
+  const next: AssetAdvancedFilters = { ...draft, minValue, maxValue };
+  const draftCount = assetAdvancedFilterCount(next);
 
   const patch = (partial: Partial<AssetAdvancedFilters>) =>
     setDraft((current) => ({ ...current, ...partial }));
 
-  const handleOpenChange = (next: boolean) => {
-    // Opening always starts from what's applied, so an edit left over from a
-    // discarded session doesn't reappear.
-    if (next) setDraft(value);
-    setOpen(next);
-  };
-
-  const low = Math.min(draft.minValue ?? 0, ceiling);
-  const high = Math.min(draft.maxValue ?? ceiling, ceiling);
-  // Step scales with the range so a $2m ceiling isn't a 2,000-stop crawl.
-  const step = ceiling >= 100_000 ? 100 : ceiling >= 10_000 ? 10 : 1;
-
-  const setMin = (next: number) =>
-    patch({ minValue: next <= 0 ? null : Math.min(next, high) });
-  const setMax = (next: number) =>
-    patch({ maxValue: next >= ceiling ? null : Math.max(next, low) });
-
-  const allCategories =
-    categoryOptions.length > 0 &&
-    categoryOptions.every((option) => draft.categories.includes(option.id));
-  const toggleCategory = (category: string) =>
+  const toggleCategory = (id: string) =>
     patch({
-      categories: draft.categories.includes(category)
-        ? draft.categories.filter((entry) => entry !== category)
-        : [...draft.categories, category],
+      categories: draft.categories.includes(id)
+        ? draft.categories.filter((entry) => entry !== id)
+        : [...draft.categories, id],
     });
 
+  const clearAll = () => {
+    setDraft(EMPTY_ASSET_ADVANCED_FILTERS);
+    setMinText("");
+    setMaxText("");
+  };
+
   const apply = () => {
-    onChange(draft);
+    if (rangeInvalid) return;
+    onChange(next);
     setOpen(false);
   };
 
-  const reset = () => {
-    setDraft(EMPTY_ASSET_ADVANCED_FILTERS);
-    onChange(EMPTY_ASSET_ADVANCED_FILTERS);
+  const cancel = () => {
+    setDraft(value);
     setOpen(false);
   };
+
+  const matchingCategories = categoryOptions.filter((option) =>
+    option.name.toLowerCase().includes(categoryQuery.trim().toLowerCase()),
+  );
+  const matchingIds = matchingCategories.map((option) => option.id);
+
+  // "Select All" toggles every currently-matching (search-narrowed) category
+  // at once — the same behaviour as the expense list's category section.
+  const allCategoriesSelected =
+    matchingIds.length > 0 &&
+    matchingIds.every((id) => draft.categories.includes(id));
+
+  const toggleSelectAllCategories = () =>
+    patch({
+      categories: allCategoriesSelected
+        ? draft.categories.filter((entry) => !matchingIds.includes(entry))
+        : [...new Set([...draft.categories, ...matchingIds])],
+    });
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger asChild>
-        <Button variant="outline" className="gap-1.5">
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className="gap-1.5">
           <Filter className="size-4" />
           Filter by
           {count > 0 && (
@@ -123,225 +158,202 @@ export function AssetsFiltersDialog({
             </Badge>
           )}
         </Button>
-      </DialogTrigger>
-
-      {/* No corner close: the Paid by Cash toggle owns the top-right, and
-          Escape, a click outside and Reset/Apply all leave the dialog. */}
-      <DialogContent
-        hideClose
-        className="max-h-[90svh] gap-7 overflow-y-auto sm:max-w-lg"
+      </PopoverTrigger>
+      <PopoverContent
+        side="left"
+        align="start"
+        collisionPadding={16}
+        className="w-[340px] space-y-4 sm:w-[380px]"
       >
-        <DialogTitle className="sr-only">Filter assets</DialogTitle>
-        <DialogDescription className="sr-only">
-          Narrow the asset register by payment, match status, purchase date,
-          value and category.
-        </DialogDescription>
-
-        <div className="flex items-center justify-between gap-4">
-          <label htmlFor="asset-filter-cash" className={HEADING}>
-            Paid by Cash
-          </label>
-          <Switch
-            id="asset-filter-cash"
-            checked={draft.paidWithCashOnly}
-            onCheckedChange={(checked) => patch({ paidWithCashOnly: checked })}
-          />
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-medium">Filter assets</p>
+          {draftCount > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={clearAll}
+            >
+              <X className="size-3.5" />
+              Clear all
+            </Button>
+          )}
         </div>
 
-        <section className="space-y-3">
-          <h3 className={HEADING}>Match Status</h3>
-          <RadioGroup
+        <Field label="Match status">
+          <Select
             value={draft.match}
-            onValueChange={(next) => patch({ match: next as AssetMatchStatus })}
-            className="grid-flow-col justify-start gap-6"
-            aria-label="Match status"
-          >
-            {ASSET_MATCH_STATUSES.map((status) => (
-              <label
-                key={status}
-                className="flex cursor-pointer items-center gap-2 text-base"
-              >
-                <RadioGroupItem value={status} className="size-5" />
-                {status}
-              </label>
-            ))}
-          </RadioGroup>
-        </section>
-
-        <section className="space-y-3">
-          <h3 className={HEADING}>Date Range</h3>
-          <AssetsDateRange
-            from={draft.dateFrom}
-            to={draft.dateTo}
-            onChange={({ from, to }) => patch({ dateFrom: from, dateTo: to })}
-            label="Purchase date range"
-          />
-        </section>
-
-        <section className="space-y-4">
-          <h3 className={HEADING}>Asset Value ({activeCurrencySymbol()})</h3>
-          <RangeSlider
-            min={0}
-            max={ceiling}
-            step={step}
-            value={[low, high]}
-            onChange={([nextLow, nextHigh]) =>
-              patch({
-                minValue: nextLow <= 0 ? null : nextLow,
-                maxValue: nextHigh >= ceiling ? null : nextHigh,
-              })
+            onValueChange={(status) =>
+              patch({ match: status as AssetMatchStatus })
             }
-            lowLabel="Minimum asset value"
-            highLabel="Maximum asset value"
+          >
+            <SelectTrigger aria-label="Match status">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {ASSET_MATCH_STATUSES.map((option) => (
+                <SelectItem key={option} value={option}>
+                  {option}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Date from">
+            <DatePicker
+              value={draft.dateFrom}
+              onChange={(iso) => patch({ dateFrom: iso })}
+              toDate={parseIsoDate(draft.dateTo)}
+              label="Date from"
+            />
+          </Field>
+          <Field label="Date to">
+            <DatePicker
+              value={draft.dateTo}
+              onChange={(iso) => patch({ dateTo: iso })}
+              fromDate={parseIsoDate(draft.dateFrom)}
+              label="Date to"
+            />
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Price min">
+            <AmountInput
+              value={minText}
+              onChange={setMinText}
+              label="Minimum price"
+              placeholder="Min"
+              invalid={rangeInvalid}
+            />
+          </Field>
+          <Field
+            label="Price max"
+            error={rangeInvalid ? "Must be at least the minimum" : undefined}
+          >
+            <AmountInput
+              value={maxText}
+              onChange={setMaxText}
+              label="Maximum price"
+              placeholder="Max"
+              invalid={rangeInvalid}
+            />
+          </Field>
+        </div>
+
+        <label className="flex cursor-pointer items-center gap-2 text-sm">
+          <Checkbox
+            checked={draft.paidWithCashOnly}
+            onCheckedChange={(checked) =>
+              patch({ paidWithCashOnly: checked === true })
+            }
           />
-          <div className="grid grid-cols-2 gap-4">
-            <ValueInput
-              label="Minimum asset value"
-              value={low}
-              onChange={setMin}
-            />
-            <ValueInput
-              label="Maximum asset value"
-              value={high}
-              onChange={setMax}
-            />
-          </div>
-        </section>
+          Paid with cash
+        </label>
 
         <Collapsible open={categoryOpen} onOpenChange={setCategoryOpen}>
-          <div className="flex items-center justify-between">
-            <h3 className={HEADING}>Category</h3>
-            <CollapsibleTrigger asChild>
-              <Button
-                variant="outline"
-                size="icon"
-                className="size-9 border-primary/60 text-primary"
-                aria-label={
-                  categoryOpen ? "Hide categories" : "Show categories"
-                }
-              >
-                {categoryOpen ? (
-                  <ChevronUp className="size-4" />
-                ) : (
-                  <ChevronDown className="size-4" />
+          <CollapsibleTrigger asChild>
+            <button
+              type="button"
+              className="flex w-full items-center justify-between rounded-md py-1 text-sm font-medium"
+            >
+              <span className="flex items-center gap-1.5">
+                Category
+                {draft.categories.length > 0 && (
+                  <Badge variant="secondary" className="px-1.5 tabular">
+                    {draft.categories.length}
+                  </Badge>
                 )}
-              </Button>
-            </CollapsibleTrigger>
-          </div>
-          <CollapsibleContent className="pt-3">
-            {categoriesQuery.isLoading ? (
-              <p className="py-3 text-sm text-muted-foreground">
-                Loading categories…
-              </p>
-            ) : categoriesQuery.isError || categoryOptions.length === 0 ? (
-              <p className="py-3 text-sm text-muted-foreground">
-                Couldn&apos;t load the categories.
-              </p>
-            ) : (
-              <ul className="divide-y divide-border/70">
-                <CategoryRow
-                  label="Select All"
-                  checked={allCategories}
-                  onToggle={() =>
-                    patch({
-                      categories: allCategories
-                        ? []
-                        : categoryOptions.map((option) => option.id),
-                    })
-                  }
-                />
-                {categoryOptions.map((option) => (
-                  <CategoryRow
+              </span>
+              {categoryOpen ? (
+                <ChevronDown className="size-4 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="size-4 text-muted-foreground" />
+              )}
+            </button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="space-y-2 pt-2">
+            <Input
+              value={categoryQuery}
+              onChange={(event) => setCategoryQuery(event.target.value)}
+              placeholder="Search categories"
+            />
+            <label className="flex cursor-pointer items-center gap-2 rounded-sm p-1.5 text-sm hover:bg-accent">
+              <Checkbox
+                checked={allCategoriesSelected}
+                onCheckedChange={toggleSelectAllCategories}
+                disabled={matchingIds.length === 0}
+              />
+              Select all
+            </label>
+            <div className="max-h-40 space-y-0.5 overflow-y-auto rounded-md border p-1">
+              {categoriesQuery.isLoading ? (
+                <p className="p-2 text-xs text-muted-foreground">Loading…</p>
+              ) : categoriesQuery.isError ? (
+                <p className="p-2 text-xs text-muted-foreground">
+                  Couldn&apos;t load the categories.
+                </p>
+              ) : matchingCategories.length === 0 ? (
+                <p className="p-2 text-xs text-muted-foreground">No matches</p>
+              ) : (
+                matchingCategories.map((option) => (
+                  <label
                     key={option.id}
-                    label={option.name}
-                    checked={draft.categories.includes(option.id)}
-                    onToggle={() => toggleCategory(option.id)}
-                  />
-                ))}
-              </ul>
-            )}
+                    className="flex cursor-pointer items-center gap-2 rounded-sm p-1.5 text-sm hover:bg-accent"
+                  >
+                    <Checkbox
+                      checked={draft.categories.includes(option.id)}
+                      onCheckedChange={() => toggleCategory(option.id)}
+                    />
+                    <span className="truncate">{option.name}</span>
+                  </label>
+                ))
+              )}
+            </div>
           </CollapsibleContent>
         </Collapsible>
 
-        <div className="flex justify-end gap-3">
-          <Button
-            variant="outline"
-            onClick={reset}
-            className="border-destructive/60 px-6 text-destructive hover:bg-destructive/10 hover:text-destructive"
-          >
-            Reset
+        <div className="flex justify-end gap-2 border-t border-border pt-3">
+          <Button variant="outline" size="sm" onClick={cancel}>
+            Cancel
           </Button>
-          <Button onClick={apply} className="px-6">
+          <Button size="sm" onClick={apply} disabled={rangeInvalid}>
             Apply
           </Button>
         </div>
-      </DialogContent>
-    </Dialog>
+      </PopoverContent>
+    </Popover>
   );
 }
 
-function CategoryRow({
-  label,
-  checked,
-  onToggle,
-}: {
-  label: string;
-  checked: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <li>
-      <label className="flex cursor-pointer items-center gap-3 py-3 text-base">
-        <Checkbox
-          checked={checked}
-          onCheckedChange={onToggle}
-          className="size-5"
-        />
-        {label}
-      </label>
-    </li>
-  );
-}
-
-/**
- * A dollar amount, held as typed while it's being edited so "12." and an
- * emptied field don't snap back mid-keystroke, and committed as a number only
- * when it parses as one. Follows the slider whenever the figure changes from
- * outside.
- */
-function ValueInput({
-  label,
+function AmountInput({
   value,
   onChange,
+  label,
+  placeholder,
+  invalid,
 }: {
+  value: string;
+  onChange: (value: string) => void;
   label: string;
-  value: number;
-  onChange: (next: number) => void;
+  placeholder?: string;
+  invalid?: boolean;
 }) {
-  const show = (n: number) =>
-    Number.isInteger(n) && n === 0 ? "0" : n.toFixed(2);
-  const [text, setText] = React.useState(show(value));
-  const [editing, setEditing] = React.useState(false);
-
-  React.useEffect(() => {
-    if (!editing) setText(show(value));
-  }, [value, editing]);
-
   return (
-    <Input
-      value={text}
-      inputMode="decimal"
-      aria-label={label}
-      className="h-12 rounded-lg border border-input bg-background px-4 text-base tabular"
-      onFocus={() => setEditing(true)}
-      onBlur={() => setEditing(false)}
+    <PrefixInput
+      prefix={activeCurrencySymbol()}
+      value={value}
       onChange={(event) => {
         const next = event.target.value;
-        if (!/^\d*\.?\d{0,2}$/.test(next)) return;
-        setText(next);
-        const parsed = next === "" || next === "." ? 0 : Number(next);
-        if (Number.isFinite(parsed)) onChange(parsed);
+        if (AMOUNT_PATTERN.test(next)) onChange(next);
       }}
+      inputMode="decimal"
+      className="tabular"
+      aria-label={label}
+      placeholder={placeholder}
+      aria-invalid={invalid || undefined}
     />
   );
 }

@@ -138,6 +138,13 @@ export type Transaction = {
    */
   aiSuggestions?: AiSuggestions | null;
   /**
+   * The invoice, expense or asset the model paired this line with. The model
+   * looks for one first; only when it finds none does it suggest a category.
+   */
+  suggestedDocument?: SuggestedDocument | null;
+  /** The client / supplier the model knew for this line, where it knew one. */
+  suggestedClient?: SuggestedClient | null;
+  /**
    * How much the server says is already matched — the sum of the match lines
    * on a matched row, amount less what's still available on an unmatched one.
    * Absent on locally made rows, which work it out from their splits.
@@ -164,6 +171,22 @@ export type AiSuggestions = {
   /** "Matched on …", without that prefix. */
   reason: string | null;
 };
+
+export type SuggestedDocumentType = "invoice" | "expense" | "asset";
+
+export type SuggestedDocument = {
+  type: SuggestedDocumentType;
+  id: string;
+  /** The invoice number, or the expense's / asset's name — they have no number. */
+  reference: string;
+  clientName: string;
+  amount: number;
+  /** The model's confidence as a whole percent; null where it gave none. */
+  confidence: number | null;
+  reason: string | null;
+};
+
+export type SuggestedClient = { id: string; name: string };
 
 export type TransactionTransfer = {
   /** The account on the other side, as the feed names it. */
@@ -484,7 +507,7 @@ export function gstApplies(transaction: Transaction): boolean {
 
 /** Whether the row is showing a guess rather than a coding someone confirmed. */
 export function hasSuggestion(transaction: Transaction): boolean {
-  return transaction.suggestedCategory !== null;
+  return transaction.suggestedCategory !== null || !!transaction.suggestedDocument;
 }
 
 /**
@@ -502,6 +525,28 @@ export function pendingSuggestions(transactions: Transaction[]): Transaction[] {
 
 export function splitTotal(transaction: Transaction): number {
   return transaction.splits.reduce((sum, split) => sum + split.amount, 0);
+}
+
+/** A real journal entry id — a matched line's Undo needs one to point at. */
+export function isEntryId(id: string): boolean {
+  return /^\d+$/.test(id);
+}
+
+/**
+ * How a transaction is undone, as sole-webapp's Matched list does it — one
+ * rule for the list and the details modal, so the two can't disagree.
+ *
+ * - `"whole"`: a personal/transfer mark, or a match on one line, undoes from
+ *   the transaction itself.
+ * - `"line"`: a match across several lines undoes line by line.
+ * - `null`: nothing to undo — the transaction isn't matched.
+ */
+export function undoModeFor(
+  transaction: Pick<Transaction, "status" | "personal" | "transfer" | "splits">,
+): "whole" | "line" | null {
+  if (transaction.status !== "Matched") return null;
+  const marked = transaction.personal || !!transaction.transfer;
+  return marked || transaction.splits.length <= 1 ? "whole" : "line";
 }
 
 /**

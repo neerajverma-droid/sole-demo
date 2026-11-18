@@ -97,7 +97,7 @@ export function SettingsScreen() {
 
       <div className="flex flex-col gap-[15px] lg:flex-row">
         <SettingsNav active={section} onChange={setSection} />
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1" data-usertour={`settings-tab-${section}`}>
           {section === "profile" && <ProfileSection />}
           {section === "business" && <BusinessSection />}
           {/* {section === "documents" && <DocumentsSection />} */}

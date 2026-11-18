@@ -13,6 +13,8 @@ import {
 } from "@/components/ui/select";
 import { Field } from "@/components/documents/field";
 import { StepFooter, StepHeader, ToggleCard } from "@/components/proposals/steps/step-parts";
+import { fetchInvoicePaymentRails } from "@/lib/invoice-context";
+import { sessionUserId, useSessionStore } from "@/stores/session";
 import {
   DEFAULT_PAYMENT_METHOD,
   PAYMENT_METHODS,
@@ -40,10 +42,18 @@ export function PaymentStep({
     queryKey: ["stripe-connected"],
     queryFn: fetchStripeConnected,
   });
-  const checking = stripeQuery.isLoading;
+  // SolePay as the invoice editor reads it (shared cache): set up, and not "bank details only".
+  const userId = useSessionStore((state) => sessionUserId(state.user));
+  const railsQuery = useQuery({
+    queryKey: ["invoice-payment-rails", userId],
+    queryFn: () => fetchInvoicePaymentRails(userId),
+  });
+  const solePayReady = Boolean(railsQuery.data?.payrixConnected && railsQuery.data.paymentType !== "direct_payment");
+  const checking = stripeQuery.isLoading || railsQuery.isLoading;
   const methods = PAYMENT_METHODS.filter(
     (method) =>
-      !method.requiresStripe || stripeQuery.data || payment.pay_method === method.value,
+      payment.pay_method === method.value ||
+      ((!method.requiresStripe || stripeQuery.data) && (!method.requiresSolePay || solePayReady)),
   );
 
   return (
@@ -89,7 +99,7 @@ export function PaymentStep({
               {checking && (
                 <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Loader2 className="size-3 animate-spin" aria-hidden />
-                  Checking Stripe connection...
+                  Checking payment connections...
                 </p>
               )}
             </div>
@@ -109,10 +119,21 @@ export function PaymentStep({
               </p>
             </div>
           )}
+
+          {payment.pay_method === "solepay" && (
+            <div className="rounded-lg border border-border p-4 text-sm">
+              <p className="font-semibold">How SolePay works here</p>
+              <p className="mt-1 text-muted-foreground">
+                When your client accepts, an invoice for this proposal&apos;s services is created and they pay it with
+                SolePay from the proposal link. The invoice appears in your Invoices list and the proposal shows as
+                paid once it&apos;s paid. SolePay takes AUD only.
+              </p>
+            </div>
+          )}
         </div>
       )}
 
-      <StepFooter saving={saving} nextLabel="Introduction" onSave={onSave} />
+      <StepFooter saving={saving} nextLabel="Terms & Sign" onSave={onSave} />
     </section>
   );
 }

@@ -57,6 +57,41 @@ export type ReportPeriod = (typeof REPORT_PERIODS)[number];
 /** ISO `YYYY-MM-DD` either side, as the two date inputs hold it. */
 export type ReportRange = { from: string; to: string };
 
+/**
+ * A named span offered above the presets — a filing period, say, which the
+ * fixed presets have no word for: "Last period · Aug – Sep 2026". Picking one
+ * is a custom range of exactly its dates, the same way an earlier financial
+ * year is.
+ */
+export type NamedRange = {
+  key: string;
+  /** "Last period". */
+  name: string;
+  /** "Aug – Sep 2026", shown beside the name in the list. */
+  scope: string;
+  range: ReportRange;
+};
+
+/**
+ * The named range a period select shows as picked. When the screen keeps the
+ * picked key (`keyed`), only an explicit pick counts — so choosing "Custom
+ * range", or typing dates that match a period, never reads as that period.
+ * Without a key, a custom range equal to a named range's dates is it.
+ */
+export function pickedNamedRange(
+  value: ReportPeriod,
+  range: ReportRange | null,
+  namedRanges: readonly NamedRange[] | undefined,
+  namedKey: string | null | undefined,
+  keyed: boolean,
+): NamedRange | undefined {
+  if (value !== "Custom range" || !namedRanges) return undefined;
+  if (keyed) return namedRanges.find((named) => named.key === namedKey);
+  return range
+    ? namedRanges.find((named) => named.range.from === range.from && named.range.to === range.to)
+    : undefined;
+}
+
 export type Span = { from: Date; to: Date };
 
 /**
@@ -227,7 +262,7 @@ export function periodShape(
         current,
         previous,
         label: "This FY",
-        previousHeaderLabel: "Previous FY",
+        previousHeaderLabel: "Last FY",
         scope: fyLabelOf(current.from),
         previousScope: fyLabelOf(previous.from),
         previousLabel: "last financial year",
@@ -240,7 +275,8 @@ export function periodShape(
         current,
         previous,
         label: "Last FY",
-        previousHeaderLabel: "Previous FY",
+        // Not "Previous FY": beside a "Last FY" column it reads as the same year.
+        previousHeaderLabel: "Year before",
         scope: fyLabelOf(current.from),
         previousScope: fyLabelOf(previous.from),
         previousLabel: "the year before",

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import { addonById } from "@/lib/addons";
-import { EVENTS, REQUIRED_PROPS } from "@/lib/analytics-events";
 import { addonRows, isActivePath } from "@/lib/nav";
 import { mapActiveTimer } from "@/lib/project-timer";
 import {
@@ -10,6 +9,8 @@ import {
   buildTimeInvoice,
   emptyManualLog,
   emptyWeeklyRow,
+  formatHoursInput,
+  limitHoursInput,
   formatAgo,
   formatHoursMinutes,
   formatLogTimeRange,
@@ -175,6 +176,31 @@ describe("the weekly grid", () => {
   });
 });
 
+describe("typing hours into the weekly grid", () => {
+  it.each([
+    ["7.555", "7.55"],
+    ["7.5", "7.5"],
+    [".259", ".25"],
+    ["12.", "12."],
+    ["7:30", "7:30"],
+    ["abc", "abc"],
+  ])("stops %j at two decimal places → %j", (typed, kept) => {
+    expect(limitHoursInput(typed)).toBe(kept);
+  });
+
+  it.each([
+    ["7.5", "7.50"],
+    ["8", "8.00"],
+    [".25", "0.25"],
+    ["12.", "12.00"],
+    ["7:30", "7:30"],
+    ["", ""],
+    ["abc", "abc"],
+  ])("shows %j as %j once the cell is left", (typed, shown) => {
+    expect(formatHoursInput(typed)).toBe(shown);
+  });
+});
+
 describe("the summary chart", () => {
   it("falls back to the days the server sent when it gives no period", () => {
     const stats = mapTimeStats({ daily_breakdown: [{ date: "2026-10-21", billable_hours: 1 }, { date: "2026-10-19" }] });
@@ -199,10 +225,5 @@ describe("the Time Tracker add-on", () => {
 
   it("stays lit on the weekly log", () => {
     expect(isActivePath("/time-tracker/weekly", "/time-tracker")).toBe(true);
-  });
-
-  it("declares the analytics event it fires, with its properties", () => {
-    expect(EVENTS.TIME_ENTRY_LOGGED).toBe("time_entry_logged");
-    expect(REQUIRED_PROPS[EVENTS.TIME_ENTRY_LOGGED]).toEqual(["duration_minutes", "source"]);
   });
 });

@@ -38,11 +38,14 @@ export function TimeTrackerScreen() {
         title="Time Tracker"
         description="Track time against clients and projects and turn it into billable entries."
       >
-        <Button onClick={() => setManualOpen(true)}>
+        <Button
+          onClick={() => setManualOpen(true)}
+          data-usertour="time-manual-entry"
+        >
           <Plus />
           Add manual time entry
         </Button>
-        <Button variant="outline" asChild>
+        <Button variant="outline" asChild data-usertour="time-weekly-link">
           <Link href={`${TIME_TRACKER_ROOT}/weekly`}>
             <CalendarDays />
             Weekly log
@@ -51,9 +54,8 @@ export function TimeTrackerScreen() {
       </PageHeader>
 
       <TimerBar />
-      {/* The timer stays — it's how the first entry gets made — but a week of
-          zeroes says nothing the empty state doesn't. */}
-      {!isEmpty && <TimeSummary />}
+      {/* Shown with no entries yet too, as zeroes. */}
+      <TimeSummary />
       <TimeEntriesTable
         empty={isEmpty}
         onAddManual={() => setManualOpen(true)}

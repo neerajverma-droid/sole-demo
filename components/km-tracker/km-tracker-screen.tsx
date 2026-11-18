@@ -24,7 +24,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { Shimmer } from "@/components/ui/shimmer";
 import {
   Tooltip,
   TooltipContent,
@@ -135,38 +134,46 @@ export function KmTrackerScreen() {
         title="KM Tracker"
         description="Track your business travel kilometres and convert them into billable entries."
       >
-        <Button variant="outline" asChild data-usertour="km-settings-button">
-          <Link href={`${KM_ROOT}/settings`}>
-            <Settings2 />
-            Settings
-          </Link>
-        </Button>
-        <Button variant="outline" asChild data-usertour="km-reports-button">
-          <Link href={`${KM_ROOT}/reports`}>
-            <FileSpreadsheet />
-            Reports
-          </Link>
-        </Button>
-        {setupComplete ? (
-          newTripButton
-        ) : (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              {/* A disabled button swallows hover — the span carries the tip. */}
-              <span tabIndex={0}>{newTripButton}</span>
-            </TooltipTrigger>
-            <TooltipContent>
-              {settingsQuery.isLoading
-                ? "Loading your KM settings…"
-                : "Add a vehicle in settings before logging a trip"}
-            </TooltipContent>
-          </Tooltip>
-        )}
+        {/* One wrapper so the tours can highlight the header actions together. */}
+        <div
+          className="flex flex-wrap items-center gap-3"
+          data-usertour="km-actions"
+        >
+          <Button variant="outline" asChild data-usertour="km-settings-button">
+            <Link href={`${KM_ROOT}/settings`}>
+              <Settings2 />
+              Settings
+            </Link>
+          </Button>
+          <Button variant="outline" asChild data-usertour="km-reports-button">
+            <Link href={`${KM_ROOT}/reports`}>
+              <FileSpreadsheet />
+              Reports
+            </Link>
+          </Button>
+          {setupComplete ? (
+            newTripButton
+          ) : (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                {/* A disabled button swallows hover — the span carries the tip. */}
+                <span tabIndex={0}>{newTripButton}</span>
+              </TooltipTrigger>
+              <TooltipContent>
+                {settingsQuery.isLoading
+                  ? "Loading your KM settings…"
+                  : "Add a vehicle in settings before logging a trip"}
+              </TooltipContent>
+            </Tooltip>
+          )}
+        </div>
       </PageHeader>
 
-      {settingsQuery.isLoading ? (
-        <Shimmer className="h-[88px] w-full rounded-lg border border-border" />
-      ) : settingsQuery.isError ? (
+      {/* Nothing while the settings load: the totals and the log below stay on
+          their skeletons until they land too, so the banner and the content
+          arrive together instead of the empty state showing first and the
+          setup banner pushing it down afterwards. */}
+      {settingsQuery.isLoading ? null : settingsQuery.isError ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-dashed border-border bg-card px-4 py-3 text-sm">
           <span className="text-muted-foreground">
             Couldn&apos;t load your KM settings, so new trips are paused.
@@ -182,7 +189,10 @@ export function KmTrackerScreen() {
           </Button>
         </div>
       ) : !setupComplete ? (
-        <section className="flex flex-col gap-4 rounded-lg border border-primary/30 bg-primary/[0.05] p-4 sm:flex-row sm:items-center sm:justify-between md:p-5">
+        <section
+          className="flex flex-col gap-4 rounded-lg border border-primary/30 bg-primary/[0.05] p-4 sm:flex-row sm:items-center sm:justify-between md:p-5"
+          data-usertour="km-setup-banner"
+        >
           <div className="flex items-start gap-3">
             <span
               className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"
@@ -208,20 +218,22 @@ export function KmTrackerScreen() {
         </section>
       ) : null}
 
-      {/* The setup card above stays — it's the way to the first trip — but
-          two methods' worth of zeroes add nothing to "No trips yet". */}
-      {!isEmpty && (
-        <KmStatsBand
-          stats={statsQuery.data}
-          loading={statsQuery.isLoading || statsQuery.isPlaceholderData}
-          error={statsQuery.isError}
-          onRetry={() => statsQuery.refetch()}
-        />
-      )}
+      {/* Shown with no trips yet too, as zeroes. */}
+      <KmStatsBand
+        stats={statsQuery.data}
+        loading={
+          settingsQuery.isLoading ||
+          statsQuery.isLoading ||
+          statsQuery.isPlaceholderData
+        }
+        error={statsQuery.isError}
+        onRetry={() => statsQuery.refetch()}
+      />
 
       <KmTripTable
         empty={isEmpty}
         canCreate={setupComplete}
+        settingsLoading={settingsQuery.isLoading}
         onView={setViewing}
         onDelete={setDeleting}
         onConvert={setConverting}

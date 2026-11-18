@@ -50,15 +50,8 @@ export type AuthUser = {
     string,
     { popups?: Record<string, boolean | number> }
   >;
-  /**
-   * A demo visitor (lib/demo.ts). Set on the demo login response and on every
-   * profile fetch during the visit, so a reloaded tab still knows. The visit
-   * ends at `demo_expires_at` (ISO), or after `demo_idle_minutes` of silence,
-   * whichever comes first — and everything done in it is wiped.
-   */
-  is_demo?: boolean;
-  demo_expires_at?: string | null;
-  demo_idle_minutes?: number;
   token?: string;
   refresh_token?: string;
+  is_demo?: boolean;
+  demo_expires_at?: string | null;
 };

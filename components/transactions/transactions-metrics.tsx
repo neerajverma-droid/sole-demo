@@ -5,8 +5,9 @@ import { Search } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import { invoiceMoney } from "@/lib/invoices";
-import { transactionsFilterAtom, transactionsQueryAtom } from "@/lib/atoms";
+import { transactionsQueryAtom } from "@/lib/atoms";
 import { cn } from "@/lib/utils";
+import { useTransactionsFilter } from "@/hooks/use-transactions-filter";
 
 /**
  * The reconciling strip: which pile you're working through, and a search.
@@ -40,7 +41,8 @@ export type PileTotals = {
  * A null is still loading.
  */
 export function TransactionsMetrics({ totals }: { totals: PileTotals }) {
-  const [filter, setFilter] = useAtom(transactionsFilterAtom);
+  // In the URL too, so a refresh keeps the tab that was open.
+  const [filter, setFilter] = useTransactionsFilter();
   const [query, setQuery] = useAtom(transactionsQueryAtom);
 
   return (

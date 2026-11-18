@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -43,13 +44,24 @@ import { useBasReportQuery } from "@/hooks/use-bas-report-query";
 import { useFiscalYearStart } from "@/hooks/use-fiscal-year-start";
 import apiRoutes from "@/config/api-routes";
 import { apiErrorMessage } from "@/lib/api-error";
-import { basPeriodAtom, basRangeAtom, sendReportOpenAtom } from "@/lib/atoms";
 import {
+  basNamedPeriodAtom,
+  basPeriodAtom,
+  basPeriodBusinessAtom,
+  basRangeAtom,
+  sendReportOpenAtom,
+} from "@/lib/atoms";
+import { useActiveBusiness } from "@/hooks/use-active-business";
+import {
+  BAS_FILING_PERIOD_PRESETS,
   BAS_PAGE_SIZE,
   BAS_PERIODS,
   basRange,
   basTotals,
   downloadBasReport,
+  filingPeriodChoices,
+  resolveBasPeriod,
+  usesFilingPeriods,
 } from "@/lib/bas-report";
 import { periodShape, reportMoney, spanLabel } from "@/lib/report-periods";
 import { useCountryContext } from "@/hooks/use-country-context";
@@ -72,11 +84,70 @@ const basTip = (returnName: string, tax: string, authority: string | null) =>
  * transactions that were counted.
  */
 export function BasReportScreen() {
-  const [period, setPeriod] = useAtom(basPeriodAtom);
-  const [range, setRange] = useAtom(basRangeAtom);
+  const [storedPeriod, setPeriod] = useAtom(basPeriodAtom);
+  const [storedRange, setRange] = useAtom(basRangeAtom);
+  const [storedNamedKey, setNamedKey] = useAtom(basNamedPeriodAtom);
+  const [periodOwner, setPeriodOwner] = useAtom(basPeriodBusinessAtom);
   const setSendOpen = useSetAtom(sendReportOpenAtom);
   const [page, setPage] = React.useState(1);
   const [pageSize, setPageSize] = React.useState<number>(BAS_PAGE_SIZE);
+
+  // The heading needs the business's own financial year, not Australia's:
+  // "This FY" is 1 April – 31 March for a New Zealand business.
+  const { country, ready } = useCountryContext();
+  const { business } = useActiveBusiness();
+  const businessId = business?.id ? String(business.id) : null;
+
+  /*
+   * A business that doesn't file quarterly (New Zealand: two-monthly or
+   * six-monthly) is offered its own filing periods, with the dates the
+   * backend's filing calendar gives them, instead of calendar quarters.
+   * Australia keeps the quarter presets.
+   */
+  const filingMode = usesFilingPeriods(country);
+  const filingChoices = React.useMemo(
+    () => (filingMode ? filingPeriodChoices(country) : []),
+    [filingMode, country],
+  );
+
+  /*
+   * What the screen runs for, worked out before the report is asked for, so a
+   * two-monthly filer never fetches a calendar quarter first:
+   *  - a named filing period picked on another business isn't carried over —
+   *    its dates belong to that business's calendar;
+   *  - a named period follows the filing calendar's dates for it;
+   *  - a quarter preset (the default) means nothing to a two-monthly filer, so
+   *    it starts on the last filing period, the one most likely being prepared.
+   * Until the country context has answered, the stored choice stands.
+   */
+  const view = React.useMemo(
+    () =>
+      resolveBasPeriod({
+        stored: { period: storedPeriod, range: storedRange, namedKey: storedNamedKey },
+        ready,
+        businessId,
+        periodOwner,
+        filingMode,
+        filingChoices,
+      }),
+    [ready, businessId, periodOwner, storedPeriod, storedRange, storedNamedKey, filingMode, filingChoices],
+  );
+
+  // Keep the stored choice in step with what the screen runs for.
+  React.useEffect(() => {
+    if (!ready || businessId === null) return;
+    if (periodOwner !== businessId) setPeriodOwner(businessId);
+    if (view.period !== storedPeriod) setPeriod(view.period);
+    if (view.range?.from !== storedRange?.from || view.range?.to !== storedRange?.to) {
+      setRange(view.range ? { ...view.range } : null);
+    }
+    if (view.namedKey !== storedNamedKey) setNamedKey(view.namedKey);
+  }, [ready, businessId, periodOwner, view, storedPeriod, storedRange, storedNamedKey, setPeriod, setRange, setNamedKey, setPeriodOwner]);
+
+  const { period, range } = view;
+  const pickedFilingPeriod = view.namedKey
+    ? filingChoices.find((choice) => choice.key === view.namedKey)
+    : undefined;
 
   // A new period is a new listing; page 4 of the last one means nothing here.
   React.useEffect(() => setPage(1), [period, range?.from, range?.to, pageSize]);
@@ -94,9 +165,6 @@ export function BasReportScreen() {
   // The business's financial year, as the query above resolved it.
   const fiscalYearStart = useFiscalYearStart();
   const shape = periodShape(period, range, undefined, fiscalYearStart);
-  // The heading needs the business's own financial year, not Australia's:
-  // "This FY" is 1 April – 31 March for a New Zealand business.
-  const { country } = useCountryContext();
 
   const rangeLabel = report?.rangeLabel ?? spanLabel(shape.current);
   const isoRange = basRange(period, range, fiscalYearStart);
@@ -126,6 +194,13 @@ export function BasReportScreen() {
   const authority = report?.taxAuthority ?? country.taxAuthority ?? null;
   const title = `${returnName} report`;
 
+  // The tab names the form this business files: "GST return report" in New
+  // Zealand. The route's static metadata says "BAS report", which stays right
+  // for Australia; this only replaces it once the screen knows otherwise.
+  React.useEffect(() => {
+    document.title = `${title} · Sole`;
+  }, [title]);
+
   return (
     <div className="space-y-[15px]">
       <PageHeader
@@ -135,14 +210,17 @@ export function BasReportScreen() {
         description={`${tax} you owe, ${tax} you can claim, and the transactions behind both.`}
       >
         <ReportPeriodSelect
-          periods={BAS_PERIODS}
+          periods={filingMode ? BAS_FILING_PERIOD_PRESETS : BAS_PERIODS}
           value={period}
           onChange={setPeriod}
           range={range}
           onRangeChange={setRange}
+          namedRanges={filingMode ? filingChoices : undefined}
+          namedKey={view.namedKey}
+          onNamedChange={setNamedKey}
         />
 
-        <Button onClick={() => setSendOpen(true)}>
+        <Button onClick={() => setSendOpen(true)} data-usertour="report-send">
           <Send />
           Send report
         </Button>
@@ -171,11 +249,10 @@ export function BasReportScreen() {
         </DropdownMenu>
       </PageHeader>
 
-      {period === "Custom range" && (
+      {period === "Custom range" && !pickedFilingPeriod && (
         <ReportCustomRange
           from={range?.from ?? ""}
           to={range?.to ?? ""}
-          label={rangeLabel}
           onChange={setRange}
         />
       )}
@@ -193,6 +270,8 @@ export function BasReportScreen() {
         />
       ) : report ? (
         <ReportPrintFrame title={title} rangeLabel={rangeLabel}>
+          {/* Inside the print frame: a printed return carries its basis too. */}
+          {country.iso2 === "NZ" && <PaymentsBasisNotice tax={tax} authority={authority} />}
           {report.quarters.length > 0 && <BasWorksheet report={report} />}
           <BasTransactionsTable
             report={report}
@@ -209,7 +288,8 @@ export function BasReportScreen() {
         endpoint={apiRoutes.reporting.gst}
         report={{
           title,
-          period,
+          // "Last period (Aug – Sep 2026)" rather than the "Custom range" it's stored as.
+          period: pickedFilingPeriod ? `${pickedFilingPeriod.name} (${pickedFilingPeriod.scope})` : period,
           rangeLabel,
           range: isoRange,
           headline: totals
@@ -255,5 +335,29 @@ function ErrorState({ message, onRetry }: { message: string; onRetry: () => void
         </Button>
       </EmptyActions>
     </Empty>
+  );
+}
+
+/**
+ * The basis this return is prepared on, said up front.
+ *
+ * Sole records a sale's GST when the money arrives (a bank match, or the date a
+ * cash payment was entered) and a purchase's when it's paid — the payments
+ * basis. Inland Revenue puts a business that doesn't choose on the invoice
+ * basis, and only allows the payments basis up to $2 million of sales a year,
+ * so a business on the invoice or hybrid basis would file these figures in the
+ * wrong periods. Shown, and printed, wherever the return is.
+ */
+function PaymentsBasisNotice({ tax, authority }: { tax: string; authority: string | null }) {
+  const who = authority || "Inland Revenue";
+  return (
+    <Alert>
+      <AlertTitle>Prepared on the payments basis</AlertTitle>
+      <AlertDescription>
+        {tax} is counted when money is received from customers or paid to suppliers. Use this
+        return only if you&apos;re registered with {who} on the payments basis. If you&apos;re on
+        the invoice or hybrid basis, these figures will fall in different periods.
+      </AlertDescription>
+    </Alert>
   );
 }

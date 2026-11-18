@@ -61,3 +61,7 @@ reports/
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
+
+# Claude guardrails: each developer lists their own machine-specific paths
+/.claude/allowed-paths
+/.vscode/*

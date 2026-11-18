@@ -88,6 +88,7 @@ import {
   type ContactPick,
 } from "@/components/transactions/contact-person-select";
 import { CategorySearchSelect } from "@/components/transactions/category-search-select";
+import { SuggestedDocumentChip } from "@/components/transactions/suggested-document-chip";
 import {
   fetchManualAccounts,
   matchCategoryGroups,
@@ -133,6 +134,7 @@ import {
   matchedTypeOf,
   matchedTypeTone,
   signedAmount,
+  type SuggestedDocument,
   type Transaction,
 } from "@/lib/transactions";
 import { cn } from "@/lib/utils";
@@ -372,6 +374,13 @@ export function TransactionsTable({
   const [categoryDrafts, setCategoryDrafts] = React.useState<
     Record<string, string>
   >({});
+  /**
+   * Rows where the model's invoice / expense / asset pairing was set aside for
+   * a category of the person's own choosing.
+   */
+  const [documentDismissed, setDocumentDismissed] = React.useState<
+    Record<string, boolean>
+  >({});
 
   /*
    * The chart of accounts, once — shared with the Add Transaction form — and
@@ -457,7 +466,7 @@ export function TransactionsTable({
   const valueOf = (row: Transaction, field: StagedField): string => {
     const staged = drafts[row.id]?.[field];
     if (staged !== undefined) return staged;
-    if (field === "supplier") return row.supplier;
+    if (field === "supplier") return row.supplier || row.suggestedClient?.name || "";
     return row.suggestedCategory?.category ?? row.category;
   };
 
@@ -484,13 +493,28 @@ export function TransactionsTable({
   const needsApproval = (row: Transaction): boolean =>
     row.status !== "Matched";
 
+  /**
+   * The invoice, expense or asset Approve would match this row to — the model's
+   * first answer — unless it was set aside, or a category has been picked.
+   */
+  const suggestedDocumentOf = (row: Transaction) =>
+    documentDismissed[row.id] || drafts[row.id]?.category !== undefined
+      ? null
+      : (row.suggestedDocument ?? null);
+
   /** What Approve would send for this row, from what's on screen. */
-  const approvalFor = (row: Transaction) => ({
-    transactionId: row.id,
-    categoryId: categoryIdOf(row),
-    clientId: contactDrafts[row.id]?.clientId ?? "",
-    gstIncluded: gstOf(row),
-  });
+  const approvalFor = (row: Transaction) => {
+    const suggestedDocument = suggestedDocumentOf(row);
+    return {
+      transactionId: row.id,
+      categoryId: categoryIdOf(row),
+      clientId: contactDrafts[row.id]?.clientId ?? row.suggestedClient?.id ?? "",
+      gstIncluded: gstOf(row),
+      document: suggestedDocument
+        ? { type: suggestedDocument.type, id: suggestedDocument.id }
+        : null,
+    };
+  };
 
   /**
    * Approve: sole-webapp's inline match. Refused with its own messages until
@@ -527,6 +551,11 @@ export function TransactionsTable({
       return next;
     });
     setGstDrafts((current) => {
+      const next = { ...current };
+      delete next[rowId];
+      return next;
+    });
+    setDocumentDismissed((current) => {
       const next = { ...current };
       delete next[rowId];
       return next;
@@ -820,7 +849,7 @@ export function TransactionsTable({
                       // What the banner scrolls to. Only where a guess is
                       // outstanding — a row someone has already chosen for is
                       // no longer the one to be taken to.
-                      {...(row.suggestedCategory
+                      {...(row.suggestedCategory || row.suggestedDocument
                         ? { [SUGGESTION_ROW_ATTR]: "true" }
                         : {})}
                       className={cn(
@@ -1004,6 +1033,13 @@ export function TransactionsTable({
                         groups={categoryGroups[row.type]}
                         loading={accountsQuery.isLoading}
                         staged={drafts[row.id]?.category !== undefined}
+                        suggestedDocument={suggestedDocumentOf(row)}
+                        onChooseCategory={() =>
+                          setDocumentDismissed((current) => ({
+                            ...current,
+                            [row.id]: true,
+                          }))
+                        }
                         open={open}
                         onChange={(account) => {
                           setCategoryDrafts((current) => ({
@@ -1564,6 +1600,8 @@ function CategoryCell({
   groups,
   loading,
   staged,
+  suggestedDocument,
+  onChooseCategory,
   open,
   onChange,
   onToggle,
@@ -1577,6 +1615,9 @@ function CategoryCell({
   groups: CategoryGroup[];
   loading: boolean;
   staged: boolean;
+  /** The invoice, expense or asset the model paired the line with, while that stands. */
+  suggestedDocument: SuggestedDocument | null;
+  onChooseCategory: () => void;
   open: boolean;
   onChange: (account: { id: string; name: string }) => void;
   onToggle: () => void;
@@ -1637,6 +1678,27 @@ function CategoryCell({
             </Badge>
           )}
         </span>
+      </TableCell>
+    );
+  }
+
+  /*
+   * The model looks for the line's own invoice, expense or asset before it
+   * guesses a category, so where it found one that is the suggestion — shown in
+   * the dropdown's place until someone chooses a category instead.
+   */
+  if (suggestedDocument) {
+    return (
+      <TableCell
+        data-tour="transaction-category"
+        className={className}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <SuggestedDocumentChip
+          suggestion={suggestedDocument}
+          onChooseCategory={onChooseCategory}
+          className="justify-center"
+        />
       </TableCell>
     );
   }

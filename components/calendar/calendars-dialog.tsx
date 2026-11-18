@@ -15,6 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogTitle,
@@ -24,14 +25,29 @@ import type { LinkedCalendar } from "@/lib/calendar";
 import { cn } from "@/lib/utils";
 
 /** The design's gradient header band, shared by the calendar dialogs. */
-function GradientHeader({ title, description }: { title: string; description?: string }) {
+function GradientHeader({
+  title,
+  description,
+  closable = false,
+}: {
+  title: string;
+  description?: string;
+  /** A close button in the corner of the band — for a dialog that has none of its own. */
+  closable?: boolean;
+}) {
   return (
-    <div className="-mx-6 -mt-6 mb-5 rounded-t-lg bg-gradient-to-br from-primary to-[hsl(258_90%_66%)] px-6 py-4 text-white">
-      <DialogTitle className="text-lg font-semibold text-white">{title}</DialogTitle>
+    <div className="relative -mx-6 -mt-6 mb-5 rounded-t-lg bg-gradient-to-br from-primary to-[hsl(258_90%_66%)] px-6 py-4 text-white">
+      <DialogTitle className={cn("text-lg font-semibold text-white", closable && "pr-8")}>{title}</DialogTitle>
       {description ? (
         <DialogDescription className="mt-1 text-[13px] leading-normal text-white/85">
           {description}
         </DialogDescription>
+      ) : null}
+      {closable ? (
+        <DialogClose className="absolute right-3.5 top-3.5 grid size-7 place-items-center rounded-md text-white/85 outline-none transition-colors hover:bg-white/15 hover:text-white focus-visible:ring-2 focus-visible:ring-white/70">
+          <X className="size-4" />
+          <span className="sr-only">Close</span>
+        </DialogClose>
       ) : null}
     </div>
   );
@@ -90,6 +106,7 @@ export function CalendarsDialog({
         <GradientHeader
           title="Calendars"
           description="View linked calendars and choose which one should be your default."
+          closable
         />
 
         {isLoading ? (

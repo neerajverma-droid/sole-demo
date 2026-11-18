@@ -1,11 +1,19 @@
 "use client";
 
 import * as React from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 
 import {
   addGoalAllocation as addGoalAllocationApi,
   attachBudgetExpense,
+  bulkDeleteBudgets as bulkDeleteBudgetsApi,
+  bulkDeleteGoals as bulkDeleteGoalsApi,
+  bulkDeletePlans as bulkDeletePlansApi,
   createBudget as createBudgetApi,
   createGoal as createGoalApi,
   deleteBudget as deleteBudgetApi,
@@ -15,14 +23,17 @@ import {
   fetchAvailableBudgetExpenses,
   fetchBudgetExpenses,
   fetchBudgets,
+  fetchBudgetsPage,
   fetchCashWallet,
   fetchCashWalletHistory,
   fetchExpenseCategories,
   fetchFundingSummary,
   fetchGoals,
+  fetchGoalsPage,
   fetchPlannerBankAccounts,
   fetchPlannerOverview,
   fetchPlans,
+  fetchPlansPage,
   removeCashWalletMovement as removeCashWalletMovementApi,
   removeGoalAllocation as removeGoalAllocationApi,
   savePlan as savePlanApi,
@@ -136,7 +147,66 @@ export function useGoalFundingQuery() {
   return useQuery({
     queryKey: ["planner", "funding"],
     queryFn: fetchFundingSummary,
+    // Cash moves outside the planner — a payment lands, another goal takes
+    // some — so what's available is read fresh each time a goal is opened
+    // rather than served from a minute-old cache.
+    staleTime: 0,
+    refetchOnMount: "always",
+  });
+}
+
+/**
+ * One page of a tab's table.
+ *
+ * Separate from the full-list queries above, which the Overview and the detail
+ * pages read the whole list from: a table pages on the server, so it asks for
+ * its own slice. The keys sit under the full lists' (`["planner", "goals", …]`),
+ * so every save, delete and refresh that invalidates a list invalidates its
+ * pages with it. The previous page is kept on screen while the next one loads,
+ * so the pagination bar doesn't blink out and back at every click.
+ *
+ * `enabled` is the tab being open — a table nobody is looking at asks for
+ * nothing.
+ */
+export function usePlannerGoalsPageQuery(
+  page: number,
+  pageSize: number,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["planner", "goals", "page", page, pageSize],
+    queryFn: () => fetchGoalsPage(page, pageSize),
     staleTime: STALE_TIME,
+    placeholderData: keepPreviousData,
+    enabled,
+  });
+}
+
+export function usePlannerBudgetsPageQuery(
+  page: number,
+  pageSize: number,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["planner", "budgets", "page", page, pageSize],
+    queryFn: () => fetchBudgetsPage(page, pageSize),
+    staleTime: STALE_TIME,
+    placeholderData: keepPreviousData,
+    enabled,
+  });
+}
+
+export function usePlannerPlansPageQuery(
+  page: number,
+  pageSize: number,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["planner", "plans", "page", page, pageSize],
+    queryFn: () => fetchPlansPage(page, pageSize),
+    staleTime: STALE_TIME,
+    placeholderData: keepPreviousData,
+    enabled,
   });
 }
 
@@ -162,6 +232,9 @@ export function usePlannerBankAccountsQuery() {
     queryKey: ["planner", "bank-accounts"],
     queryFn: fetchPlannerBankAccounts,
     staleTime: STALE_TIME,
+    // The bank feed fails slowly when its upstream is down; asking twice only
+    // doubles how long the tile waits before it can say so.
+    retry: false,
   });
 }
 
@@ -222,6 +295,23 @@ export function useDeleteGoalMutation() {
 }
 
 /**
+ * Deletes the ticked goals in one request. Only the ids the server says it
+ * deleted leave the store, so a goal it refused isn't shown as gone.
+ */
+export function useBulkDeleteGoalsMutation() {
+  const refresh = useRefreshPlanner();
+  const removeGoal = usePlannerStore((state) => state.removeGoal);
+
+  return useMutation({
+    mutationFn: (ids: string[]) => bulkDeleteGoalsApi(ids),
+    onSuccess: ({ deletedIds }) => {
+      deletedIds.forEach(removeGoal);
+      refresh();
+    },
+  });
+}
+
+/**
  * Saves a budget, resolving its category names to the ids the API stores.
  *
  * The catalogue is fetched here rather than passed in: it's cached for the
@@ -246,7 +336,13 @@ export function useSaveBudgetMutation() {
       if (id) await updateBudgetApi(id, draft, idsByName);
       else await createBudgetApi(draft, idsByName);
     },
-    onSuccess: refresh,
+    // Not returned: handing react-query the refetch's promise makes the save
+    // wait for every planner list to reload before it resolves, so the form
+    // sat on "Saving..." long after the budget existed. The list shimmers
+    // while it reloads instead.
+    onSuccess: () => {
+      void refresh();
+    },
   });
 }
 
@@ -258,6 +354,19 @@ export function useDeleteBudgetMutation() {
     mutationFn: (id: string) => deleteBudgetApi(id),
     onSuccess: (_result, id) => {
       removeBudget(id);
+      refresh();
+    },
+  });
+}
+
+export function useBulkDeleteBudgetsMutation() {
+  const refresh = useRefreshPlanner();
+  const removeBudget = usePlannerStore((state) => state.removeBudget);
+
+  return useMutation({
+    mutationFn: (ids: string[]) => bulkDeleteBudgetsApi(ids),
+    onSuccess: ({ deletedIds }) => {
+      deletedIds.forEach(removeBudget);
       refresh();
     },
   });
@@ -290,6 +399,19 @@ export function useDeletePlanMutation() {
     mutationFn: (id: string) => deletePlanApi(id),
     onSuccess: (_result, id) => {
       removePlan(id);
+      refresh();
+    },
+  });
+}
+
+export function useBulkDeletePlansMutation() {
+  const refresh = useRefreshPlanner();
+  const removePlan = usePlannerStore((state) => state.removePlan);
+
+  return useMutation({
+    mutationFn: (ids: string[]) => bulkDeletePlansApi(ids),
+    onSuccess: ({ deletedIds }) => {
+      deletedIds.forEach(removePlan);
       refresh();
     },
   });

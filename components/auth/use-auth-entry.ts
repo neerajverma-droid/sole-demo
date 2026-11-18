@@ -14,12 +14,12 @@ const ARRIVAL_MESSAGES: Record<string, string> = {
   session_expired: "Your session expired. Please sign in again.",
   signed_out: "You've been signed out.",
   account_deleted: "Your account has been deleted.",
-  demo_ended:
-    "Your demo has ended, and everything you changed has been cleared. You can start a new one any time.",
   sso_cancelled: "Sign in was cancelled. Please try again.",
   sso_unavailable:
     "Social sign in is temporarily unavailable. Please use your email instead.",
   sso_failed: "We couldn't complete social sign in. Please try again.",
+  // Same words the backend gives for it (DISPOSABLE_EMAIL_MESSAGE in sole-ocr).
+  disposable_email: "Please use a valid, permanent email address.",
   sso_profile_failed:
     "Signed in, but we couldn't load your profile. Please try again.",
 };

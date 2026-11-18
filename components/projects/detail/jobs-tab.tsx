@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { FileText, Plus, Search, SearchX, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 
@@ -180,23 +181,42 @@ export function ProjectJobsTab({ project }: { project: Project }) {
   };
 
   const openAddJob = () => setJobDialog({ job: null });
+
+  // `?newJob=1` opens the Add job dialog — the onboarding tour links here.
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const newJobParam = searchParams?.get("newJob");
+  React.useEffect(() => {
+    if (newJobParam !== "1") return;
+    setJobDialog({ job: null });
+    // Drop the param, so a refresh doesn't reopen what was closed.
+    const next = new URLSearchParams(searchParams?.toString() ?? "");
+    next.delete("newJob");
+    const query = next.toString();
+    router.replace(query ? `${pathname}?${query}` : (pathname ?? ""), { scroll: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newJobParam]);
   const loading = jobsQuery.isLoading || tasksQuery.isLoading;
   const failed = jobsQuery.isError || tasksQuery.isError;
 
   return (
     <div className="rounded-lg border border-border bg-card p-[15px] shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-4">
+      <div
+        className="flex flex-wrap items-center justify-between gap-4"
+        data-usertour="project-jobs-header"
+      >
         <div className="flex items-center gap-2">
           <h2 className="text-lg font-semibold tracking-tight">Job / Milestone</h2>
           <InfoTip text="Manage jobs and milestones" />
         </div>
-        <Button onClick={openAddJob}>
+        <Button onClick={openAddJob} data-usertour="project-add-job">
           <Plus />
           Add job
         </Button>
       </div>
 
-      <div className="relative mt-[15px]">
+      <div className="relative mt-[15px]" data-usertour="project-jobs-search">
         <Search
           className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
           aria-hidden
@@ -210,7 +230,7 @@ export function ProjectJobsTab({ project }: { project: Project }) {
         />
       </div>
 
-      <div className="mt-[15px]">
+      <div className="mt-[15px]" data-usertour="project-jobs-list">
         {loading ? (
           <div className="space-y-[15px]">
             {Array.from({ length: 3 }).map((_, index) => (

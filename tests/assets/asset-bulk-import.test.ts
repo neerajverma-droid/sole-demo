@@ -7,7 +7,13 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { bulkRowIssues, type BulkValues } from "@/lib/bulk-import";
+import {
+  buildBulkRows,
+  bulkCellText,
+  bulkFieldErrors,
+  bulkRowIssues,
+  type BulkValues,
+} from "@/lib/bulk-import";
 import { assetImportSpec, assetPayload, assetPayloads } from "@/lib/asset-bulk-import";
 
 const categories = [
@@ -24,7 +30,8 @@ function values(overrides: BulkValues): BulkValues {
 
 const valid = {
   "Asset name": "Dell laptop",
-  Category: "Office equipment",
+  // The row holds the category's id; the name is what Review shows.
+  Category: "80",
   "Purchase date": "01/06/2025",
   "Purchase price": "2349.00",
   Paid: "Yes",
@@ -62,18 +69,42 @@ describe("assetImportSpec", () => {
     expect(issuesOf({ Category: "" })).toEqual(["Category is required"]);
   });
 
-  it("flags a category that isn't on the chart of accounts", () => {
-    expect(issuesOf({ Category: "Spaceships" })).toEqual([
-      "Category doesn't match one of your asset accounts",
+  it("flags a category id that isn't on the chart of accounts", () => {
+    expect(issuesOf({ Category: "999" })).toEqual([
+      "Category isn't one of your asset accounts",
     ]);
-    // A numeric cell is an account_subcategory_id already.
     expect(issuesOf({ Category: "81" })).toEqual([]);
   });
 
-  it("skips the category-match rule when no categories were fetched", () => {
+  it("asks for no category when none were fetched — there's nothing to choose", () => {
     const blind = assetImportSpec([]);
-    const row = values({ ...valid, Category: "Spaceships" });
-    expect(bulkRowIssues(blind, row)).toEqual([]);
+    expect(bulkRowIssues(blind, values({ ...valid, Category: "" }))).toEqual([]);
+    expect(bulkRowIssues(blind, values({ ...valid, Category: "999" }))).toEqual([]);
+  });
+
+  describe("the Category column", () => {
+    const columns = ["Asset name", "Category", "Purchase date", "Purchase price", "Paid"];
+    const mapping = Object.fromEntries(columns.map((column, index) => [index, column]));
+    const build = (category: string) =>
+      buildBulkRows(spec, columns, [{ ...valid, Category: category }], mapping)[0];
+
+    it("keeps the id the AI formatter returned and shows its name", () => {
+      const row = build("81");
+      expect(row.values.Category).toBe("81");
+      expect(row.issues).toEqual([]);
+      expect(bulkCellText(spec, row.values, "Category")).toBe("Motor vehicles");
+    });
+
+    it("stays empty when the AI gave none, and asks for a pick", () => {
+      const row = build("");
+      expect(row.values.Category).toBe("");
+      expect(bulkFieldErrors(spec, row.values)).toEqual({ Category: "Choose a category" });
+    });
+
+    it("reads a name from a plain-parse fallback into its id", () => {
+      expect(build("motor VEHICLES").values.Category).toBe("81");
+      expect(build("Spaceships").values.Category).toBe("");
+    });
   });
 
   it("requires a DD/MM/YYYY purchase date", () => {

@@ -8,7 +8,7 @@ import {
 } from "@/components/shared/match-transaction-dialog";
 import { matchInvoiceIdAtom } from "@/lib/atoms";
 import { invoiceAmount, invoiceOutstanding } from "@/lib/invoices";
-import { useInvoicesStore } from "@/stores/invoices";
+import { useKnownInvoice } from "@/hooks/use-invoices-query";
 
 /**
  * Reconciling an invoice against the bank feed — the same modal Super
@@ -19,8 +19,7 @@ import { useInvoicesStore } from "@/stores/invoices";
  */
 export function MatchTransactionDialog() {
   const [matchId, setMatchId] = useAtom(matchInvoiceIdAtom);
-  const invoices = useInvoicesStore((state) => state.invoices);
-  const invoice = invoices.find((entry) => entry.id === matchId);
+  const invoice = useKnownInvoice(matchId);
 
   const entity: MatchableEntity | null = invoice
     ? {

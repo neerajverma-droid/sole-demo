@@ -1,0 +1,956 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Invoice rescue | Sole</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700&family=Hanken+Grotesk:wght@400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#FAFAF7;
+    --surface:#FFFFFF;
+    --ink:#16232E;
+    --ink-soft:#55636E;
+    --ink-faint:#8A949C;
+    --line:#E4E7E0;
+    --paid:#5B5BF6;
+    --paid-deep:#4444D6;
+    --paid-tint:#ECECFE;
+    --flag:#A9660F;
+    --flag-tint:#F6ECDD;
+    --display:"Bricolage Grotesque",system-ui,sans-serif;
+    --body:"Hanken Grotesk",system-ui,sans-serif;
+    --mono:"Space Mono",ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  @media (prefers-reduced-motion:reduce){
+    html{scroll-behavior:auto}
+    *{transition:none !important;animation:none !important}
+  }
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:var(--body);
+    font-size:17px;
+    line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:720px;margin:0 auto;padding:0 22px}
+
+  /* header */
+  header{padding:26px 0 8px}
+  .brand{
+    font-family:var(--display);
+    font-weight:700;
+    font-size:22px;
+    letter-spacing:-0.02em;
+    color:var(--ink);
+  }
+  .brand .dot{color:var(--paid)}
+
+  /* hero */
+  .hero{padding:34px 0 26px;border-bottom:1px solid var(--line)}
+  .eyebrow{
+    font-family:var(--mono);
+    font-size:12px;
+    letter-spacing:0.16em;
+    text-transform:uppercase;
+    color:var(--paid);
+    margin-bottom:16px;
+  }
+  h1{
+    font-family:var(--display);
+    font-weight:600;
+    font-size:clamp(30px,6vw,46px);
+    line-height:1.05;
+    letter-spacing:-0.025em;
+    margin-bottom:16px;
+  }
+  .hero p{color:var(--ink-soft);max-width:52ch}
+
+  /* section scaffolding */
+  section{padding:34px 0}
+  section + section{border-top:1px solid var(--line)}
+  h2{
+    font-family:var(--display);
+    font-weight:600;
+    font-size:24px;
+    letter-spacing:-0.02em;
+    margin-bottom:6px;
+  }
+  .sec-lead{color:var(--ink-soft);margin-bottom:22px;max-width:54ch}
+
+  /* diagnostic */
+  .q{margin-bottom:26px}
+  .q-label{
+    font-family:var(--display);
+    font-weight:600;
+    font-size:18px;
+    margin-bottom:12px;
+  }
+  .q-num{
+    font-family:var(--mono);
+    font-size:13px;
+    color:var(--ink-faint);
+    margin-right:8px;
+  }
+  .pills{display:flex;flex-wrap:wrap;gap:9px}
+  .pill{
+    font-family:var(--body);
+    font-size:15px;
+    color:var(--ink);
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:999px;
+    padding:9px 16px;
+    cursor:pointer;
+    transition:border-color .15s,background .15s,color .15s;
+  }
+  .pill:hover{border-color:var(--paid)}
+  .pill[aria-pressed="true"]{
+    background:var(--paid-tint);
+    border-color:var(--paid);
+    color:var(--paid-deep);
+    font-weight:500;
+  }
+  .pill:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+
+  .actions{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:8px}
+  .btn{
+    font-family:var(--body);
+    font-weight:600;
+    font-size:16px;
+    border-radius:10px;
+    padding:13px 22px;
+    cursor:pointer;
+    border:1px solid transparent;
+    transition:background .15s,border-color .15s,transform .05s;
+  }
+  .btn:active{transform:translateY(1px)}
+  .btn:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+  .btn-primary{background:var(--paid);color:#fff}
+  .btn-primary:hover{background:var(--paid-deep)}
+  .btn-primary[disabled]{background:#C3CBC5;cursor:not-allowed}
+  .btn-ghost{background:transparent;color:var(--ink-soft);border-color:transparent;padding:13px 4px;text-decoration:underline;text-underline-offset:3px}
+  .btn-ghost:hover{color:var(--ink)}
+
+  /* result */
+  #result{display:none}
+  #escalation{display:none}
+  #escalation.on{display:block}
+  #result.on{display:block}
+  .rec-card{
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-left:3px solid var(--paid);
+    border-radius:12px;
+    padding:24px;
+  }
+  .rec-card.dispute{border-left-color:var(--flag)}
+  .rec-tag{
+    font-family:var(--mono);
+    font-size:12px;
+    letter-spacing:0.14em;
+    text-transform:uppercase;
+    color:var(--paid);
+    margin-bottom:10px;
+  }
+  .rec-card.dispute .rec-tag{color:var(--flag)}
+  .rec-title{
+    font-family:var(--display);
+    font-weight:600;
+    font-size:23px;
+    letter-spacing:-0.02em;
+    line-height:1.15;
+    margin-bottom:8px;
+  }
+  .rec-meta{margin-bottom:12px}
+  .rec-chip{
+    display:inline-flex;align-items:center;gap:6px;
+    font-family:var(--mono);font-size:12px;letter-spacing:.02em;
+    color:var(--paid-deep);background:var(--paid-tint);
+    border-radius:6px;padding:4px 10px;
+  }
+  .rec-card.dispute .rec-chip{color:var(--flag);background:var(--flag-tint)}
+  .rec-chip svg{display:block;flex:none}
+  .rec-reason{color:var(--ink-soft);font-size:16px}
+
+  /* details */
+  details.panel{
+    margin-top:18px;
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:12px;
+    overflow:hidden;
+  }
+  details.panel > summary{
+    list-style:none;
+    cursor:pointer;
+    padding:16px 20px;
+    font-family:var(--display);
+    font-weight:600;
+    font-size:16px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+  }
+  details.panel > summary::-webkit-details-marker{display:none}
+  details.panel > summary .sum-right{display:flex;align-items:center;gap:12px;min-width:0}
+  details.panel > summary .hint{font-family:var(--body);font-weight:400;font-size:13px;color:var(--ink-faint)}
+  details.panel > summary .chev{
+    flex:none;width:22px;height:22px;border-radius:6px;
+    display:flex;align-items:center;justify-content:center;
+    color:var(--ink-soft);transition:transform .18s ease;
+  }
+  details.panel > summary .chev svg{display:block}
+  details.panel[open] > summary .chev{transform:rotate(180deg)}
+  details.panel > summary:hover .chev{color:var(--ink)}
+  details.panel[open] > summary{border-bottom:1px solid var(--line)}
+  .fields{padding:18px 20px;display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .field{display:flex;flex-direction:column;gap:5px}
+  .field.wide{grid-column:1 / -1}
+  .field label{font-size:13px;color:var(--ink-soft);font-weight:500}
+  .field input{
+    font-family:var(--body);
+    font-size:15px;
+    color:var(--ink);
+    background:var(--bg);
+    border:1px solid var(--line);
+    border-radius:8px;
+    padding:10px 12px;
+  }
+  .field input:focus{outline:2px solid var(--paid);outline-offset:0;border-color:var(--paid)}
+  .fields-note{padding:0 20px 18px;font-size:13px;color:var(--ink-faint)}
+
+  /* messages */
+  .msg-block{margin-top:18px}
+  .tone{display:flex;gap:0;margin-bottom:14px;border:1px solid var(--line);border-radius:9px;width:max-content;overflow:hidden}
+  .tone button{
+    font-family:var(--body);font-size:14px;font-weight:500;
+    background:var(--surface);color:var(--ink-soft);
+    border:none;padding:8px 16px;cursor:pointer;
+  }
+  .tone button[aria-pressed="true"]{background:var(--ink);color:#fff}
+  .tone button:focus-visible{outline:2px solid var(--paid);outline-offset:-2px}
+
+  .msg{
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:12px;
+    padding:18px 20px;
+    margin-bottom:14px;
+  }
+  .msg-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}
+  .msg-kind{
+    font-family:var(--mono);font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:var(--ink-faint);
+  }
+  .msg-subject{font-weight:600;margin-bottom:8px}
+  .msg-body{white-space:pre-wrap;color:var(--ink);font-size:16px;line-height:1.62}
+  .msg-body .ph{color:var(--flag);background:var(--flag-tint);border-radius:3px;padding:0 3px}
+  .copy{
+    font-family:var(--body);font-size:14px;font-weight:600;
+    background:transparent;color:var(--paid);
+    border:1px solid var(--line);border-radius:8px;
+    padding:7px 14px;cursor:pointer;white-space:nowrap;
+    transition:background .15s,border-color .15s,color .15s;
+  }
+  .copy:hover{border-color:var(--paid)}
+  .copy.done{background:var(--paid);color:#fff;border-color:var(--paid)}
+  .copy:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+
+  .callout{
+    background:var(--paid-tint);
+    border-radius:10px;
+    padding:14px 16px;
+    font-size:15px;
+    color:var(--paid-deep);
+    margin-bottom:14px;
+  }
+  .draft-note{
+    background:var(--flag-tint);
+    border-radius:10px;
+    padding:12px 16px;
+    font-size:14px;
+    color:var(--flag);
+    margin-bottom:14px;
+  }
+
+  /* ladder / escalation */
+  .ladder{list-style:none;position:relative;margin-top:8px}
+  .ladder::before{
+    content:"";position:absolute;left:15px;top:14px;bottom:14px;width:2px;background:var(--line);
+  }
+  .rung{position:relative;padding:0 0 20px 46px}
+  .rung:last-child{padding-bottom:0}
+  .rung .node{
+    position:absolute;left:6px;top:2px;width:20px;height:20px;border-radius:50%;
+    background:var(--bg);border:2px solid var(--line);z-index:1;
+    display:flex;align-items:center;justify-content:center;
+    font-family:var(--mono);font-size:11px;color:var(--ink-faint);
+  }
+  .rung .r-title{font-family:var(--display);font-weight:600;font-size:17px}
+  .rung .r-desc{color:var(--ink-soft);font-size:15px;margin-top:2px}
+  .rung.here .node{background:var(--paid);border-color:var(--paid);color:#fff}
+  .rung.here .r-title{color:var(--paid-deep)}
+  .rung.here::after{
+    content:"You are here";
+    display:inline-block;margin-top:6px;
+    font-family:var(--mono);font-size:11px;letter-spacing:0.1em;text-transform:uppercase;
+    color:var(--paid);background:var(--paid-tint);border-radius:5px;padding:2px 8px;
+  }
+  .rung.past{opacity:.5}
+  .rung.past .node{border-color:var(--line);color:var(--ink-faint)}
+
+  /* advance control */
+  .advance{margin-top:16px}
+  .adv-btn{
+    font-family:var(--body);font-size:15px;font-weight:600;
+    color:var(--ink);background:var(--surface);
+    border:1px solid var(--line);border-radius:10px;
+    padding:12px 18px;cursor:pointer;
+    display:inline-flex;align-items:center;gap:9px;
+    transition:border-color .15s,color .15s;
+  }
+  .adv-btn:hover{border-color:var(--paid);color:var(--paid-deep)}
+  .adv-btn:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+  .adv-btn .arw{transition:transform .15s}
+  .adv-btn:hover .arw{transform:translateX(3px)}
+
+  /* prevention */
+  .prevent{list-style:none;display:grid;gap:2px}
+  .prevent li{padding:16px 0;border-bottom:1px solid var(--line);display:flex;gap:16px}
+  .prevent li:last-child{border-bottom:none}
+  .prevent .n{font-family:var(--mono);font-size:14px;color:var(--paid);padding-top:2px}
+  .prevent .t{font-family:var(--display);font-weight:600;font-size:17px}
+  .prevent .d{color:var(--ink-soft);font-size:15px;margin-top:2px}
+
+  /* cta */
+  .cta{
+    background:var(--ink);
+    color:#fff;
+    border-radius:16px;
+    padding:34px 30px;
+  }
+  .cta h2{color:#fff}
+  .cta p{color:#C3CCC7;max-width:50ch;margin-bottom:22px}
+  .cta .btn-primary{background:var(--paid)}
+  .cta .btn-primary:hover{background:#7676F9}
+
+  /* footer */
+  footer{padding:30px 0 50px;color:var(--ink-faint);font-size:13px;line-height:1.6}
+  footer .disc{border-top:1px solid var(--line);padding-top:20px}
+
+  @media (max-width:560px){
+    body{font-size:16px}
+    .fields{grid-template-columns:1fr}
+    .msg-head{flex-direction:column;align-items:flex-start}
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div class="brand">sole<span class="dot">.</span></div>
+  </header>
+
+  <div class="hero">
+    <div class="eyebrow">Invoice rescue</div>
+    <h1>Get your invoice paid</h1>
+    <p>Answer three quick questions. We will tell you the single best next step, give you the message ready to send, and show how to stop this happening again.</p>
+  </div>
+</div>
+
+<div class="wrap">
+  <!-- DIAGNOSTIC -->
+  <section id="diagnostic">
+    <h2>Where are things at?</h2>
+    <p class="sec-lead">This decides which step actually helps. A three day overdue invoice needs a different move to a three month one.</p>
+
+    <div class="q" data-q="overdue">
+      <div class="q-label"><span class="q-num">01</span>How overdue is it?</div>
+      <div class="pills" role="group" aria-label="How overdue is it">
+        <button class="pill" data-val="notdue" aria-pressed="false">Not due yet, but worried</button>
+        <button class="pill" data-val="week" aria-pressed="false">Up to a week</button>
+        <button class="pill" data-val="weeks" aria-pressed="false">One to four weeks</button>
+        <button class="pill" data-val="months" aria-pressed="false">One to three months</button>
+        <button class="pill" data-val="longtime" aria-pressed="false">More than three months</button>
+      </div>
+    </div>
+
+    <div class="q" data-q="contact">
+      <div class="q-label"><span class="q-num">02</span>Have you contacted them yet?</div>
+      <div class="pills" role="group" aria-label="Have you contacted them yet">
+        <button class="pill" data-val="none" aria-pressed="false">Not yet</button>
+        <button class="pill" data-val="one" aria-pressed="false">One gentle reminder</button>
+        <button class="pill" data-val="several" aria-pressed="false">Several reminders</button>
+        <button class="pill" data-val="quiet" aria-pressed="false">They have gone quiet</button>
+        <button class="pill" data-val="dispute" aria-pressed="false">They are disputing it</button>
+      </div>
+    </div>
+
+    <div class="q" data-q="relationship">
+      <div class="q-label"><span class="q-num">03</span>Do you want to keep working with them?</div>
+      <div class="pills" role="group" aria-label="Do you want to keep working with them">
+        <button class="pill" data-val="keep" aria-pressed="false">Yes, keep the relationship</button>
+        <button class="pill" data-val="neutral" aria-pressed="false">Neutral</button>
+        <button class="pill" data-val="over" aria-pressed="false">The relationship is over</button>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-primary" id="go" disabled>Show my next step</button>
+      <button class="btn btn-ghost" id="skip">Browse all templates</button>
+    </div>
+  </section>
+
+  <!-- RESULT -->
+  <section id="result" aria-live="polite">
+    <div class="rec-card" id="recCard">
+      <div class="rec-tag" id="recTag">Your next step</div>
+      <div class="rec-title" id="recTitle"></div>
+      <div class="rec-meta" id="recMeta"></div>
+      <div class="rec-reason" id="recReason"></div>
+    </div>
+
+    <details class="panel" id="detailsPanel">
+      <summary>
+        <span class="sum-title" id="sumTitle">Complete your message</span>
+        <span class="sum-right">
+          <span class="hint">stays on your device, nothing is saved</span>
+          <span class="chev" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        </span>
+      </summary>
+      <div class="fields" id="fields"></div>
+      <div class="fields-note">Nothing here is saved or sent anywhere. It only fills the messages on this page while it is open.</div>
+    </details>
+
+    <div class="msg-block" id="msgBlock"></div>
+  </section>
+
+  <!-- ESCALATION LADDER -->
+  <section id="escalation">
+    <h2>The whole path, so nothing is a surprise</h2>
+    <p class="sec-lead">Recovery is a sequence. Your current step is marked below. If it does not work, use the button on your recommendation to move to the next one, without starting over.</p>
+    <ol class="ladder" id="ladder">
+      <li class="rung" data-rung="0"><span class="node">1</span><div class="r-title">Reminder</div><div class="r-desc">A short, friendly prompt. Most late payments are just an oversight and stop here.</div></li>
+      <li class="rung" data-rung="1"><span class="node">2</span><div class="r-title">Firm follow-up</div><div class="r-desc">A direct message naming a specific payment date and a clear payment link.</div></li>
+      <li class="rung" data-rung="2"><span class="node">3</span><div class="r-title">Phone call, then confirm in writing</div><div class="r-desc">When messages stop working, a call gets a commitment. Confirm it the same day.</div></li>
+      <li class="rung" data-rung="3"><span class="node">4</span><div class="r-title">Formal letter of demand</div><div class="r-desc">A formal written notice that payment is required, and that recovery may follow.</div></li>
+      <li class="rung" data-rung="4"><span class="node">5</span><div class="r-title">Decide: recover, arrange a plan, or write it off</div><div class="r-desc">Weigh the amount owed against the time and cost of chasing it further.</div></li>
+    </ol>
+  </section>
+
+  <!-- PAYMENT WORDING -->
+  <section id="payment">
+    <h2>Payment templates</h2>
+    <p class="sec-lead">Short, copy-ready lines for the payment moments the messages above do not cover. They fill in from your details if you have added them.</p>
+    <div class="msg-block" id="payBlock"></div>
+  </section>
+
+  <!-- PREVENTION -->
+  <section id="prevention">
+    <h2>Fewer late payments next time</h2>
+    <p class="sec-lead">Most overdue invoices trace back to a slow or unclear start. Five things that fix that.</p>
+    <ol class="prevent">
+      <li><span class="n">01</span><div><div class="t">Invoice the moment the work is done</div><div class="d">The longer you wait to send it, the longer you wait to be paid.</div></div></li>
+      <li><span class="n">02</span><div><div class="t">Put your payment terms on every invoice</div><div class="d">State the due date and how to pay, in writing, so there is nothing to argue about later.</div></div></li>
+      <li><span class="n">03</span><div><div class="t">Make paying a single tap</div><div class="d">Add a payment link so there is no friction and no excuse to delay.</div></div></li>
+      <li><span class="n">04</span><div><div class="t">Turn on automatic reminders</div><div class="d">Let the system do the chasing before an invoice goes cold.</div></div></li>
+      <li><span class="n">05</span><div><div class="t">Take a deposit on larger jobs</div><div class="d">Get part of the money up front so you are never fully exposed.</div></div></li>
+    </ol>
+  </section>
+
+  <!-- CTA -->
+  <section>
+    <!-- PLACEHOLDER: wording and the free-setup offer to be confirmed with the Sole team before publishing -->
+    <div class="cta">
+      <h2>Fix the invoicing, not just this invoice</h2>
+      <p>Late payments usually aren't about customers refusing to pay. They happen when invoices go out late, terms aren't clear, or paying is a hassle.</p>
+      <p>Sole prevents that: fast invoices, clear terms, easy payment, and automatic follow-up before anything is overdue.</p>
+      <button class="btn btn-primary">Set up Sole</button>
+    </div>
+  </section>
+
+  <footer>
+    <!-- BUILD NOTE (not shown to users): content, especially the letter of demand and any
+         late-fee, interest or recovery references, to be reviewed and approved by the Sole
+         team before this resource is published. -->
+    <div class="disc">
+      General information only, not legal advice. Rules for late fees, interest and debt recovery vary by state and by your circumstances. Check your own situation, or get advice, before acting on the formal steps such as a letter of demand.
+    </div>
+  </footer>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  var state = { overdue:null, contact:null, relationship:null, tone:null, values:{} };
+
+  /* field metadata, keyed by token; canonical display order */
+  var FIELD_META = {
+    "contact name":  {label:"Customer contact name"},
+    "invoice number":{label:"Invoice number"},
+    "amount":        {label:"Amount", placeholder:"$0.00"},
+    "due date":      {label:"Original due date", placeholder:"e.g. 3 June"},
+    "specific date": {label:"New payment date to ask for", placeholder:"e.g. 17 June"},
+    "payment link":  {label:"Payment link", placeholder:"e.g. your Sole pay link", wide:true},
+    "business name": {label:"Your business name"},
+    "your name":     {label:"Your name"}
+  };
+  var FIELD_ORDER = ["contact name","invoice number","amount","due date","specific date","payment link","business name","your name"];
+
+  /* ---------- message library ---------- */
+  /* tokens use {curly braces}; tone variants only where the copy genuinely changes */
+  var LIB = {
+    preemptive: {
+      title:"Send a friendly reminder before it is due",
+      effort:"About 2 minutes",
+      reason:"It is not overdue yet, so a light nudge now is the cheapest way to keep it on track.",
+      ladder:0,
+      msgs:[
+        {kind:"Email", subject:"Invoice {invoice number} due {due date}",
+         body:"Hi {contact name}, quick note that invoice {invoice number} for {amount} is due on {due date}. The payment link is here: {payment link}. No action needed if it is already scheduled. If anything on the invoice does not look right, tell me and I will sort it. Thanks, {your name}."},
+        {kind:"SMS",
+         body:"Hi {contact name}, reminder that invoice {invoice number} ({amount}) is due {due date}. Pay here if handy: {payment link}. Thanks, {your name}."}
+      ]
+    },
+    gentle: {
+      title:"Send a gentle reminder",
+      effort:"About 2 minutes",
+      reason:"It is only just overdue and this is your first contact, so keep it light. Most people simply forgot.",
+      ladder:0,
+      msgs:[
+        {kind:"Email", subject:"Invoice {invoice number}, now due",
+         body:"Hi {contact name}, invoice {invoice number} for {amount} was due on {due date} and is showing as overdue on my end. It may have slipped through, which happens. Here is the link to make it easy: {payment link}. If you have already paid, ignore this and apologies for the nudge. {your name}."},
+        {kind:"SMS",
+         body:"Hi {contact name}, invoice {invoice number} ({amount}) was due {due date} and is showing overdue. Link: {payment link}. If already paid, ignore this. Thanks, {your name}."}
+      ]
+    },
+    firm: {
+      title:"Send a firm follow-up with a deadline",
+      effort:"About 3 minutes",
+      reason:"Earlier contact has not worked, so name a specific payment date and make the next step clear.",
+      ladder:1,
+      tone:{
+        warm:[
+          {kind:"Email", subject:"Invoice {invoice number} from {business name}, now overdue",
+           body:"Hi {contact name}, following up on invoice {invoice number} for {amount}, which was due on {due date} and is now overdue. I understand things get busy, so this may have been missed. To keep it simple, the payment link is here: {payment link}. Could you let me know it is sorted by {specific date}? If there is a problem with the invoice or the timing, tell me and we will work something out. Thanks, {your name}."},
+          {kind:"SMS",
+           body:"Hi {contact name}, invoice {invoice number} ({amount}) is overdue. Please pay by {specific date}: {payment link}. Happy to talk if there is an issue. {your name}."}
+        ],
+        cold:[
+          {kind:"Email", subject:"Overdue invoice {invoice number}, payment required by {specific date}",
+           body:"Hi {contact name}, invoice {invoice number} for {amount} was due on {due date} and remains unpaid. Please arrange payment by {specific date} using this link: {payment link}. If payment is not made, or you have not contacted me by then, I will need to consider further steps to recover the amount. {your name}."},
+          {kind:"SMS",
+           body:"Hi {contact name}, invoice {invoice number} ({amount}) is overdue. Please pay by {specific date}: {payment link}. {your name}."}
+        ]
+      }
+    },
+    phone: {
+      title:"Call them, then confirm in writing",
+      effort:"A 5 to 10 minute call",
+      reason:"Messages have not moved this, so a direct call is more likely to get a commitment. Confirm whatever you agree the same day.",
+      ladder:2,
+      callout:"Keep the call short. Ask directly when payment will be made, and get a specific date. Then send the confirmation below the same day so there is a record.",
+      msgs:[
+        {kind:"SMS to set up the call",
+         body:"Hi {contact name}, trying to reach you about invoice {invoice number} ({amount}), still outstanding. Free for a quick call today or tomorrow? {your name}."},
+        {kind:"Email to send after the call", subject:"Confirming our call about invoice {invoice number}",
+         body:"Hi {contact name}, thanks for speaking today. Confirming what we agreed: payment of {amount} by {specific date}, or the plan we discussed. The link is here for when you are ready: {payment link}. If I have any of that wrong, let me know today. {your name}."}
+      ]
+    },
+    letter: {
+      title:"Consider a formal letter of demand",
+      effort:"About 15 minutes",
+      reason:"It is well overdue and reminders and a call have not worked. A formal notice is the step before recovery. Have it reviewed before you send it.",
+      ladder:3,
+      /* BUILD NOTE (not shown to users): letter wording and the bracketed recovery
+         references need Sole sign-off against current Australian rules before this
+         resource is published. */
+      draft:"This is a general template, not a legal document. Check it fits your situation and change anything that does not. For a larger amount, or if the customer has refused to pay, it is worth getting your own advice before you send it.",
+      msgs:[
+        {kind:"Letter of demand", subject:"Final notice, invoice {invoice number}",
+         body:"[Date]\nTo {contact name}, [customer business and address]\nRe: outstanding invoice {invoice number}, {amount}, due {due date}\n\nThis is a formal request for payment of {amount} for invoice {invoice number}, which was due on {due date} and remains unpaid despite earlier reminders. Please pay the full amount by {specific date} using {payment link}.\n\nIf payment is not received by that date, I may take further steps to recover the debt, which could include [general reference to the recovery options available in your state]. I would prefer to resolve this directly and am open to a payment arrangement if that would help.\n\n{your name}, {business name}"}
+      ]
+    },
+    decision: {
+      title:"Time to decide: recover, arrange a plan, or write it off",
+      effort:"A few minutes to weigh up",
+      reason:"At this age, chasing the same way rarely works. Weigh the amount against the time and cost of recovering it.",
+      ladder:4,
+      callout:"Three realistic paths from here: offer a payment plan to get something back, start formal recovery if the amount justifies it, or write it off and protect your time. If you still want to keep the relationship, the plan below is the softest option.",
+      msgs:[
+        {kind:"Email, payment plan offer", subject:"A way to clear invoice {invoice number}",
+         body:"Hi {contact name}, if paying {amount} in one go is difficult right now, I am happy to set up a short plan, for example the total split over a few agreed instalments. Tell me what is realistic and we will put dates to it. I would rather find something that works than leave it hanging. {your name}."}
+      ]
+    },
+    dispute: {
+      title:"Pause and resolve the dispute first",
+      effort:"About 3 minutes",
+      reason:"They are contesting the invoice, so chasing payment now will backfire. Get the specific problem in writing, settle it, then re-issue.",
+      ladder:-1,
+      msgs:[
+        {kind:"Email", subject:"Invoice {invoice number}, let us sort out the issue",
+         body:"Hi {contact name}, thanks for flagging your concern with invoice {invoice number}. I want to get it right, so I will hold off on payment reminders while we work it out. Can you tell me specifically what is wrong, whether it is the amount, the work, or something else, so I can review it? Once we agree, I will re-issue or confirm the invoice and we can settle it. {your name}."}
+      ]
+    }
+  };
+
+  /* standalone payment wording, reusable, not tied to a recovery step */
+  var PAY = [
+    {kind:"How to pay",
+     body:"Here are the payment details for invoice {invoice number} ({amount}): pay online at {payment link}, or by bank transfer using {invoice number} as the reference. Let me know once it is on its way. {your name}."},
+    {kind:"Confirm a payment plan",
+     body:"Thanks {contact name}, confirming the plan for invoice {invoice number}: {amount} in total, paid in the instalments we agreed, with the first due on {specific date}. I will send a short reminder before each one. {your name}."},
+    {kind:"Confirm payment received",
+     body:"Hi {contact name}, confirming I have received payment for invoice {invoice number}. Thanks very much, it was good working with you. {your name}."}
+  ];
+
+  /* ---------- decision table ---------- */
+  function baseRung(overdue, contact){
+    if(overdue==="notdue") return "preemptive";
+    if(overdue==="longtime") return "decision";
+    if(overdue==="week"){
+      return contact==="none" ? "gentle" : "firm";
+    }
+    if(overdue==="weeks"){
+      return (contact==="several"||contact==="quiet") ? "phone" : "firm";
+    }
+    if(overdue==="months"){
+      if(contact==="none") return "firm";
+      if(contact==="one") return "phone";
+      return "letter"; /* several or quiet */
+    }
+    return "firm";
+  }
+
+  var ORDER = ["preemptive","gentle","firm","phone","letter","decision"];
+
+  /* explicit next step down the ladder; null means no further step */
+  var NEXT = {
+    preemptive:"gentle",
+    gentle:"firm",
+    firm:"phone",
+    phone:"letter",
+    letter:"decision",
+    decision:null,
+    dispute:null
+  };
+
+  function decide(){
+    if(state.contact==="dispute") return "dispute";
+    var rung = baseRung(state.overdue, state.contact);
+    /* relationship over: move one rung faster, within reason */
+    if(state.relationship==="over" && rung!=="preemptive" && rung!=="decision"){
+      var i = ORDER.indexOf(rung);
+      if(i>-1 && i<ORDER.length-1) rung = ORDER[i+1];
+    }
+    return rung;
+  }
+
+  /* ---------- rendering ---------- */
+  function fieldMap(){
+    return state.values;
+  }
+
+  /* collect the distinct {tokens} used by a set of messages, in canonical order */
+  function tokensFor(msgs){
+    var seen = {};
+    msgs.forEach(function(m){
+      var text = (m.subject||'') + ' ' + m.body;
+      var re = /\{([^}]+)\}/g, mt;
+      while((mt = re.exec(text)) !== null){ seen[mt[1]] = true; }
+    });
+    return FIELD_ORDER.filter(function(t){ return seen[t]; });
+  }
+
+  /* build the details form with only the tokens the current messages need */
+  function renderFields(tokens){
+    var box = document.getElementById('fields');
+    box.innerHTML = '';
+    if(!tokens.length){ box.style.display='none'; return; }
+    box.style.display='grid';
+    tokens.forEach(function(tok){
+      var meta = FIELD_META[tok] || {label:tok};
+      var field = document.createElement('div');
+      field.className = 'field' + (meta.wide ? ' wide' : '');
+      var id = 'f-' + tok.replace(/\s+/g,'-');
+      var label = document.createElement('label');
+      label.setAttribute('for', id);
+      label.textContent = meta.label;
+      var input = document.createElement('input');
+      input.id = id;
+      input.setAttribute('autocomplete','off');
+      if(meta.placeholder) input.placeholder = meta.placeholder;
+      input.value = state.values[tok] || '';
+      input.addEventListener('input', function(){
+        state.values[tok] = input.value.trim();
+        refreshFilled();
+      });
+      field.appendChild(label);
+      field.appendChild(input);
+      box.appendChild(field);
+    });
+  }
+
+  function fillForDisplay(text){
+    var m = fieldMap();
+    return text.replace(/\{([^}]+)\}/g, function(_, tok){
+      if(m[tok]) return '<span class="val">'+escapeHtml(m[tok])+'</span>';
+      return '<span class="ph">['+escapeHtml(tok)+']</span>';
+    });
+  }
+  function fillForCopy(text){
+    var m = fieldMap();
+    return text.replace(/\{([^}]+)\}/g, function(_, tok){
+      return m[tok] ? m[tok] : '['+tok+']';
+    });
+  }
+  function escapeHtml(s){
+    return s.replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});
+  }
+
+  function messageCard(msg){
+    var wrap = document.createElement('div');
+    wrap.className = 'msg';
+
+    var head = document.createElement('div');
+    head.className = 'msg-head';
+    var kind = document.createElement('span');
+    kind.className = 'msg-kind';
+    kind.textContent = msg.kind;
+    var copyBtn = document.createElement('button');
+    copyBtn.className = 'copy';
+    copyBtn.type = 'button';
+    copyBtn.textContent = 'Copy';
+    head.appendChild(kind);
+    head.appendChild(copyBtn);
+    wrap.appendChild(head);
+
+    var rawForCopy = (msg.subject ? 'Subject: '+msg.subject+'\n\n' : '') + msg.body;
+
+    if(msg.subject){
+      var subj = document.createElement('div');
+      subj.className = 'msg-subject';
+      subj.innerHTML = 'Subject: ' + fillForDisplay(msg.subject);
+      wrap.appendChild(subj);
+      wrap._subj = subj;
+      wrap._subjRaw = msg.subject;
+    }
+    var body = document.createElement('div');
+    body.className = 'msg-body';
+    body.innerHTML = fillForDisplay(msg.body);
+    wrap.appendChild(body);
+    wrap._body = body;
+    wrap._bodyRaw = msg.body;
+
+    copyBtn.addEventListener('click', function(){
+      var text = (msg.subject ? 'Subject: '+fillForCopy(msg.subject)+'\n\n' : '') + fillForCopy(msg.body);
+      copyText(text, copyBtn);
+    });
+
+    return wrap;
+  }
+
+  function copyText(text, btn){
+    function done(){
+      btn.textContent = 'Copied';
+      btn.classList.add('done');
+      setTimeout(function(){ btn.textContent='Copy'; btn.classList.remove('done'); }, 1600);
+    }
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(done, function(){ fallbackCopy(text, done); });
+    } else {
+      fallbackCopy(text, done);
+    }
+  }
+  function fallbackCopy(text, cb){
+    var ta = document.createElement('textarea');
+    ta.value = text; ta.style.position='fixed'; ta.style.opacity='0';
+    document.body.appendChild(ta); ta.select();
+    try{ document.execCommand('copy'); }catch(e){}
+    document.body.removeChild(ta); cb();
+  }
+
+  /* re-fill every rendered message when fields change (results and payment wording) */
+  function refreshFilled(){
+    document.querySelectorAll('.msg').forEach(function(card){
+      if(card._subj) card._subj.innerHTML = 'Subject: ' + fillForDisplay(card._subjRaw);
+      if(card._body) card._body.innerHTML = fillForDisplay(card._bodyRaw);
+    });
+  }
+
+  function currentMsgs(entry){
+    if(entry.tone){
+      var t = state.tone || (state.relationship==="over" ? "cold" : "warm");
+      state.tone = t;
+      return entry.tone[t];
+    }
+    return entry.msgs;
+  }
+
+  function renderResult(rung){
+    var entry = LIB[rung];
+    var card = document.getElementById('recCard');
+    card.classList.toggle('dispute', rung==="dispute");
+    document.getElementById('recTag').textContent = rung==="dispute" ? "Handle this first" : "Your next step";
+    document.getElementById('recTitle').textContent = entry.title;
+    var meta = document.getElementById('recMeta');
+    if(entry.effort){
+      meta.style.display = 'block';
+      meta.innerHTML = '<span class="rec-chip"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><circle cx="6" cy="6" r="5" stroke="currentColor" stroke-width="1.3"/><path d="M6 3.2V6l1.9 1.1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>' + escapeHtml(entry.effort) + '</span>';
+    } else {
+      meta.style.display = 'none';
+      meta.innerHTML = '';
+    }
+    document.getElementById('recReason').textContent = entry.reason;
+
+    var block = document.getElementById('msgBlock');
+    block.innerHTML = '';
+
+    if(entry.draft){
+      var d = document.createElement('div');
+      d.className='draft-note';
+      d.textContent = entry.draft;
+      block.appendChild(d);
+    }
+    if(entry.callout){
+      var c = document.createElement('div');
+      c.className='callout';
+      c.textContent = entry.callout;
+      block.appendChild(c);
+    }
+
+    /* tone toggle where variants exist */
+    if(entry.tone){
+      if(!state.tone) state.tone = (state.relationship==="over" ? "cold" : "warm");
+      var toggle = document.createElement('div');
+      toggle.className='tone';
+      toggle.setAttribute('role','group');
+      toggle.setAttribute('aria-label','Message tone');
+      [['warm','Warmer'],['cold','Firmer']].forEach(function(pair){
+        var b=document.createElement('button');
+        b.type='button';
+        b.textContent=pair[1];
+        b.setAttribute('aria-pressed', state.tone===pair[0] ? 'true':'false');
+        b.addEventListener('click',function(){
+          state.tone=pair[0];
+          renderResult(rung);
+        });
+        toggle.appendChild(b);
+      });
+      block.appendChild(toggle);
+    }
+
+    var msgs = currentMsgs(entry);
+    document.getElementById('sumTitle').textContent = msgs.length === 1 ? 'Complete your message' : 'Complete your messages';
+    renderFields(tokensFor(msgs));
+    msgs.forEach(function(m){ block.appendChild(messageCard(m)); });
+
+    /* advance to the next step in place, without re-answering */
+    var next = NEXT[rung];
+    if(next){
+      var adv = document.createElement('div');
+      adv.className = 'advance';
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'adv-btn';
+      btn.innerHTML = 'Still unpaid? Show the next step <span class="arw" aria-hidden="true">&rarr;</span>';
+      btn.addEventListener('click', function(){
+        renderResult(next);
+        document.getElementById('recCard').scrollIntoView({behavior:'smooth', block:'start'});
+      });
+      adv.appendChild(btn);
+      block.appendChild(adv);
+    }
+
+    markLadder(entry.ladder);
+    document.getElementById('result').classList.add('on');
+    document.getElementById('escalation').classList.add('on');
+  }
+
+  function markLadder(idx){
+    document.querySelectorAll('#ladder .rung').forEach(function(r){
+      var i = parseInt(r.getAttribute('data-rung'),10);
+      r.classList.remove('here','past');
+      if(idx<0) return; /* dispute: off the ladder, nothing marked */
+      if(i===idx) r.classList.add('here');
+      else if(i<idx) r.classList.add('past'); /* behind you, not necessarily done */
+    });
+  }
+
+  /* browse-all mode (escape hatch) */
+  function renderAll(){
+    var card = document.getElementById('recCard');
+    card.classList.remove('dispute');
+    document.getElementById('recTag').textContent = "All templates";
+    document.getElementById('recMeta').style.display = 'none';
+    document.getElementById('recMeta').innerHTML = '';
+    document.getElementById('recTitle').textContent = "Browse the full set";
+    document.getElementById('recReason').textContent = "The guided questions pick the right one for you. If you would rather choose yourself, they are all here. Add your details to fill them in.";
+
+    var block = document.getElementById('msgBlock');
+    block.innerHTML = '';
+    var groups = ["preemptive","gentle","firm","phone","letter","decision","dispute"];
+    var allMsgs = [];
+    groups.forEach(function(key){
+      var entry = LIB[key];
+      var h = document.createElement('div');
+      h.className='q-label';
+      h.style.marginTop='22px';
+      h.textContent = entry.title;
+      block.appendChild(h);
+      if(entry.draft){
+        var d=document.createElement('div'); d.className='draft-note'; d.textContent=entry.draft; block.appendChild(d);
+      }
+      var list = entry.tone ? entry.tone.warm.concat(entry.tone.cold) : entry.msgs;
+      list.forEach(function(m){ allMsgs.push(m); block.appendChild(messageCard(m)); });
+    });
+    renderFields(tokensFor(allMsgs));
+    document.getElementById('sumTitle').textContent = 'Fill in your details';
+    markLadder(-1);
+    document.getElementById('result').classList.add('on');
+    document.getElementById('escalation').classList.add('on');
+  }
+
+  /* ---------- wiring ---------- */
+  (function renderPayment(){
+    var box = document.getElementById('payBlock');
+    PAY.forEach(function(m){ box.appendChild(messageCard(m)); });
+  })();
+
+  document.querySelectorAll('.q').forEach(function(q){
+    var key = q.getAttribute('data-q')==='overdue' ? 'overdue'
+            : q.getAttribute('data-q')==='contact' ? 'contact' : 'relationship';
+    q.querySelectorAll('.pill').forEach(function(p){
+      p.addEventListener('click', function(){
+        q.querySelectorAll('.pill').forEach(function(o){ o.setAttribute('aria-pressed','false'); });
+        p.setAttribute('aria-pressed','true');
+        state[key] = p.getAttribute('data-val');
+        var ready = state.overdue && state.contact && state.relationship;
+        document.getElementById('go').disabled = !ready;
+      });
+    });
+  });
+
+  document.getElementById('go').addEventListener('click', function(){
+    if(!(state.overdue && state.contact && state.relationship)) return;
+    state.tone = null; /* reset so it defaults from relationship each run */
+    renderResult(decide());
+    document.getElementById('result').scrollIntoView({behavior:'smooth', block:'start'});
+  });
+
+  document.getElementById('skip').addEventListener('click', function(){
+    renderAll();
+    document.getElementById('result').scrollIntoView({behavior:'smooth', block:'start'});
+  });
+
+})();
+</script>
+</body>
+</html>

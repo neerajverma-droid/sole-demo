@@ -127,6 +127,7 @@ export function VendorRefundsScreen() {
     <div className="space-y-[15px]">
       <PageHeader
         icon={Undo2}
+        tourId="vendor-refunds-header"
         /* No warm tile here, unlike Client refunds. The warm accent marks money
            leaving the business; a vendor refund is money coming back in, so
            this takes the default indigo. */
@@ -137,26 +138,22 @@ export function VendorRefundsScreen() {
 
       {/* Scopes the strip and the table together — which is what makes the
           title's "in the selected period" accurate. */}
-      {!isEmpty && (
-        <Tabs
-          value={period}
-          onValueChange={(next) => setPeriod(next as VendorRefundPeriod)}
-        >
-          <TabsList aria-label="Summary period">
-            {VENDOR_REFUND_PERIODS.map((option) => (
-              <TabsTrigger key={option} value={option}>
-                {option}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
-      )}
+      <Tabs
+        value={period}
+        onValueChange={(next) => setPeriod(next as VendorRefundPeriod)}
+      >
+        <TabsList aria-label="Summary period">
+          {VENDOR_REFUND_PERIODS.map((option) => (
+            <TabsTrigger key={option} value={option}>
+              {option}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
 
-      {/* Gone with no refunds at all — zeroes over an empty table say nothing
-          the empty state doesn't. An empty period keeps it. */}
-      {!isEmpty && (
-        <StatStrip stats={vendorRefundStats(summaryQuery.data ?? [])} />
-      )}
+      {/* Kept with no refunds at all too — its zeroes are the first thing to
+          fill in. */}
+      <StatStrip stats={vendorRefundStats(summaryQuery.data ?? [])} />
 
       <VendorRefundsTable
         refunds={stored}

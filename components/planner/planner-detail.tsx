@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useSetAtom } from "jotai";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Trash2 } from "lucide-react";
 
 import {
   Breadcrumb,
@@ -26,6 +26,9 @@ import { plannerTabAtom } from "@/lib/atoms";
 import type { PlannerTab } from "@/lib/planner";
 
 export const PLANNER_ROOT = "/expenses/business-planner";
+
+/** The URL fragment (and element id) of a goal page's allocation section. */
+export const GOAL_ALLOCATION_HASH = "allocation";
 
 export type Crumb = {
   label: string;
@@ -96,6 +99,56 @@ export function PlannerDetailHeader({
 }
 
 /**
+ * The action bar at the foot of a planner form — Cancel and the save button on
+ * the right, pinned to the bottom of the viewport while the form scrolls.
+ *
+ * The same bar the invoice and quote editors use, so saving is in the same
+ * place on every form: bottom right, not up in the page header. Delete, where
+ * the record can be deleted, sits at the far left.
+ */
+export function PlannerFormFooter({
+  onCancel,
+  onSave,
+  saving,
+  saveLabel,
+  onDelete,
+  saveTourId,
+}: {
+  onCancel: () => void;
+  onSave: () => void;
+  saving: boolean;
+  /** "Save goal" when creating, "Update goal" when editing. */
+  saveLabel: string;
+  /** Present only for a record that exists. */
+  onDelete?: () => void;
+  /** Rendered as `data-usertour` on the save button, for a tour to point at. */
+  saveTourId?: string;
+}) {
+  return (
+    // A direct child of the page's column, never wrapped: `sticky` only holds
+    // within its parent, so a wrapper would pin it to nothing.
+    <div className="sticky bottom-0 z-10 -mb-2 flex flex-wrap items-center justify-end gap-2 border-t bg-background py-3">
+      {onDelete && (
+        <Button
+          variant="ghost"
+          className="mr-auto text-destructive hover:text-destructive"
+          onClick={onDelete}
+        >
+          <Trash2 />
+          Delete
+        </Button>
+      )}
+      <Button variant="outline" onClick={onCancel} disabled={saving}>
+        Cancel
+      </Button>
+      <Button onClick={onSave} disabled={saving} data-usertour={saveTourId}>
+        {saving ? "Saving…" : saveLabel}
+      </Button>
+    </div>
+  );
+}
+
+/**
  * Sends you back to the right tab.
  *
  * A detail page is its own route, so the planner's tab state has to be told
@@ -107,6 +160,43 @@ export function usePlannerSection(tab: PlannerTab) {
   React.useEffect(() => {
     setTab(tab);
   }, [setTab, tab]);
+}
+
+/**
+ * When a field's error is allowed to show.
+ *
+ * Not while typing: an untouched form that scolds on the first keystroke reads
+ * as an error the user hasn't had the chance to avoid. A field's message appears
+ * once it has been left (`touch`), or for every field once Save has been
+ * pressed (`submit`) — whichever comes first.
+ */
+export function useFieldTouch() {
+  const [submitted, setSubmitted] = React.useState(false);
+  const [touched, setTouched] = React.useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+
+  const touch = React.useCallback((key: string) => {
+    setTouched((current) =>
+      current.has(key) ? current : new Set(current).add(key),
+    );
+  }, []);
+  const submit = React.useCallback(() => setSubmitted(true), []);
+  const reset = React.useCallback(() => {
+    setSubmitted(false);
+    setTouched(new Set());
+  }, []);
+
+  /** The message for `key`, if it's time to show it. */
+  const visible = <T extends { key: string; message: string }>(
+    issues: T[],
+    key: string,
+  ) =>
+    submitted || touched.has(key)
+      ? issues.find((issue) => issue.key === key)?.message
+      : undefined;
+
+  return { touch, submit, reset, visible };
 }
 
 /** A detail URL that points at nothing — a deleted record, or a typo. */

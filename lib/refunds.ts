@@ -8,8 +8,6 @@
  */
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
 import { accountNumberError, bsbError } from "@/lib/settings";
 import {
@@ -27,6 +25,8 @@ import {
   invoiceMoney,
   type Invoice,
 } from "@/lib/invoices";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
 
 export const REFUND_TYPES = ["Client refund", "Credit note"] as const;
 export type RefundType = (typeof REFUND_TYPES)[number];
@@ -771,13 +771,7 @@ export async function createClientRefundApi(
       refundApiErrorMessage(response.data?.message, "Failed to issue refund."),
     );
   }
-  // Refunds were not tracked at all in the old app. The value matters more
-  // here than the count: one large refund and twenty small ones are different
-  // stories about the same number of events.
-  track(EVENTS.CLIENT_REFUND_RECORDED, {
-    amount: refundAmount(draft),
-    against_invoice: Boolean(draft.invoiceId),
-  });
+  track(EVENTS.CLIENT_REFUND_ISSUED);
 }
 
 /**

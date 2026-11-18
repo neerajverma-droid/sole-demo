@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/select";
 import { DatePicker } from "@/components/documents/date-picker";
 import { Field } from "@/components/documents/field";
-import { AmountInput } from "@/components/invoices/invoices-filters";
+import { AmountInput, amountFilterError } from "@/components/invoices/invoices-filters";
 import { contactDisplayName, matchContacts, type Contact } from "@/lib/contacts";
 import type { QuoteListFilters } from "@/lib/quotes";
 
@@ -128,6 +128,11 @@ export function QuotesFiltersPopover({
 
   const matchingClients = matchContacts(clients, clientQuery);
 
+  // Typed text, so a letter can get in: say so per field, and hold Apply back.
+  const minTotalError = amountFilterError(draft.minTotal);
+  const maxTotalError = amountFilterError(draft.maxTotal);
+  const hasAmountErrors = Boolean(minTotalError || maxTotalError);
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -180,18 +185,20 @@ export function QuotesFiltersPopover({
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Amount min">
+          <Field label="Amount min" error={minTotalError}>
             <AmountInput
               value={draft.minTotal}
               onChange={(next) => patch({ minTotal: next })}
               label="Minimum amount"
+              invalid={!!minTotalError}
             />
           </Field>
-          <Field label="Amount max">
+          <Field label="Amount max" error={maxTotalError}>
             <AmountInput
               value={draft.maxTotal}
               onChange={(next) => patch({ maxTotal: next })}
               label="Maximum amount"
+              invalid={!!maxTotalError}
             />
           </Field>
         </div>
@@ -264,7 +271,7 @@ export function QuotesFiltersPopover({
           <Button variant="outline" size="sm" onClick={cancel}>
             Cancel
           </Button>
-          <Button size="sm" onClick={apply}>
+          <Button size="sm" onClick={apply} disabled={hasAmountErrors}>
             Apply
           </Button>
         </div>

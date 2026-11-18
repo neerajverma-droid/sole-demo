@@ -264,21 +264,6 @@ export function EmployeesScreen() {
    */
   const isFiltering = search !== debouncedSearch || listQuery.isPlaceholderData;
 
-  /*
-   * Nobody on payroll at all — loaded, unnarrowed and empty, not just a
-   * search or filter that matched no one, and never a failed fetch. The
-   * cards then have nothing to count or filter, so only the header and the
-   * table's "No employees yet" remain; the seats notice stays, since it's
-   * what stands between the person and adding their first employee.
-   */
-  const noEmployees =
-    listQuery.isSuccess &&
-    !isFiltering &&
-    search.trim().length === 0 &&
-    employmentType === "all" &&
-    status === "all" &&
-    total === 0;
-
   const header = (
     <PageHeader
       icon={UsersRound}
@@ -286,7 +271,7 @@ export function EmployeesScreen() {
       description="Manage your team, their pay details and their Microkeeper sync."
     >
       {enabled && seats.employeeLimit > 0 && (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2" data-usertour="payroll-employees-seats">
           <span className="inline-flex h-9 items-center rounded-full border border-border bg-card px-3.5 text-sm">
             <span className="text-muted-foreground">Seats:</span>
             <span className="ml-1.5 font-medium tabular">
@@ -343,11 +328,9 @@ export function EmployeesScreen() {
       {/* The cards are filters as well as figures — "Needs attention"
           narrows to failed syncs, the rest clear the filters, the same as
           sole-webapp. */}
-      {!noEmployees && (
-        <div data-usertour="payroll-employees-stats">
-          <StatCards stats={cards} loading={statsQuery.isPending} />
-        </div>
-      )}
+      <div data-usertour="payroll-employees-stats">
+        <StatCards stats={cards} loading={statsQuery.isPending} />
+      </div>
 
       <EmployeesTable
         employees={listQuery.data?.employees ?? []}

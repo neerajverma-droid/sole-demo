@@ -52,7 +52,7 @@ import { LockedCountryInput } from "@/components/documents/locked-country-field"
 import { toast } from "sonner";
 import { useIndustriesQuery } from "@/hooks/use-industries-query";
 import type { ApiBusinessDetail } from "@/lib/businesses";
-import type { IndustryOption } from "@/lib/industries";
+import { industriesForCountry, type IndustryOption } from "@/lib/industries";
 import { getCountryCallingAndPhoneNumber } from "@/lib/phone";
 import { cn } from "@/lib/utils";
 
@@ -411,7 +411,10 @@ export function BusinessProfileForm({
   // The real list, not a locally-invented one — same ids and names
   // sole-webapp's own industry picker saves against.
   const { data: industries } = useIndustriesQuery();
-  const industryOptions = industries ?? [];
+  // The active business's country decides this, same as everywhere else here —
+  // the new-business country picker doesn't carry its own feature flags, so a
+  // business created in a different country still sees NDIS until it's open.
+  const industryOptions = industriesForCountry(industries ?? [], country);
 
   /*
    * One industry, not a list. The brief named four — NDIS provider, Disability

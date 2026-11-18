@@ -35,6 +35,8 @@ function useInvalidateTimed() {
       queryClient.invalidateQueries({ queryKey: ["project-stats"] }),
       // The Time Tracker's list and summaries show the same logs.
       queryClient.invalidateQueries({ queryKey: ["time-tracker"] }),
+      // Quick Actions' Time tracker card lists the same sessions.
+      queryClient.invalidateQueries({ queryKey: ["unibox", "timeTracker"] }),
     ]);
 }
 

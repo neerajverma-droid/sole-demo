@@ -145,7 +145,10 @@ export function InventoryTable({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div
+        className="flex flex-wrap items-center justify-between gap-3"
+        data-usertour="inventory-search-filters"
+      >
         <FilterPills
           tourId="inventory-stock-filters"
           label="Filter items by stock level"

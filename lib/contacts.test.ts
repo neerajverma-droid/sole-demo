@@ -165,7 +165,7 @@ describe("contactSchema", () => {
     ).toBe(true);
   });
 
-  it("rejects an Individual carrying additional contacts", () => {
+  it("accepts an Individual carrying additional contacts", () => {
     const result = contactSchema.safeParse(
       formValues({
         businessType: "Individual",
@@ -173,7 +173,7 @@ describe("contactSchema", () => {
         additionalContacts: [person()],
       }),
     );
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 
   it("validates each additional contact's own name, email and phone", () => {
@@ -187,6 +187,65 @@ describe("contactSchema", () => {
       expect(paths).toContain("additionalContacts.0.personName");
       expect(paths).toContain("additionalContacts.0.email");
       expect(paths).toContain("additionalContacts.0.phone");
+    }
+  });
+
+  it("leaves optional fields alone when empty, but validates them once typed", () => {
+    expect(
+      contactSchema.safeParse(
+        formValues({ website: "", division: "", city: "", country: "" }),
+      ).success,
+    ).toBe(true);
+
+    const bad = contactSchema.safeParse(
+      formValues({
+        website: "not a site",
+        division: "F",
+        addressLine1: "1",
+        city: "Sydney 2000",
+        country: "4u",
+        notes: "x".repeat(1001),
+      }),
+    );
+    expect(bad.success).toBe(false);
+    if (!bad.success) {
+      const paths = bad.error.issues.map((issue) => issue.path.join("."));
+      for (const field of ["website", "division", "addressLine1", "city", "country", "notes"]) {
+        expect(paths).toContain(field);
+      }
+    }
+
+    for (const website of ["www.google", "https://www.google", "www.google/about", "google"]) {
+      expect(contactSchema.safeParse(formValues({ website })).success).toBe(false);
+    }
+    for (const website of ["www.google.com", "google.com", "https://www.google.com.au/x"]) {
+      expect(contactSchema.safeParse(formValues({ website })).success).toBe(true);
+    }
+
+    expect(
+      contactSchema.safeParse(
+        formValues({
+          website: "https://turnerconsulting.com.au/about",
+          city: "St. Kilda",
+          country: "New Zealand",
+        }),
+      ).success,
+    ).toBe(true);
+  });
+
+  it("requires the email of whoever is flagged primary, and only theirs", () => {
+    const promoted = contactSchema.safeParse(
+      formValues({
+        isPrimary: false,
+        email: "",
+        additionalContacts: [person({ isPrimary: true, email: "" })],
+      }),
+    );
+    expect(promoted.success).toBe(false);
+    if (!promoted.success) {
+      const paths = promoted.error.issues.map((issue) => issue.path.join("."));
+      expect(paths).toContain("additionalContacts.0.email");
+      expect(paths).not.toContain("email");
     }
   });
 
@@ -253,7 +312,7 @@ describe("contactPeople", () => {
 });
 
 describe("composeContactPeople", () => {
-  it("returns just the trimmed primary for an Individual", () => {
+  it("returns just the trimmed primary for an Individual with no additional contacts", () => {
     const result = composeContactPeople(
       formValues({
         businessType: "Individual",

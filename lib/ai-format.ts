@@ -1,7 +1,7 @@
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
 import { apiErrorMessage } from "@/lib/api-error";
-import type { BulkImportSpec } from "@/lib/bulk-import";
+import type { BulkField, BulkImportSpec } from "@/lib/bulk-import";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
 import {
   isSupportedImportFile,
@@ -30,29 +30,46 @@ export type AiFormatField = {
   label: string;
   required?: boolean;
   description?: string;
-  /** Allowed values, for a field that only takes a fixed set. */
-  options?: readonly string[];
+  /**
+   * Allowed values, for a field that only takes a fixed set. Plain strings are
+   * the value; `{ value, label }` pairs are records the formatter answers with
+   * the id of (an expense's category) — it's shown the names and the ids.
+   */
+  options?: readonly (string | { value: string; label: string })[];
 };
+
+/** What the endpoint can format: a migration step, or the product catalogue. */
+export type AiFormatType = MigrationStepId | "products";
 
 /** What an importer tells `readImportFile` about itself. */
 export type AiFormatTarget = {
   /** Which migration this is. Sent as the endpoint's `type`. */
-  type: MigrationStepId;
+  type: AiFormatType;
   fields: readonly AiFormatField[];
 };
 
+function aiOptions(field: BulkField): AiFormatField["options"] {
+  const editor = field.review?.editor;
+  if (editor?.kind === "select") return editor.options;
+  if (editor?.kind === "choice") {
+    return editor.options.map(({ value, label }) => ({ value, label }));
+  }
+  return undefined;
+}
+
 /** A BulkImportDialog spec's fields, as the AI endpoint takes them. */
 export function aiTargetFromBulkSpec(spec: BulkImportSpec): AiFormatTarget {
+  const type = spec.aiType ?? spec.migrationStep;
+  if (!type) {
+    throw new Error("A bulk import spec needs a migrationStep or an aiType.");
+  }
   return {
-    type: spec.migrationStep,
+    type,
     fields: spec.fields.map((field) => ({
       label: field.label,
       required: field.required,
       description: field.desc,
-      options:
-        field.review?.editor.kind === "select"
-          ? field.review.editor.options
-          : undefined,
+      options: aiOptions(field),
     })),
   };
 }

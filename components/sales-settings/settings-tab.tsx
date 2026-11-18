@@ -25,6 +25,7 @@ export function SettingsTab({
       <SalesSection
         icon={Hash}
         title="Invoice & Quote Numbers"
+        tourId="sales-numbers"
         description="Sole numbers each document for you, counting up from the next number below. Change the next number and the sequence continues from there — it never goes backwards past something you've already issued."
       >
         <div className="grid gap-4 sm:grid-cols-2">

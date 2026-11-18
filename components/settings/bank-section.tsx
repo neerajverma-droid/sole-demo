@@ -104,7 +104,10 @@ export function BankSection() {
       saving={saving}
       onSave={() => void onSave()}
     >
-      <section className="rounded-xl border bg-muted/30 p-[15px]">
+      <section
+        className="rounded-xl border bg-muted/30 p-[15px]"
+        data-usertour="settings-bank-connect"
+      >
         <div className="flex flex-wrap items-start justify-between gap-[15px]">
           <div className="flex items-start gap-3">
             <span className="grid size-9 shrink-0 place-items-center rounded-lg border bg-background text-muted-foreground">
@@ -169,7 +172,10 @@ export function BankSection() {
         </div>
       </section>
 
-      <section className="mt-[15px] rounded-xl border p-[15px]">
+      <section
+        className="mt-[15px] rounded-xl border p-[15px]"
+        data-usertour="settings-bank-details"
+      >
         <div className="flex items-start gap-3">
           <span className="grid size-9 shrink-0 place-items-center rounded-lg border bg-muted/40 text-muted-foreground">
             <ReceiptText className="size-4" aria-hidden />

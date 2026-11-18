@@ -1,5 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
+const trackMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/analytics", () => ({ track: trackMock }));
+
 import { decryptPayload } from "@/utils/encrypt";
 import apiRoutes from "@/config/api-routes";
 
@@ -651,5 +654,21 @@ describe("drafts", () => {
     expect(
       contributionSummaryLine(emptyContributionDraft("2026-09-10")),
     ).toBe("No amount");
+  });
+});
+
+describe("createContributionApi fires its Mixpanel event", () => {
+  it("fires after the server confirms", async () => {
+    trackMock.mockClear();
+    apiMock.post.mockResolvedValue({ data: { success: true } });
+    await createContributionApi(BASE_DRAFT);
+    expect(trackMock).toHaveBeenCalledWith("contribution_added");
+  });
+
+  it("stays silent when the server refuses", async () => {
+    trackMock.mockClear();
+    apiMock.post.mockResolvedValue({ data: { success: false, message: "no" } });
+    await expect(createContributionApi(BASE_DRAFT)).rejects.toThrow();
+    expect(trackMock).not.toHaveBeenCalled();
   });
 });

@@ -28,7 +28,10 @@ export function TaxResultsPanel({ draft }: { draft: TaxDraft }) {
   const groups = resultGroups(estimate);
 
   return (
-    <aside className="w-full shrink-0 lg:w-[380px]">
+    <aside
+      className="w-full shrink-0 lg:w-[380px]"
+      data-usertour="tax-results"
+    >
       {/*
         Sticky to the top of the viewport, not the page: the form is four steps
         long and the figure is what someone is watching while they fill it in.
@@ -37,7 +40,10 @@ export function TaxResultsPanel({ draft }: { draft: TaxDraft }) {
       */}
       <div className="lg:sticky lg:top-6">
         <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
-          <div className="space-y-4 border-b border-border p-5">
+          <div
+            className="space-y-4 border-b border-border p-5"
+            data-usertour="tax-results-total"
+          >
             <div className="space-y-0.5">
               <h2 className="text-base font-semibold tracking-tight">
                 Your Results
@@ -71,7 +77,10 @@ export function TaxResultsPanel({ draft }: { draft: TaxDraft }) {
             </div>
           </div>
 
-          <div className="divide-y divide-border">
+          <div
+            className="divide-y divide-border"
+            data-usertour="tax-results-breakdown"
+          >
             {groups.map((group) => (
               <div key={group.heading} className="space-y-1.5 p-5">
                 <p className="text-sm font-semibold">{group.heading}</p>

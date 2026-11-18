@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { PrefixInput } from "@/components/ui/prefix-input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
@@ -218,16 +219,19 @@ export function ProjectFormDialog({
             </div>
           ) : (
             <div className="mt-5 space-y-4">
-              <Field label="Client" htmlFor="project-client" required error={issueFor("client")}>
-                <ProjectClientSelect
-                  id="project-client"
-                  value={draft.client}
-                  onChange={(client) => set("client", client)}
-                  invalid={!!issueFor("client")}
-                  disabled={editing}
-                />
-              </Field>
+              <div data-usertour="project-form-client">
+                <Field label="Client" htmlFor="project-client" required error={issueFor("client")}>
+                  <ProjectClientSelect
+                    id="project-client"
+                    value={draft.client}
+                    onChange={(client) => set("client", client)}
+                    invalid={!!issueFor("client")}
+                    disabled={editing}
+                  />
+                </Field>
+              </div>
 
+              <div className="space-y-4" data-usertour="project-form-basics">
               <Field label="Project name" htmlFor="project-name" required error={issueFor("name")}>
                 <Input
                   id="project-name"
@@ -277,8 +281,9 @@ export function ProjectFormDialog({
                   </Select>
                 </Field>
               </div>
+              </div>
 
-              <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-4 sm:grid-cols-2" data-usertour="project-form-dates">
                 <Field label="Start date" htmlFor="project-start" required error={issueFor("startDate")}>
                   <DatePicker
                     id="project-start"
@@ -309,7 +314,7 @@ export function ProjectFormDialog({
                 />
               </Field>
 
-              <div className="space-y-2">
+              <div className="space-y-2" data-usertour="project-form-type">
                 <Label>Project type</Label>
                 <RadioGroup
                   value={draft.taskBased ? "task" : "fixed"}
@@ -327,7 +332,10 @@ export function ProjectFormDialog({
                 </RadioGroup>
               </div>
 
-              <div className="space-y-4 rounded-md border border-border bg-muted/30 p-3">
+              <div
+                className="space-y-4 rounded-md border border-border bg-muted/30 p-3"
+                data-usertour="project-form-budget"
+              >
                 <label className="flex cursor-pointer items-start justify-between gap-4">
                   <span>
                     <span className="block text-sm font-medium">Budget allocated</span>
@@ -365,25 +373,18 @@ export function ProjectFormDialog({
                       required
                       error={issueFor(budgetKey)}
                     >
-                      <div className="relative">
-                        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-                          {activeCurrencySymbol()}
-                        </span>
-                        <Input
-                          id="project-budget-amount"
-                          inputMode="decimal"
-                          value={draft[budgetKey]}
-                          onChange={(event) =>
-                            set(budgetKey, event.target.value.replace(/[^\d.]/g, ""))
-                          }
-                          placeholder={BUDGET_PLACEHOLDER[draft.budgetType]}
-                          aria-invalid={!!issueFor(budgetKey)}
-                          className={cn(
-                            "pl-7 tabular",
-                            issueFor(budgetKey) && "border-destructive focus-visible:ring-destructive",
-                          )}
-                        />
-                      </div>
+                      <PrefixInput
+                        prefix={activeCurrencySymbol()}
+                        id="project-budget-amount"
+                        inputMode="decimal"
+                        value={draft[budgetKey]}
+                        onChange={(event) =>
+                          set(budgetKey, event.target.value.replace(/[^\d.]/g, ""))
+                        }
+                        placeholder={BUDGET_PLACEHOLDER[draft.budgetType]}
+                        aria-invalid={!!issueFor(budgetKey)}
+                        className="tabular"
+                      />
                     </Field>
 
                     {calculated && (
@@ -403,11 +404,13 @@ export function ProjectFormDialog({
             </div>
           )}
 
-          <DialogFooter className="mt-6 gap-2">
+          {/* Pinned to the foot of the dialog, so Create is in reach however far
+              the form has scrolled. */}
+          <DialogFooter className="sticky bottom-0 z-10 -mx-6 -mb-6 mt-6 gap-2 border-t bg-background px-6 py-4">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
               Cancel
             </Button>
-            <Button type="submit" disabled={saving || loading}>
+            <Button type="submit" disabled={saving || loading} data-usertour="project-form-submit">
               {saving && <Loader2 className="animate-spin" />}
               {editing ? "Save changes" : "Create project"}
             </Button>

@@ -23,12 +23,20 @@ import type { BulkImportResult } from "@/lib/bulk-import";
 import type { InvoiceImportPayload } from "@/lib/invoice-import";
 import type { ExpenseImportPayload } from "@/lib/expense-import";
 import type { AssetImportPayload } from "@/lib/asset-bulk-import";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
 
 type ApiBulkCreateResponse = {
   success?: boolean;
   message?: string;
-  /** The created rows. Its length is the only count the server returns. */
+  /** The created rows. Its length is the created count. */
   data?: unknown[];
+  /**
+   * Rows the server left out because they already existed — invoices answer
+   * with these when a row's invoice number is taken. Absent for the endpoints
+   * that don't look for duplicates.
+   */
+  skipped?: { row?: number; identifier?: string; message?: string }[];
   error?: string;
 };
 
@@ -57,14 +65,31 @@ async function postBulk<T>(
     throw new Error(body.message || body.error || "The import failed.");
   }
 
-  const created = Array.isArray(body?.data) ? body.data.length : rows.length;
+  const skipped = Array.isArray(body?.skipped) ? body.skipped : [];
+  // Skipped rows were never going to be created, so they aren't "created" even
+  // when the server echoes no array.
+  const created = Array.isArray(body?.data)
+    ? body.data.length
+    : Math.max(rows.length - skipped.length, 0);
 
   return {
     created,
-    // All-or-nothing: anything not created is a row the transaction rolled
-    // back, not one the server skipped.
-    failed: Math.max(rows.length - created, 0),
-    skipped: 0,
+    // Otherwise all-or-nothing: a row neither created nor skipped is one the
+    // transaction rolled back.
+    failed: Math.max(rows.length - created - skipped.length, 0),
+    skipped: skipped.length,
+    // Per-row detail only where the server gave some, so the results dialog
+    // can name the invoice numbers that already existed.
+    ...(skipped.length > 0
+      ? {
+          rows: skipped.map((entry) => ({
+            row: entry.row ?? 0,
+            status: "skipped" as const,
+            identifier: entry.identifier,
+            message: entry.message,
+          })),
+        }
+      : {}),
   };
 }
 
@@ -74,10 +99,14 @@ export function createBulkInvoices(
   return postBulk(apiRoutes.invoice.bulkCreate, "invoices", rows);
 }
 
-export function createBulkExpenses(
+export async function createBulkExpenses(
   rows: ExpenseImportPayload[],
 ): Promise<BulkImportResult> {
-  return postBulk(apiRoutes.expense.bulkCreate, "expenses", rows);
+  const result = await postBulk(apiRoutes.expense.bulkCreate, "expenses", rows);
+  if (result.created > 0) {
+    track(EVENTS.EXPENSE_ADDED, { source: "bulk_upload", count: result.created });
+  }
+  return result;
 }
 
 export function createBulkAssets(

@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { usePathname } from "next/navigation";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -16,6 +17,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/documents/field";
 import { createBusinessContactApi, type BusinessContact } from "@/lib/clients";
+import { EVENTS } from "@/lib/analytics-events";
+import { moduleNameForPath } from "@/lib/nav";
+import { useTrackOnOpen } from "@/hooks/use-track-once";
 import { invalidateContactLists } from "@/hooks/use-contacts-query";
 import { EMAIL_PATTERN, type ContactType } from "@/lib/contacts";
 import { cn } from "@/lib/utils";
@@ -43,6 +47,12 @@ export function NewBusinessContactDialog({
   onCreated: (created: BusinessContact) => void;
 }) {
   const queryClient = useQueryClient();
+  // "Add client" from inside a module (an invoice, a quote, an expense) is a
+  // contact being started too; module_name says which one it was started from.
+  const pathname = usePathname();
+  useTrackOnOpen(EVENTS.CONTACT_CREATION_INITIATED, open, {
+    module_name: moduleNameForPath(pathname),
+  });
   const [name, setName] = React.useState(initialName);
   const [email, setEmail] = React.useState("");
   const [saving, setSaving] = React.useState(false);

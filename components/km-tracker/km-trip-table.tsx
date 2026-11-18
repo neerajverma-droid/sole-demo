@@ -105,6 +105,7 @@ const ALL = "all";
 export function KmTripTable({
   empty = false,
   canCreate,
+  settingsLoading = false,
   onView,
   onDelete,
   onConvert,
@@ -114,6 +115,12 @@ export function KmTripTable({
   empty?: boolean;
   /** False until KM settings have a vehicle — the server refuses trips before. */
   canCreate: boolean;
+  /**
+   * The KM settings are still on their way. `canCreate` is false until they
+   * land, so an empty log would say "add a vehicle first" to someone who has
+   * one — the table holds its skeleton instead.
+   */
+  settingsLoading?: boolean;
   onView: (trip: KmTrip) => void;
   onDelete: (trip: KmTrip) => void;
   onConvert: (trips: KmTrip[]) => void;
@@ -215,8 +222,11 @@ export function KmTripTable({
    */
   const loading =
     tripsQuery.isLoading ||
+    settingsLoading ||
     filters.search !== debouncedSearch ||
     tripsQuery.isPlaceholderData;
+  /** Before the first answer there's no telling whether the filters belong. */
+  const firstLoad = tripsQuery.isLoading || settingsLoading;
   const failed = tripsQuery.isError && !tripsQuery.data;
 
   const filterBar = (
@@ -298,7 +308,10 @@ export function KmTripTable({
 
   return (
     <div className="space-y-4">
-      {filterBar}
+      {/* Held back on the first load: a brand-new account turns out to have
+          nothing to filter, and the bar would be there one moment and gone
+          the next. */}
+      {!firstLoad && filterBar}
 
       {selected.length > 0 && (
         <div

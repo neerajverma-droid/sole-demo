@@ -45,6 +45,10 @@ const apiRoutes = {
     jiraSso: BASE_URL + "/auth/jira/sso",
     jiraIdpMetadata: BASE_URL + "/auth/jira/idp-metadata",
   },
+  demo: {
+    login: BASE_URL + "/demo/login",
+    heartbeat: BASE_URL + "/demo/heartbeat",
+  },
   tenant: {
     resolve: BASE_URL + "/tenants/resolve",
     me: BASE_URL + "/tenants/me",
@@ -63,6 +67,17 @@ const apiRoutes = {
     featureAccess: BASE_URL + "/super/feature-access",
     analytics: BASE_URL + "/super/analytics",
     tenants: BASE_URL + "/super/tenants",
+    partners: BASE_URL + "/super/partners",
+    partner: (id: string | number) => `${BASE_URL}/super/partners/${id}`,
+    partnerKeys: (id: string | number) => `${BASE_URL}/super/partners/${id}/keys`,
+    partnerKeyAction: (id: string | number, keyId: string | number, action: "rotate" | "promote" | "revoke") =>
+      `${BASE_URL}/super/partners/${id}/keys/${keyId}/${action}`,
+    partnerWebhook: (id: string | number) => `${BASE_URL}/super/partners/${id}/webhook`,
+    partnerWebhookSecret: (id: string | number) => `${BASE_URL}/super/partners/${id}/webhook/secret`,
+    partnerWebhookTest: (id: string | number) => `${BASE_URL}/super/partners/${id}/webhook/test`,
+    partnerWebhookDeliveries: (id: string | number) => `${BASE_URL}/super/partners/${id}/webhook/deliveries`,
+    partnerWebhookRedeliver: (id: string | number, deliveryId: string | number) =>
+      `${BASE_URL}/super/partners/${id}/webhook/deliveries/${deliveryId}/redeliver`,
     tenant: (id: string | number) => `${BASE_URL}/super/tenants/${id}`,
     tenantBranding: (tenantId: string | number) =>
       `${BASE_URL}/super/tenants/branding?tenantId=${encodeURIComponent(tenantId)}`,
@@ -137,6 +152,7 @@ const apiRoutes = {
     getUserProfile: BASE_URL + "/user/getProfile",
     userLogout: BASE_URL + "/auth/logout",
     notification: BASE_URL + "/v2/user/notification",
+    notificationRead: (id: string) => `${BASE_URL}/v2/user/notification/${id}/read`,
     uploadProfilePicture: BASE_URL + "/user/upload-profile-picture",
     removeProfilePicture: BASE_URL + "/user/remove-profile-picture",
     deleteAccount: BASE_URL + "/user/delete-account",
@@ -209,6 +225,7 @@ const apiRoutes = {
     add: BASE_URL + "/planner-goal",
     update: (id: string | number) => `${BASE_URL}/planner-goal/${id}`,
     delete: (id: string | number) => `${BASE_URL}/planner-goal/${id}`,
+    bulkDelete: BASE_URL + "/planner-goal/bulk-delete",
     info: (id: string | number) => `${BASE_URL}/planner-goal/${id}`,
     addAllocation: (id: string | number) =>
       `${BASE_URL}/planner-goal/${id}/allocations`,
@@ -239,6 +256,7 @@ const apiRoutes = {
     add: BASE_URL + "/expense-plan",
     update: (id: string | number) => `${BASE_URL}/expense-plan/${id}`,
     delete: (id: string | number) => `${BASE_URL}/expense-plan/${id}`,
+    bulkDelete: BASE_URL + "/expense-plan/bulk-delete",
     info: (id: string | number) => `${BASE_URL}/expense-plan/${id}`,
     upsertLines: (id: string | number) =>
       `${BASE_URL}/expense-plan/${id}/lines`,
@@ -363,6 +381,8 @@ const apiRoutes = {
     info: BASE_URL + "/v2/quote/",
     history: (quoteId: string | number) =>
       `${BASE_URL}/v2/quote/${quoteId}/history`,
+    sendToClient: (quoteId: string | number) =>
+      `${BASE_URL}/v2/quote/${quoteId}/send`,
     summary: BASE_URL + "/quote/statistics",
     /** Per-tab counts for the list, across the whole account. */
     statusCounts: BASE_URL + "/quote/status-counts",
@@ -391,12 +411,16 @@ const apiRoutes = {
     status: (id: string | number) => `${BASE_URL}/proposal/${id}/status`,
     markPaid: (id: string | number) => `${BASE_URL}/proposal/${id}/mark-paid`,
     send: (id: string | number) => `${BASE_URL}/proposal/${id}/send`,
+    remind: (id: string | number) => `${BASE_URL}/proposal/${id}/remind`,
     events: (id: string | number) => `${BASE_URL}/proposal/${id}/events`,
     step: (id: string | number, stepKey: string) =>
       `${BASE_URL}/proposal/${id}/steps/${stepKey}`,
     templates: BASE_URL + "/proposal/templates",
+    template: (id: string | number) => `${BASE_URL}/proposal/templates/${id}`,
+    templateDuplicate: (id: string | number) => `${BASE_URL}/proposal/templates/${id}/duplicate`,
     contentUpload: BASE_URL + "/proposal/content/upload",
     documentUpload: BASE_URL + "/proposal/documents/upload",
+    emailAttachmentUpload: BASE_URL + "/proposal/email-attachments/upload",
     documentPreview: (proposalId: string | number) =>
       `${BASE_URL}/proposal/${proposalId}/documents/preview`,
     documentFields: (
@@ -415,6 +439,12 @@ const apiRoutes = {
       `${BASE_URL}/proposal/public/${token}/signed-document`,
     publicStripePay: (token: string) =>
       `${BASE_URL}/proposal/public/${token}/stripe-pay`,
+    publicSolePayPay: (token: string) => `${BASE_URL}/proposal/public/${token}/solepay-pay`,
+    publicComments: (token: string) => `${BASE_URL}/proposal/public/${token}/comments`,
+    publicComment: (token: string, threadId: string) =>
+      `${BASE_URL}/proposal/public/${token}/comments/${threadId}`,
+    comments: (id: string | number) => `${BASE_URL}/proposal/${id}/comments`,
+    comment: (id: string | number, threadId: string) => `${BASE_URL}/proposal/${id}/comments/${threadId}`,
   },
   chatbot: {
     chat: BASE_URL + "/internal/chat",
@@ -460,6 +490,38 @@ const apiRoutes = {
     uploadAttachment: BASE_URL + "/v2/expense/attachments",
     deleteAttachment: BASE_URL + `/v2/expense/attachments`,
   },
+  /** Supplier bills: a draft until approved, when it becomes one expense. */
+  bill: {
+    list: BASE_URL + "/v2/bill",
+    summary: BASE_URL + "/v2/bill/summary",
+    upcoming: BASE_URL + "/v2/bill/upcoming",
+    calendar: BASE_URL + "/v2/bill/calendar",
+    create: BASE_URL + "/v2/bill",
+    extract: BASE_URL + "/v2/bill/extract",
+    bulkDelete: BASE_URL + "/v2/bill/bulk-delete",
+    info: (billId: string | number) => `${BASE_URL}/v2/bill/${billId}`,
+    approve: (billId: string | number) => `${BASE_URL}/v2/bill/${billId}/approve`,
+    /** Bank transactions that could pay this bill — a saved bill's own total, or its expense's remainder. */
+    possibleMatches: (billId: string | number) =>
+      `${BASE_URL}/v2/bill/${billId}/possible-matches`,
+    /** Converts a saved bill (if it isn't yet) and matches its expense to the chosen transactions, in one step. */
+    match: (billId: string | number) => `${BASE_URL}/v2/bill/${billId}/match`,
+    unapprove: (billId: string | number) =>
+      `${BASE_URL}/v2/bill/${billId}/unapprove`,
+    /** A repeating bill's schedule — the copies it makes are ordinary bills. */
+    schedule: (scheduleId: string | number) =>
+      `${BASE_URL}/v2/bill/schedules/${scheduleId}`,
+    scheduleSkip: (scheduleId: string | number) =>
+      `${BASE_URL}/v2/bill/schedules/${scheduleId}/skip`,
+    scheduleUnskip: (scheduleId: string | number) =>
+      `${BASE_URL}/v2/bill/schedules/${scheduleId}/unskip`,
+    scheduleStop: (scheduleId: string | number) =>
+      `${BASE_URL}/v2/bill/schedules/${scheduleId}/stop`,
+    attachments: (billId: string | number) =>
+      `${BASE_URL}/v2/bill/${billId}/attachments`,
+    attachment: (billId: string | number, documentId: string | number) =>
+      `${BASE_URL}/v2/bill/${billId}/attachments/${documentId}`,
+  },
   budget: {
     list: BASE_URL + "/budget",
     summary: BASE_URL + "/budget/summary",
@@ -467,6 +529,7 @@ const apiRoutes = {
     add: BASE_URL + "/budget",
     update: BASE_URL + "/budget/",
     delete: BASE_URL + "/budget/",
+    bulkDelete: BASE_URL + "/budget/bulk-delete",
     info: BASE_URL + "/budget/",
     history: (budgetId: string | number) =>
       `${BASE_URL}/budget/${budgetId}/history`,
@@ -505,6 +568,8 @@ const apiRoutes = {
       `${BASE_URL}/invoice/invoices/${invoiceId}/history`,
     markSent: (invoiceId: string | number) =>
       `${BASE_URL}/invoice/invoices/${invoiceId}/mark-sent`,
+    sendToClient: (invoiceId: string | number) =>
+      `${BASE_URL}/invoice/invoices/${invoiceId}/send`,
     outstandingBalancePreview: (invoiceId: string | number) =>
       `${BASE_URL}/invoice/invoices/${invoiceId}/outstanding-balance/preview`,
     sendOutstandingBalance: (invoiceId: string | number) =>
@@ -514,6 +579,7 @@ const apiRoutes = {
     followUpReminder: BASE_URL + "/invoice/notify-future-work/email/preview",
     summary: BASE_URL + "/invoice/statistics",
     getNo: BASE_URL + "/invoice/invoice-no",
+    checkNo: BASE_URL + "/invoice/invoice-no/check",
     sendPaidReceipt: BASE_URL + "/invoice/send-paid-receipt",
     default: BASE_URL + "/invoice/default",
     defaultDetail: (id: string | number) => `${BASE_URL}/invoice/default/${id}`,
@@ -1141,6 +1207,26 @@ const apiRoutes = {
     reportAccountingExport: BASE_URL + "/reports/accounting-export",
     reportEmployeeByRun: BASE_URL + "/reports/payroll-employee-by-run",
     reportSummaryByRun: BASE_URL + "/reports/payroll-summary-by-run",
+  },
+
+  // Marketing resources: public reads (no auth) for /resource, and the
+  // super-admin manager behind the `resources` grant.
+  resources: {
+    publicTree: BASE_URL + "/resources/tree",
+    publicFolder: BASE_URL + "/resources/folder",
+    adminTree: BASE_URL + "/super/resources/tree",
+    adminFolders: BASE_URL + "/super/resources/folders",
+    adminFolder: (id: string | number) => `${BASE_URL}/super/resources/folders/${id}`,
+    adminFolderFiles: (id: string | number) =>
+      `${BASE_URL}/super/resources/folders/${id}/files`,
+    adminFilesMove: BASE_URL + "/super/resources/files/move",
+    adminFile: (id: string | number) => `${BASE_URL}/super/resources/files/${id}`,
+  },
+  // Super admin › Add-ons: the marketplace copy, category, industries and
+  // video link on each add-on's plan rows (sole-ocr superAddonContent.js).
+  addonContent: {
+    list: BASE_URL + "/super/addon-content",
+    update: (slug: string) => `${BASE_URL}/super/addon-content/${encodeURIComponent(slug)}`,
   },
 } satisfies Record<string, unknown>;
 

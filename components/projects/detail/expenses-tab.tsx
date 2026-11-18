@@ -173,36 +173,45 @@ export function ProjectExpensesTab({ project }: { project: Project }) {
   }
 
   if (total === 0) {
+    // The figures still show, at zero, with the empty state beneath them.
     return (
-      <>
-        <Empty>
+      <div className="space-y-[15px]">
+        <div data-usertour="project-expenses-stats">
+          <StatCards stats={stats} loading={summaryQuery.isLoading} className="gap-[15px]" />
+        </div>
+        <Empty data-usertour="project-expenses-list">
           <EmptyMedia>
             <FileText />
           </EmptyMedia>
           <EmptyTitle>No expenses yet</EmptyTitle>
           <EmptyDescription>Expenses related to this project will appear here.</EmptyDescription>
           <EmptyActions>
-            <Button onClick={() => setAddOpen(true)}>
+            <Button onClick={() => setAddOpen(true)} data-usertour="project-add-expense">
               <Plus />
               Add Expense
             </Button>
           </EmptyActions>
         </Empty>
         {dialogs}
-      </>
+      </div>
     );
   }
 
   return (
     <div className="space-y-[15px]">
-      <StatCards stats={stats} loading={summaryQuery.isLoading} className="gap-[15px]" />
+      <div data-usertour="project-expenses-stats">
+        <StatCards stats={stats} loading={summaryQuery.isLoading} className="gap-[15px]" />
+      </div>
 
-      <section className="rounded-lg border border-border bg-card shadow-sm">
+      <section
+        className="rounded-lg border border-border bg-card shadow-sm"
+        data-usertour="project-expenses-list"
+      >
         <div className="flex items-center justify-between gap-3 px-[15px] py-3">
           <h3 className="font-semibold">
             Expenses <span className="font-normal text-muted-foreground tabular">({total})</span>
           </h3>
-          <Button size="sm" onClick={() => setAddOpen(true)}>
+          <Button size="sm" onClick={() => setAddOpen(true)} data-usertour="project-add-expense">
             <Plus />
             Add Expense
           </Button>

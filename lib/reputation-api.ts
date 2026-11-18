@@ -1,7 +1,8 @@
-import axios from "axios";
+import axios, { AxiosHeaders } from "axios";
 
 import { getBusinessId } from "@/lib/api/business-id";
 import { getAccessToken } from "@/lib/api/session";
+import { handleMockRequest } from "@/lib/demo-seed/mock-server";
 import {
   normalizeFeedback,
   normalizeOverview,
@@ -24,7 +25,8 @@ export function reputationSourceApp(): string {
 
 export function reputationBaseUrl(): string | null {
   const base = process.env.NEXT_PUBLIC_REPUTATION_API_URL?.trim();
-  return base ? base.replace(/\/+$/, "") : null;
+  if (base) return base.replace(/\/+$/, "");
+  return "https://reputation.sole.app/api";
 }
 
 export class ReputationNotConfiguredError extends Error {
@@ -35,6 +37,24 @@ export class ReputationNotConfiguredError extends Error {
 }
 
 const reputationApi = axios.create();
+
+reputationApi.defaults.adapter = async (config) => {
+  const method = config.method || "GET";
+  const url = config.url || "";
+  const mock = handleMockRequest(method, url, config.params, config.data);
+  if (mock) {
+    return {
+      data: mock.data,
+      status: mock.status,
+      statusText: "OK",
+      headers: new AxiosHeaders(mock.headers || {}),
+      config,
+      request: {},
+    };
+  }
+  const defaultAdapter = axios.getAdapter(["xhr", "http", "fetch"]);
+  return defaultAdapter(config);
+};
 
 reputationApi.interceptors.request.use((config) => {
   const baseURL = reputationBaseUrl();

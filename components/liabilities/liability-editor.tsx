@@ -275,6 +275,7 @@ export function LiabilityEditor({
       icon={Paperclip}
       title="Supporting document"
       description="The loan agreement, payroll summary or letter behind it. Optional."
+      tourId="liability-document"
     >
       <AttachmentUpload
         receipt={draft.attachment}
@@ -333,6 +334,7 @@ export function LiabilityEditor({
         icon={UserRound}
         title="Who it's owed to"
         description="The supplier, lender or payee this liability sits against."
+        tourId="liability-owed-to"
       >
         <BusinessContactSelect
           type="Supplier"
@@ -356,6 +358,7 @@ export function LiabilityEditor({
       <FormSection
         icon={FileText}
         title="Liability details"
+        tourId="liability-details"
         description="What it is, what it's worth, and how it's taxed."
         className="grid gap-4 sm:grid-cols-2"
       >
@@ -444,7 +447,10 @@ export function LiabilityEditor({
 
       {liabilityId && documentSection}
 
-      <div className="flex flex-wrap justify-end gap-2 border-t pt-4">
+      <div
+        className="flex flex-wrap justify-end gap-2 border-t pt-4"
+        data-usertour="liability-save-actions"
+      >
         <Button variant="ghost" asChild>
           <Link href={LIABILITIES_ROOT}>Cancel</Link>
         </Button>
@@ -459,6 +465,7 @@ export function LiabilityEditor({
         <Button
           onClick={onSave}
           disabled={(hasTouched && issues.length > 0) || saving}
+          data-usertour="liability-save-button"
         >
           {saving && <Loader2 className="animate-spin" />}
           {editing ? "Save changes" : "Save liability"}

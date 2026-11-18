@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { FormSection } from "@/components/ui/form-section";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { PrefixInput } from "@/components/ui/prefix-input";
 import { Shimmer } from "@/components/ui/shimmer";
 import {
   Select,
@@ -21,7 +22,6 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Field } from "@/components/documents/field";
-import { HeroHairline } from "@/components/layout/page-header";
 import { useCountryContext } from "@/hooks/use-country-context";
 import { useInventoryQuery } from "@/hooks/use-inventory-query";
 import { apiErrorMessage } from "@/lib/api-error";
@@ -49,8 +49,12 @@ import {
 import { cn } from "@/lib/utils";
 import { useInventoryStore } from "@/stores/inventory";
 import { activeCurrencySymbol } from "@/lib/country-context";
+import { EVENTS } from "@/lib/analytics-events";
+import { useTrackOnce } from "@/hooks/use-track-once";
+import { track } from "@/lib/analytics";
 
 export function ItemForm({ itemId }: { itemId?: string }) {
+  useTrackOnce(EVENTS.INVENTORY_ADDITION_INITIATED, !itemId);
   const router = useRouter();
   const queryClient = useQueryClient();
   // A direct visit to this URL — a refresh, a bookmark, a shared link — can
@@ -101,6 +105,12 @@ export function ItemForm({ itemId }: { itemId?: string }) {
       : undefined;
 
   const margin = marginPerUnit(draft.costPrice, draft.salePrice);
+  // An item that was already tracked when this form opened: its count is live
+  // stock, not an opening figure.
+  const alreadyTracked = !!editing?.tracked;
+  const stockOnHand = Number(editing?.openingStock) || 0;
+  const trackingLocked = alreadyTracked && stockOnHand > 0;
+  const costLocked = alreadyTracked && stockOnHand > 0;
 
   const onSave = async () => {
     setSaving(true);
@@ -117,6 +127,11 @@ export function ItemForm({ itemId }: { itemId?: string }) {
         toast.success("Item updated");
       } else {
         await createInventoryItemApi(saved);
+        track(EVENTS.INVENTORY_ADDED, {
+          product_name: saved.name.trim(),
+          product_type: saved.type,
+          quantity_type: saved.quantityType || null,
+        });
         toast.success("Item added");
       }
       await queryClient.invalidateQueries({ queryKey: ["inventory-items"] });
@@ -158,48 +173,28 @@ export function ItemForm({ itemId }: { itemId?: string }) {
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
-      <Button variant="ghost" size="sm" asChild className="-ml-2">
-        <Link href="/inventory">
-          <ArrowLeft />
-          Inventory
-        </Link>
-      </Button>
-
-      {/* Accent bar plus the Cancel / Save pair — no duplicate footer. */}
-      <section className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
-        <HeroHairline />
-        <div className="flex flex-wrap items-center justify-between gap-3 p-4">
-          <div className="space-y-1">
-            <h1 className="text-xl font-semibold tracking-tight">
-              {editing ? "Edit item" : "Add item"}
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              Fields marked with <span className="text-destructive">*</span> are
-              required.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {issues.length > 0 && (
-              <p className="text-xs text-muted-foreground">
-                {issues.length === 1
-                  ? issues[0].message
-                  : `${issues.length} fields need attention`}
-              </p>
-            )}
-            <Button variant="outline" asChild>
-              <Link href="/inventory">Cancel</Link>
-            </Button>
-            <Button onClick={onSave} disabled={issues.length > 0 || saving}>
-              {saving && <Loader2 className="animate-spin" aria-hidden />}
-              {editing ? "Save changes" : "Save item"}
-            </Button>
-          </div>
+      <div className="space-y-3">
+        <Button variant="ghost" size="sm" asChild className="-ml-2">
+          <Link href="/inventory">
+            <ArrowLeft />
+            Inventory
+          </Link>
+        </Button>
+        <div className="space-y-1">
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {editing ? `Edit ${editing.name}` : "Add inventory item"}
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Fields marked with <span className="text-destructive">*</span> are
+            required.
+          </p>
         </div>
-      </section>
+      </div>
 
       <FormSection
         icon={Package}
         title="Item details"
+        tourId="inventory-item-details"
         description="What the item is, and how it appears on an invoice."
         className="grid gap-4 sm:grid-cols-2"
       >
@@ -234,8 +229,19 @@ export function ItemForm({ itemId }: { itemId?: string }) {
           </div>
         </Field>
 
-        <Field label="Quantity type" required error={issueFor("quantityType")}>
+        <Field
+          label="Quantity type"
+          required
+          error={issueFor("quantityType")}
+          hint={
+            alreadyTracked
+              ? "Locked — stock is counted in this unit."
+              : undefined
+          }
+        >
           <Select
+            // "100 Items" must not turn into "100 Hours".
+            disabled={alreadyTracked}
             value={draft.quantityType || undefined}
             onValueChange={(value) =>
               patch({
@@ -268,14 +274,23 @@ export function ItemForm({ itemId }: { itemId?: string }) {
       <FormSection
         icon={DollarSign}
         title="Pricing & accounts"
+        tourId="inventory-item-pricing"
         description="What it costs, what you charge, and where it posts."
       >
         <div className="grid gap-4 sm:grid-cols-2">
           <PriceField
-            label="Cost price"
+            label={costLocked ? "Average cost" : "Cost price"}
             value={draft.costPrice}
-            error={priceError(draft.costPrice)}
+            error={costLocked ? undefined : priceError(draft.costPrice)}
             onChange={(value) => patch({ costPrice: value })}
+            // With stock on hand this is the weighted-average cost of that
+            // stock — it moves only when received stock is recorded.
+            disabled={costLocked}
+            hint={
+              costLocked
+                ? "Updates when you record received stock."
+                : undefined
+            }
           />
           <PriceField
             label="Sale price"
@@ -346,32 +361,54 @@ export function ItemForm({ itemId }: { itemId?: string }) {
       <FormSection
         icon={Boxes}
         title="Tracking"
+        tourId="inventory-item-tracking"
         description="Whether Sole keeps a stock count for this item."
       >
         <label className="flex cursor-pointer items-start gap-3">
           <Checkbox
             checked={draft.tracked}
             onCheckedChange={(checked) => patch({ tracked: checked === true })}
+            // Untracking with units on hand would hide that stock with no
+            // ledger entry; the backend refuses it too.
+            disabled={trackingLocked}
             className="mt-0.5"
           />
           <span className="space-y-0.5">
             <span className="block text-sm font-medium">I track this item</span>
             <span className="block text-xs text-muted-foreground">
-              Keep a stock count and warn you when it runs low.
+              {trackingLocked
+                ? `${stockOnHand} still in stock — adjust stock to 0 before turning tracking off.`
+                : "Keep a stock count and warn you when it runs low."}
             </span>
           </span>
         </label>
 
         {draft.tracked && (
           <div className="grid gap-4 sm:grid-cols-2">
-            <WholeNumberField
-              label="Opening stock"
-              value={draft.openingStock}
-              error={
-                wholeNumberError(draft.openingStock) ?? issueFor("openingStock")
-              }
-              onChange={(value) => patch({ openingStock: value })}
-            />
+            {alreadyTracked ? (
+              // Opening stock is set once. After that the count only moves
+              // through Adjust stock or an invoice, so each change has a
+              // reason in the stock history — the backend ignores a count
+              // sent from this form anyway.
+              <Field
+                label="Stock on hand"
+                hint="Use Adjust stock on the Inventory list to change this."
+              >
+                <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 text-sm tabular text-muted-foreground">
+                  {stockOnHand} {draft.quantityType || "units"}
+                </div>
+              </Field>
+            ) : (
+              <WholeNumberField
+                label="Opening stock"
+                value={draft.openingStock}
+                error={
+                  wholeNumberError(draft.openingStock) ??
+                  issueFor("openingStock")
+                }
+                onChange={(value) => patch({ openingStock: value })}
+              />
+            )}
             <WholeNumberField
               label="Low stock alert at"
               value={draft.lowStockAlert}
@@ -384,6 +421,27 @@ export function ItemForm({ itemId }: { itemId?: string }) {
           </div>
         )}
       </FormSection>
+
+      <div className="flex flex-wrap justify-end gap-2 border-t pt-4">
+        <Button variant="outline" asChild>
+          <Link href="/inventory">Cancel</Link>
+        </Button>
+        {issues.length > 0 && (
+          <p className="self-center text-xs text-muted-foreground">
+            {issues.length === 1
+              ? issues[0].message
+              : `${issues.length} fields need attention`}
+          </p>
+        )}
+        <Button
+          onClick={onSave}
+          disabled={issues.length > 0 || saving}
+          data-usertour="inventory-save"
+        >
+          {saving && <Loader2 className="animate-spin" aria-hidden />}
+          {editing ? "Save changes" : "Save item"}
+        </Button>
+      </div>
     </div>
   );
 }
@@ -422,32 +480,30 @@ function PriceField({
   value,
   error,
   onChange,
+  disabled,
+  hint,
 }: {
   label: string;
   required?: boolean;
   value: string;
   error?: string;
   onChange: (value: string) => void;
+  disabled?: boolean;
+  hint?: string;
 }) {
   return (
-    <Field label={label} required={required} error={error}>
-      <div className="relative">
-        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-          {activeCurrencySymbol()}
-        </span>
-        <Input
-          value={value}
-          inputMode="decimal"
-          onChange={(event) => onChange(event.target.value)}
-          placeholder="0.00"
-          aria-label={label}
-          aria-invalid={!!error}
-          className={cn(
-            "pl-7 tabular",
-            error && "border-destructive focus-visible:ring-destructive",
-          )}
-        />
-      </div>
+    <Field label={label} required={required} error={error} hint={hint}>
+      <PrefixInput
+        prefix={activeCurrencySymbol()}
+        value={value}
+        inputMode="decimal"
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="0.00"
+        aria-label={label}
+        disabled={disabled}
+        aria-invalid={!!error}
+        className="tabular"
+      />
     </Field>
   );
 }

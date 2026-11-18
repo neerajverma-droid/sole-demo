@@ -23,6 +23,8 @@ const {
   adjustStockApi,
   fetchInventoryHistory,
   stockAdjustReasonLabel,
+  stockAdjustmentNote,
+  stockMovementDisplay,
   itemIssues,
 } = await import("@/lib/inventory");
 
@@ -418,6 +420,36 @@ describe("creating an item", () => {
   });
 });
 
+describe("an item's industry", () => {
+  const created = {
+    data: {
+      success: true,
+      data: { id: 901, item_name: "Timber panel — oak", qty_type: "items", txn_type: "Credit", gst: 1 },
+    },
+  };
+
+  it("files a new product under the industry it is given", async () => {
+    apiMock.post.mockResolvedValue(created);
+    await createInventoryItemApi(BASE_DRAFT, 7);
+    expect(apiMock.post.mock.calls[0][1]).toMatchObject({ industry_id: 7 });
+  });
+
+  it("sends no industry when none is given — the Inventory form has no picker", async () => {
+    apiMock.post.mockResolvedValue(created);
+    await createInventoryItemApi(BASE_DRAFT);
+    await createInventoryItemApi(BASE_DRAFT, null);
+    for (const [, body] of apiMock.post.mock.calls) {
+      expect(body).not.toHaveProperty("industry_id");
+    }
+  });
+
+  it("never sends one on an edit, so the stored industry is kept", async () => {
+    apiMock.patch.mockResolvedValue(created);
+    await updateInventoryItemApi("901", BASE_DRAFT);
+    expect(apiMock.patch.mock.calls[0][1]).not.toHaveProperty("industry_id");
+  });
+});
+
 describe("resolving the inventory account id", () => {
   /** A clean module instance per test, so the cached id doesn't leak between them. */
   async function freshLib() {
@@ -669,8 +701,30 @@ describe("stock adjustment reason labels", () => {
     expect(stockAdjustReasonLabel("other")).toBe("Other");
   });
 
+  it("labels the system's own invoice sale and price change", () => {
+    expect(stockAdjustReasonLabel("invoice_sale")).toBe("Invoice sale");
+    expect(stockAdjustReasonLabel("price_change")).toBe("Price change");
+  });
+
   it("falls back to the raw value for anything unrecognised", () => {
-    expect(stockAdjustReasonLabel("invoice_sale")).toBe("invoice_sale");
+    expect(stockAdjustReasonLabel("something_new")).toBe("something_new");
+  });
+});
+
+describe("stockAdjustmentNote", () => {
+  it("shows the note when there is one", () => {
+    expect(
+      stockAdjustmentNote({ note: "Sold via Invoice #INV-106", reason: "invoice_sale" }),
+    ).toBe("Sold via Invoice #INV-106");
+  });
+
+  it("calls an un-annotated manual entry what it is, instead of a dash", () => {
+    expect(stockAdjustmentNote({ note: null, reason: "received" })).toBe(
+      "Manual adjustment",
+    );
+    expect(stockAdjustmentNote({ note: "  ", reason: "correction" })).toBe(
+      "Manual adjustment",
+    );
   });
 });
 
@@ -847,5 +901,14 @@ describe("required-field validation", () => {
       key: "lowStockAlert",
       message: "Enter a low stock alert level.",
     });
+  });
+});
+
+describe("stockMovementDisplay", () => {
+  it("signs stock in and out, and shows a dash for a row that moved none", () => {
+    expect(stockMovementDisplay(5)).toEqual({ text: "+5", tone: "in" });
+    expect(stockMovementDisplay(-3)).toEqual({ text: "-3", tone: "out" });
+    // A price change: no stock moved.
+    expect(stockMovementDisplay(0)).toEqual({ text: "—", tone: "none" });
   });
 });

@@ -9,8 +9,6 @@
 
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
 
 type ApiEnvelope<T> = { success: boolean; message?: string; data?: T };
@@ -29,7 +27,11 @@ type ApiPlan = {
   tier?: string;
   name?: string;
   slug?: string;
-  price?: number;
+  /**
+   * A DECIMAL column, sent as the row came out of the database: usually the
+   * STRING "24.99", not a number. Always read it through `money()`.
+   */
+  price?: number | string | null;
 };
 
 /** The server's own arithmetic, which is what the next invoice will say. */
@@ -46,6 +48,8 @@ type ApiMySubscription = {
   subscription_detail?: ApiSubscriptionDetail;
   plan?: ApiPlan;
   billing?: ApiBilling | null;
+  /** A new account whose first subscription hasn't been taken yet. */
+  requires_first_subscription?: boolean;
 };
 
 export type SubscriptionInfo = {
@@ -60,6 +64,13 @@ export type SubscriptionInfo = {
   isExpired: boolean;
   /** Null once there's no trial to count down — a paid or expired subscription doesn't show a number. */
   trialDaysLeft: number | null;
+  /**
+   * A new account that hasn't taken its first subscription — there is no free
+   * trial, so the app stays closed until it has. Distinct from `isExpired`: a
+   * lapsed trial or a cancelled plan has history and keeps the free tier; this
+   * one has never held anything.
+   */
+  requiresFirstSubscription: boolean;
   /** ISO date the trial (or the current paid period) ends, whichever applies. */
   subscriptionDueDate: string | null;
   /**
@@ -109,6 +120,7 @@ export const NO_SUBSCRIPTION: SubscriptionInfo = {
   isTrialing: false,
   isExpired: false,
   trialDaysLeft: null,
+  requiresFirstSubscription: false,
   subscriptionDueDate: null,
   isCancelled: false,
   planInterval: null,
@@ -160,12 +172,16 @@ function normalizeSubscription(raw: ApiMySubscription): SubscriptionInfo {
     planName: plan.name || (isFree ? "Free plan" : "Plan"),
     planTier: plan.tier || "free",
     planSlug: plan.slug || "free",
-    planPrice: plan.price ?? 0,
+    // `plan.price` is a DECIMAL and arrives as a string ("24.99"). Left as is, the
+    // page's `planPrice.toFixed(2)` threw "toFixed is not a function" and took the
+    // whole Subscription screen down for any plan with paid add-ons.
+    planPrice: money(plan.price) ?? 0,
     status: detail.status ?? null,
     isFree,
     isTrialing,
     isExpired,
     trialDaysLeft,
+    requiresFirstSubscription: raw.requires_first_subscription === true,
     subscriptionDueDate:
       (isTrialing ? detail.trial_end : detail.current_period_end) ?? null,
     isCancelled: Boolean(detail.canceled_at),
@@ -184,6 +200,39 @@ function normalizeSubscription(raw: ApiMySubscription): SubscriptionInfo {
       money(billing.next_billing_amount),
     addonsTotal: money(billing.addons_total),
   };
+}
+
+/**
+ * What the app shell should do about the first subscription.
+ *
+ * - `loading`: the answer isn't in yet — the session hasn't proved who this is,
+ *   or the subscription is still in flight. Nothing renders, so a new account
+ *   never sees the app for a moment before being taken out of it.
+ * - `required`: the account has never held a trial or a plan — send it to
+ *   onboarding's plan step.
+ * - `open`: let the app render. This is also what a failed subscription request
+ *   resolves to (no data, no longer pending): a billing hiccup must not lock
+ *   paying customers out, and the server still decides what each call may do.
+ *
+ * An accountant is never asked to subscribe on their own account, whatever the
+ * subscription or the session says.
+ */
+export type FirstSubscriptionGateState = "loading" | "required" | "open";
+
+export function firstSubscriptionGate({
+  sessionPending,
+  isAccountant,
+  subscriptionPending,
+  requiresFirstSubscription,
+}: {
+  sessionPending: boolean;
+  isAccountant: boolean;
+  subscriptionPending: boolean;
+  requiresFirstSubscription: boolean | undefined;
+}): FirstSubscriptionGateState {
+  if (isAccountant) return "open";
+  if (sessionPending || subscriptionPending) return "loading";
+  return requiresFirstSubscription === true ? "required" : "open";
 }
 
 export async function fetchMySubscription(): Promise<SubscriptionInfo> {
@@ -213,11 +262,33 @@ type ApiPlanPackage = {
   badge?: string | null;
   coming_soon?: unknown;
   features?: { includes?: string[] | null; excludes?: string[] | null } | null;
+  /** Add-ons only — see `PlanContent`. */
+  content?: unknown;
 };
 
 type ApiPlans = {
   packages?: ApiPlanPackage[] | null;
   addons?: ApiPlanPackage[] | null;
+};
+
+/**
+ * An add-on's marketplace copy, from `user_subscription_plans.content`
+ * (sole-ocr constants/addonContent.js). Every field is optional: a row with no
+ * content, or only some of it, falls back to the card written in `lib/addons.ts`.
+ */
+export type PlanContent = {
+  category?: string;
+  /** Industry ids, as strings to match `IndustryOption.id`. Empty = every industry. */
+  industries: string[];
+  subtext?: string;
+  videoTitle?: string;
+  videoUrl?: string;
+  overview?: string;
+  whatItDoes?: string;
+  whyItHelps?: string;
+  howItWorks?: string;
+  benefits?: string[];
+  included?: string[];
 };
 
 export type SubscriptionPlan = {
@@ -234,9 +305,43 @@ export type SubscriptionPlan = {
   comingSoon: boolean;
   includes: string[];
   excludes: string[];
+  content: PlanContent | null;
 };
 
 export type BillingInterval = "monthly" | "annual";
+
+function text(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function textList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const list = value.filter((entry): entry is string => typeof entry === "string" && !!entry.trim());
+  return list.length > 0 ? list : undefined;
+}
+
+/** Tolerant of a partial or malformed column — whatever's missing falls back to the card. */
+function normalizeContent(raw: unknown): PlanContent | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const content = raw as Record<string, unknown>;
+  return {
+    category: text(content.category),
+    industries: Array.isArray(content.industries)
+      ? content.industries
+          .filter((id) => typeof id === "number" || typeof id === "string")
+          .map(String)
+      : [],
+    subtext: text(content.subtext),
+    videoTitle: text(content.video_title),
+    videoUrl: text(content.video_url),
+    overview: text(content.overview),
+    whatItDoes: text(content.what_it_does),
+    whyItHelps: text(content.why_it_helps),
+    howItWorks: text(content.how_it_works),
+    benefits: textList(content.benefits),
+    included: textList(content.included),
+  };
+}
 
 function normalizePlan(raw: ApiPlanPackage): SubscriptionPlan | null {
   if (!raw.slug) return null;
@@ -254,6 +359,7 @@ function normalizePlan(raw: ApiPlanPackage): SubscriptionPlan | null {
     comingSoon: Boolean(raw.coming_soon),
     includes: raw.features?.includes ?? [],
     excludes: raw.features?.excludes ?? [],
+    content: normalizeContent(raw.content),
   };
 }
 
@@ -294,8 +400,7 @@ export async function fetchSubscriptionCatalogue(): Promise<SubscriptionCatalogu
  */
 export const INCLUDED_ADDON_COUNT: Record<string, number> = {
   bundle: 3,
-  advanced: 6,
-  pro: Number.POSITIVE_INFINITY,
+  advanced: Number.POSITIVE_INFINITY,
 };
 
 /**
@@ -362,10 +467,86 @@ export function defaultIncludedAddons(
       return 0;
     });
 
-  // `Infinity` on pro: every add-on there is, which `slice` handles already.
+  // `Infinity` on advanced: every add-on there is, which `slice` handles already.
   return [...kept, ...candidates.slice(0, allowance - kept.length)].map(
     (entry) => (typeof entry === "string" ? entry : entry.slug),
   );
+}
+
+/**
+ * The add-ons ticked in a picker, and how each came to be ticked.
+ *
+ * Two lists besides the selection, because a tick has two very different
+ * origins that a package change has to treat differently: "I want Projects" and
+ * "Advanced gave me Projects". The first survives moving to another package,
+ * the second belongs to the package that handed it out. Without the record the
+ * picker can't tell them apart, and moving from Advanced (six free) down to the
+ * Compliance Bundle (three) carries all six across — the extra three arriving
+ * as charges nobody chose.
+ */
+export type AddonSelection = {
+  /** Slugs in the order they were switched on — the allowance is positional. */
+  slugs: string[];
+  /** Ticked by a package's free slots rather than by hand. */
+  auto: string[];
+  /** Switched off by hand, so a refill must not hand them back. */
+  dismissed: string[];
+};
+
+export const EMPTY_ADDON_SELECTION: AddonSelection = {
+  slugs: [],
+  auto: [],
+  dismissed: [],
+};
+
+/**
+ * The selection after moving to a package: what the last package filled in is
+ * dropped, and the new package's free slots are filled from scratch.
+ *
+ * Only what was ticked by hand is carried — and carried in full, even past the
+ * new allowance. That one is deliberate and gets charged rather than cancelled.
+ */
+export function refillAddonSelection(
+  selection: AddonSelection,
+  planSlug: string | null | undefined,
+  addons: SubscriptionPlan[],
+): AddonSelection {
+  const deliberate = selection.slugs.filter(
+    (slug) => !selection.auto.includes(slug),
+  );
+  const slugs = defaultIncludedAddons(
+    planSlug,
+    addons,
+    deliberate,
+    selection.dismissed,
+  );
+  return {
+    slugs,
+    auto: slugs.filter((slug) => !deliberate.includes(slug)),
+    dismissed: selection.dismissed,
+  };
+}
+
+/**
+ * One add-on ticked or unticked by hand.
+ *
+ * Touched either way, so it stops being the package's doing: ticking it makes it
+ * a choice to carry forward, unticking makes it one to respect.
+ */
+export function toggleAddonSelection(
+  selection: AddonSelection,
+  slug: string,
+): AddonSelection {
+  const wasOn = selection.slugs.includes(slug);
+  return {
+    slugs: wasOn
+      ? selection.slugs.filter((entry) => entry !== slug)
+      : [...selection.slugs, slug],
+    auto: selection.auto.filter((entry) => entry !== slug),
+    dismissed: wasOn
+      ? [...selection.dismissed, slug]
+      : selection.dismissed.filter((entry) => entry !== slug),
+  };
 }
 
 /** Per average month, for a package plus add-ons, before any discount. */
@@ -379,6 +560,28 @@ export function selectionMonthlyTotal(
   return (
     pkg.monthlyPrice + charged.reduce((sum, addon) => sum + addon.monthlyPrice, 0)
   );
+}
+
+/**
+ * A plan's name without the billing cycle the catalogue appends to it.
+ *
+ * `/plans` names each variant "Compliance Bundle (Monthly)". Where the cycle is
+ * already on screen as a toggle, the suffix only spends a line of a card that
+ * has none to spare.
+ */
+export function planDisplayName(name: string): string {
+  return name.replace(/\s*\((?:monthly|annual|yearly)\)\s*$/i, "");
+}
+
+/**
+ * An add-on's name as a compact list shows it: no cycle, and no "Add-on".
+ *
+ * The catalogue calls them "Time Tracker Add-on (Monthly)". Under a heading that
+ * already says "Add-ons" the word is only repeated, and the hyphen in it is a
+ * place for a narrow row to break the name across two lines.
+ */
+export function addonDisplayName(name: string): string {
+  return planDisplayName(name).replace(/\s+add-on$/i, "");
 }
 
 /**
@@ -739,6 +942,33 @@ export function describeCoupon(discount: CouponDiscount): string {
 }
 
 /**
+ * What a checkout should send for the code in the box.
+ *
+ * Checked here rather than left to fail at Stripe: a typo should be caught on
+ * the page it was typed on, not after a redirect — and an invalid code stops
+ * the checkout rather than quietly charging the full price the person meant to
+ * avoid. `known` is the last check the page already ran, so a code that was
+ * Applied isn't asked about twice.
+ *
+ * An empty box is no coupon, not a failure. Only a network or server error
+ * throws (see `validateCoupon`).
+ */
+export async function resolveCheckoutCoupon(
+  code: string,
+  known: CouponCheck | null = null,
+): Promise<
+  | { proceed: true; code: string; check: CouponCheck | null }
+  | { proceed: false; check: Extract<CouponCheck, { valid: false }> }
+> {
+  const trimmed = code.trim();
+  if (!trimmed) return { proceed: true, code: "", check: null };
+
+  const check = known?.code === trimmed ? known : await validateCoupon(trimmed);
+  if (!check.valid) return { proceed: false, check };
+  return { proceed: true, code: check.code, check };
+}
+
+/**
  * A coupon the account already holds — one it signed up with, or FITREC for a
  * Fitrec member — so checkout opens with it applied, the way sole-webapp's
  * Subscriptions screen pre-fills its modal.
@@ -785,15 +1015,17 @@ export async function updateSubscriptionPlan(
 /**
  * Cancels at the end of the paid period.
  *
- * The reason is posted to `cancel-feedback` first and deliberately not awaited
- * for its result — sole-webapp swallows that call's failure too, because
- * losing the survey answer is not a reason to block the cancellation itself.
+ * The reason is posted to `cancel-feedback` first and awaited, but its failure
+ * is swallowed — sole-webapp does the same, because losing the survey answer
+ * is not a reason to block the cancellation itself. It is awaited (not fired
+ * alongside) because sole-ocr reads it back when the cancel lands, to send
+ * `subscription_cancelled` to Mixpanel with its `cancellation_reason`.
  */
 export async function cancelSubscription(
   reason: string,
   otherText = "",
 ): Promise<string | undefined> {
-  void api
+  await api
     .post(
       apiRoutes.subscription.cancelFeedback,
       buildEncryptedRequestBody({ reason, other_text: otherText }),
@@ -806,21 +1038,6 @@ export async function cancelSubscription(
     "Could not cancel your plan.",
   );
 
-  /*
-   * The predefined reason only. `otherText` is free text the customer typed
-   * and it MUST NOT reach Mixpanel — it cannot be redacted once it is in a
-   * third-party tool, and people put account details, names and complaints in
-   * that box. It stays in the Sole database, where the cancel-feedback
-   * endpoint above already put it.
-   *
-   * `has_other_text` is sent instead, which answers "is the free-text box
-   * worth reading this month" without carrying a word of it.
-   */
-  track(EVENTS.PLAN_CANCELED, {
-    reason,
-    has_other_text: otherText.trim().length > 0,
-  });
-
   return data.message;
 }
 
@@ -831,7 +1048,6 @@ export async function resumeSubscription(): Promise<string | undefined> {
     {},
     "Could not resume your plan.",
   );
-  track(EVENTS.SUBSCRIPTION_REACTIVATED);
   return data.message;
 }
 

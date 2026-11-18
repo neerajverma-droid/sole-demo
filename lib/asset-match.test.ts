@@ -199,3 +199,102 @@ describe("bulkUndoAssetMatchesApi", () => {
     );
   });
 });
+
+describe("which undo an asset offers", () => {
+  async function lib() {
+    return import("@/lib/asset-match");
+  }
+  const base = {
+    paidWithCash: false,
+    isReconciled: false,
+    remainingAmount: 1000,
+    costPrice: "1000",
+    matchedJournalEntries: [],
+  };
+
+  it("offers undo-match for a fully matched asset", async () => {
+    const { canUndoAssetMatch, assetUndoKind } = await lib();
+    const matched = { ...base, isReconciled: true, remainingAmount: 0 };
+    expect(canUndoAssetMatch(matched)).toBe(true);
+    expect(assetUndoKind(matched)).toBe("match");
+  });
+
+  it("offers undo-match for a partly matched asset", async () => {
+    const { canUndoAssetMatch, assetUndoKind } = await lib();
+    const partly = { ...base, remainingAmount: 400 };
+    expect(canUndoAssetMatch(partly)).toBe(true);
+    expect(assetUndoKind(partly)).toBe("match");
+  });
+
+  it("offers undo-match when a matched journal entry is on the list", async () => {
+    const { canUndoAssetMatch } = await lib();
+    expect(
+      canUndoAssetMatch({
+        ...base,
+        matchedJournalEntries: [
+          { journalEntryId: "7", bankTransactionId: "1", description: "", amount: 1, matchedAt: "" },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("offers nothing for an untouched asset", async () => {
+    const { canUndoAssetMatch, assetUndoKind } = await lib();
+    expect(canUndoAssetMatch(base)).toBe(false);
+    expect(assetUndoKind(base)).toBeNull();
+  });
+
+  it("undoes a paid-with-cash asset as a cash payment, never as a bank match", async () => {
+    const { canUndoAssetMatch, canUndoAssetCashPayment, assetUndoKind } = await lib();
+    const cash = { ...base, paidWithCash: true, isReconciled: true, remainingAmount: 1000 };
+    expect(canUndoAssetMatch(cash)).toBe(false);
+    expect(canUndoAssetCashPayment(cash)).toBe(true);
+    expect(assetUndoKind(cash)).toBe("cash");
+  });
+});
+
+describe("undoAssetMatchApi — one journal entry", () => {
+  it("sends journal_entry_id when one match is picked, asset_id otherwise", async () => {
+    apiMock.post.mockReset();
+    apiMock.post.mockResolvedValue({ data: { success: true } });
+    await undoAssetMatchApi("42", "301");
+    expect(apiMock.post).toHaveBeenLastCalledWith(
+      apiRoutes.bankTransaction.undoMatchTransaction,
+      { journal_entry_id: "301" },
+    );
+    await undoAssetMatchApi("42");
+    expect(apiMock.post).toHaveBeenLastCalledWith(
+      apiRoutes.bankTransaction.undoMatchTransaction,
+      { asset_id: "42" },
+    );
+  });
+});
+
+describe("undoAssetCashPaymentApi", () => {
+  it("posts {type: asset, id} to the paid-with-cash undo, as form data", async () => {
+    const { undoAssetCashPaymentApi } = await import("@/lib/asset-match");
+    apiMock.post.mockReset();
+    apiMock.post.mockResolvedValue({ data: { success: true } });
+
+    await undoAssetCashPaymentApi("42");
+
+    const [url, body] = apiMock.post.mock.calls[0];
+    expect(url).toBe(apiRoutes.expense.undoExpenseInvoice);
+    expect(body).toBeInstanceOf(FormData);
+    expect(Object.fromEntries((body as FormData).entries())).toEqual({
+      type: "asset",
+      id: "42",
+    });
+  });
+
+  it("throws the server's refusal, which arrives as a 200", async () => {
+    const { undoAssetCashPaymentApi } = await import("@/lib/asset-match");
+    apiMock.post.mockReset();
+    apiMock.post.mockResolvedValue({
+      data: { success: false, message: "Asset not found or not paid with cash." },
+    });
+    await expect(undoAssetCashPaymentApi("42")).rejects.toThrow(
+      "Asset not found or not paid with cash.",
+    );
+  });
+});

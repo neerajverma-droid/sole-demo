@@ -89,14 +89,14 @@ export function BalanceHero() {
     <section
       // Same surface, border and shadow as the tiles beside it, so the row
       // reads as one group rather than a dark card with three light ones.
-      className="flex h-full flex-col overflow-hidden rounded-lg border border-border bg-card text-card-foreground shadow-sm"
+      className="flex h-full flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-sm"
     >
       {isLoading ? (
-        <Shimmer className="m-6 h-40 flex-1 sm:m-8" />
+        <Shimmer className="m-4 h-40 flex-1" />
       ) : (
         <>
       <HeroHairline />
-      <div className="flex min-h-0 flex-1 flex-col gap-8 p-3 sm:p-6">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
         <div>
         <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
           Cash on hand
@@ -105,7 +105,7 @@ export function BalanceHero() {
             <span className="text-muted-foreground/70">· {shown.month}</span>
           )}
         </p>
-        <div className="mt-2 flex flex-wrap items-baseline gap-x-4 ">
+        <div className="mt-2 flex flex-wrap items-baseline gap-x-4">
           <span className="text-4xl font-semibold tracking-tight tabular">
             {hasActivity ? (
               <CountUp value={shown.balance} format={money} />

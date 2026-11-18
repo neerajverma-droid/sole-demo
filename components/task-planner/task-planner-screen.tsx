@@ -92,6 +92,18 @@ export function TaskPlannerScreen() {
   // 25 a page, as the expense and asset listings open.
   const [pageSize, setPageSize] = React.useState(25);
 
+  // `?new=1` opens the Add task form — the planner tour's last step links here.
+  // Taken off the address afterwards, so a refresh or a back doesn't reopen it.
+  const newParam = searchParams?.get("new");
+  React.useEffect(() => {
+    if (newParam !== "1") return;
+    setForm({ mode: "create", taskData: null, initialStageId: null });
+    const params = new URLSearchParams(window.location.search);
+    params.delete("new");
+    const next = params.toString();
+    window.history.replaceState(null, "", next ? `${pathname}?${next}` : pathname);
+  }, [newParam, pathname]);
+
   /* --- URL --- */
 
   React.useEffect(() => {
@@ -344,27 +356,34 @@ export function TaskPlannerScreen() {
       />
 
       {view === "board" ? (
-        // Every reload shows the skeleton — after adding, editing or deleting a
-        // task, a bulk move or an invoice — as the old board's fetch did.
-        boardQuery.isPending || boardQuery.isFetching ? (
-          <KanbanSkeleton />
-        ) : (
-          <KanbanBoard
-            columns={boardQuery.data?.columns ?? []}
-            initialTasks={boardQuery.data?.tasks ?? []}
-            filters={debouncedFilters}
-            selectMode={selectMode}
-            isSelected={isSelected}
-            onToggleSelect={toggleSelect}
-            onOpenTask={openDetail}
-            onAddTask={(stageId) => openCreate(stageId)}
-            pendingDone={pendingDone}
-            onRequestDone={(move) => {
-              setPendingDone(move);
-              setInvoiceTask(move.task);
-            }}
-          />
-        )
+        // The tour's handle sits on this wrapper, not on the board: every reload
+        // swaps the board for its skeleton, and an anchor inside it would vanish
+        // for as long as the fetch takes — long enough to end a running tour.
+        <div data-usertour="scheduling-planner-board">
+          {
+            // Every reload shows the skeleton — after adding, editing or deleting a
+            // task, a bulk move or an invoice — as the old board's fetch did.
+            boardQuery.isPending || boardQuery.isFetching ? (
+              <KanbanSkeleton />
+            ) : (
+              <KanbanBoard
+                columns={boardQuery.data?.columns ?? []}
+                initialTasks={boardQuery.data?.tasks ?? []}
+                filters={debouncedFilters}
+                selectMode={selectMode}
+                isSelected={isSelected}
+                onToggleSelect={toggleSelect}
+                onOpenTask={openDetail}
+                onAddTask={(stageId) => openCreate(stageId)}
+                pendingDone={pendingDone}
+                onRequestDone={(move) => {
+                  setPendingDone(move);
+                  setInvoiceTask(move.task);
+                }}
+              />
+            )
+          }
+        </div>
       ) : (
         <PlannerList
           rows={listRows}

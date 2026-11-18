@@ -15,14 +15,15 @@ import {
 } from "@/components/ui/empty";
 import {
   PREVIEW_TABS,
+  PreviewSectionNav,
   ProposalDocumentPages,
   SectionCard,
 } from "@/components/proposals/proposal-document";
+import { PreviewScreenSkeleton } from "@/components/proposals/preview-screen-skeleton";
 import { useProposalDetailQuery } from "@/hooks/use-proposals-query";
 import { apiErrorMessage } from "@/lib/api-error";
 import { generateProposalPdf } from "@/lib/proposal-pdf";
 import { previewFromProposal } from "@/lib/proposals";
-import { cn } from "@/lib/utils";
 
 /**
  * The proposal as the client will step through it, opened in its own tab —
@@ -48,12 +49,7 @@ export function ProposalPreviewScreen({ proposalId }: { proposalId: string }) {
   const goTo = (next: number) => setIndex(Math.min(Math.max(next, 0), PREVIEW_TABS.length - 1));
 
   if (query.isLoading) {
-    return (
-      <div className="flex h-dvh flex-col items-center justify-center gap-3">
-        <Loader2 className="size-8 animate-spin text-primary" aria-hidden />
-        <p className="text-sm font-medium text-muted-foreground">Loading proposal preview…</p>
-      </div>
-    );
+    return <PreviewScreenSkeleton label="Loading proposal preview" />;
   }
 
   if (query.isError || !preview) {
@@ -94,46 +90,27 @@ export function ProposalPreviewScreen({ proposalId }: { proposalId: string }) {
   return (
     <div className="flex h-dvh flex-col">
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border bg-background px-4 py-3 md:px-5">
-        <span className="min-w-0 truncate text-sm font-semibold">{name}</span>
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold xl:flex-none">{name}</span>
 
-        <nav className="hidden items-center md:flex" aria-label="Proposal sections">
-          {PREVIEW_TABS.map((tab, at) => (
-            <button
-              key={tab}
-              type="button"
-              onClick={() => goTo(at)}
-              aria-current={at === index ? "step" : undefined}
-              className={cn(
-                "flex items-center text-sm",
-                at === index ? "text-foreground" : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <span className="flex items-center gap-2">
-                <span
-                  className={cn(
-                    "grid size-5 place-items-center rounded-full border text-[10px]",
-                    at === index ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background",
-                  )}
-                >
-                  {at + 1}
-                </span>
-                {tab}
-              </span>
-              {at !== PREVIEW_TABS.length - 1 && <ChevronRight className="mx-3 size-3.5 text-muted-foreground" />}
-            </button>
-          ))}
-        </nav>
+        <PreviewSectionNav index={index} onSelect={goTo} className="hidden xl:flex" />
 
-        <div className="flex shrink-0 items-center gap-2">
-          <Button variant="outline" size="sm" disabled={downloading} onClick={download}>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" aria-label="Download PDF" disabled={downloading} onClick={download}>
             {downloading ? <Loader2 className="animate-spin" /> : <Download />}
-            {downloading ? "Generating…" : "Download PDF"}
+            <span className="hidden sm:inline">{downloading ? "Generating…" : "Download PDF"}</span>
           </Button>
           <Button variant="outline" size="icon" className="size-8" aria-label="Close preview" onClick={close}>
             <X />
           </Button>
         </div>
       </header>
+
+      {/* Below xl the steps get their own row, scrolling sideways. */}
+      <PreviewSectionNav
+        index={index}
+        onSelect={goTo}
+        className="shrink-0 border-b border-border bg-background px-4 py-2 xl:hidden"
+      />
 
       <div className="shrink-0 border-b border-primary/30 bg-primary/10 px-5 py-2 text-sm">
         <span className="font-medium">Proposal Preview</span> — this is what your client will see once this

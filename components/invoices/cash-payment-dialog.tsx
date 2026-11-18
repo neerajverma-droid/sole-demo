@@ -1,6 +1,5 @@
 "use client";
 
-import { useCountryContext } from "@/hooks/use-country-context";
 import * as React from "react";
 import { useAtom } from "jotai";
 import { useQueryClient } from "@tanstack/react-query";
@@ -18,16 +17,12 @@ import {
 import { DatePicker } from "@/components/documents/date-picker";
 import { Field } from "@/components/documents/field";
 import { cashPaymentInvoiceIdAtom } from "@/lib/atoms";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import {
-  daysBetween,
-  invoiceAmount,
   markInvoicePaidWithCashApi,
   toIsoDate,
   type Invoice,
 } from "@/lib/invoices";
-import { useInvoicesStore } from "@/stores/invoices";
+import { useKnownInvoice } from "@/hooks/use-invoices-query";
 
 /**
  * When a cash payment actually landed — sole-webapp's own cash-payment date
@@ -35,10 +30,8 @@ import { useInvoicesStore } from "@/stores/invoices";
  * which misdates the common case of recording one a few days after the fact.
  */
 export function CashPaymentDialog() {
-  const { country } = useCountryContext();
   const [invoiceId, setInvoiceId] = useAtom(cashPaymentInvoiceIdAtom);
-  const invoices = useInvoicesStore((state) => state.invoices);
-  const invoice = invoices.find((entry) => entry.id === invoiceId);
+  const invoice = useKnownInvoice(invoiceId);
   const queryClient = useQueryClient();
 
   const today = toIsoDate(new Date());
@@ -59,24 +52,6 @@ export function CashPaymentDialog() {
     setSaving(true);
     try {
       await markInvoicePaidWithCashApi(target.id, date);
-
-      /*
-       * Fired here rather than inside `markInvoicePaidWithCashApi`, which is
-       * handed an id and a date and so cannot say what the invoice was worth
-       * or how long it took. This dialog has the whole invoice.
-       *
-       * `days_to_payment` is the number the business actually wants from this
-       * — "how long do clients take to pay" is not answerable from a count of
-       * payments — so it is a required property of the event and the dev
-       * validator says so if it ever goes missing.
-       */
-      track(EVENTS.INVOICE_PAID, {
-        amount: invoiceAmount(target),
-        days_to_payment: Math.max(0, daysBetween(target.issued, date)),
-        method: "cash",
-        // `amount` is in the books' currency, so that is the currency to report it in.
-        currency: target.baseCurrency ?? country.currency,
-      });
 
       await queryClient.invalidateQueries({ queryKey: ["invoices"] });
       toast.success(`${target.number} marked as paid`);

@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Info, Lock, Plus, Trash2 } from "lucide-react";
+import { Info, Loader2, Lock, Plus, Trash2 } from "lucide-react";
 
 import { DatePicker } from "@/components/documents/date-picker";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,8 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Field } from "@/components/documents/field";
+import { useTrackOnOpen } from "@/hooks/use-track-once";
+import { EVENTS } from "@/lib/analytics-events";
 import {
   emptyKmVehicle,
   kmNeedsVehicleType,
@@ -37,9 +39,9 @@ import {
 import { cn } from "@/lib/utils";
 
 /**
- * Add or edit one vehicle. The change lands in the settings draft, not on the
- * server — the footer says so, because the settings page saves as a whole.
- * Validation is sole-webapp's `validateSingleVehicle`, shown per field once
+ * Add or edit one vehicle. Saving stores it straight away — it doesn't wait
+ * for the method tab's "Save settings" — and the dialog stays open, with the
+ * button busy, until the server has taken it. Validation is sole-webapp's `validateSingleVehicle`, shown per field once
  * touched and all at once on submit.
  *
  * Where the country's rate depends on the kind of vehicle (New Zealand), a
@@ -52,6 +54,7 @@ export function KmVehicleDialog({
   rules,
   otherLabels,
   odometerLocked,
+  saving = false,
   onOpenChange,
   onSave,
 }: {
@@ -63,9 +66,12 @@ export function KmVehicleDialog({
   otherLabels: string[];
   /** Logbook trips already exist for it in the logbook period. */
   odometerLocked: boolean;
+  /** The server is storing the vehicle; the dialog can't be dismissed meanwhile. */
+  saving?: boolean;
   onOpenChange: (open: boolean) => void;
   onSave: (vehicle: KmVehicle) => void;
 }) {
+  useTrackOnOpen(EVENTS.VEHICLE_ADDITION_INITIATED, open && !vehicle);
   const [draft, setDraft] = React.useState<KmVehicle>(emptyKmVehicle);
   const [touched, setTouched] = React.useState<Record<string, boolean>>({});
   const [attempted, setAttempted] = React.useState(false);
@@ -105,7 +111,7 @@ export function KmVehicleDialog({
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     setAttempted(true);
-    if (issues.length > 0) return;
+    if (saving || issues.length > 0) return;
     onSave({
       ...draft,
       // A new vehicle starts its running reading where its logbook starts,
@@ -134,7 +140,7 @@ export function KmVehicleDialog({
   );
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(next) => !saving && onOpenChange(next)}>
       <DialogContent className="max-h-[92svh] overflow-y-auto sm:max-w-2xl">
         <form onSubmit={submit} noValidate>
           <DialogHeader>
@@ -146,12 +152,16 @@ export function KmVehicleDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="mt-5 grid gap-4 sm:grid-cols-2">
+          <div
+            className="mt-5 grid gap-4 sm:grid-cols-2"
+            data-usertour="km-vehicle-fields"
+          >
             {text("nickname", "Name", "Work ute", { autoFocus: true })}
             {text("registrationNumber", "Registration number", "ABC123")}
             {text("make", "Make", "Toyota")}
             {text("model", "Model", "Hilux")}
             {text("year", "Year", "2024", { inputMode: "numeric", maxLength: 4 })}
+            <div data-usertour="km-vehicle-type">
             {typed ? (
               <Field
                 label="Vehicle type"
@@ -190,7 +200,9 @@ export function KmVehicleDialog({
             ) : (
               text("fuelType", "Fuel type", "Petrol, diesel, EV")
             )}
+            </div>
             {text("engineCapacity", "Engine capacity", "2.8L")}
+<div data-usertour="km-vehicle-odometer">
             <Field
               label="Logbook start odometer"
               htmlFor="km-vehicle-logbookStartOdometer"
@@ -222,6 +234,8 @@ export function KmVehicleDialog({
                 </p>
               )}
             </Field>
+            </div>
+            <div data-usertour="km-vehicle-current-odometer">
             <Field
               label="Current odometer"
               htmlFor="km-vehicle-current"
@@ -230,12 +244,12 @@ export function KmVehicleDialog({
               <Input
                 id="km-vehicle-current"
                 value={draft.currentOdometer}
-                readOnly
-                tabIndex={-1}
+                disabled
                 placeholder="Set from the logbook start"
                 className="bg-muted/40 tabular text-muted-foreground"
               />
             </Field>
+            </div>
             {yearEndReadings && (
               <div className="sm:col-span-2">
                 <YearEndReadings
@@ -267,15 +281,26 @@ export function KmVehicleDialog({
             </p>
           )}
 
-          <DialogFooter className="mt-6 flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <DialogFooter
+            className="mt-6 flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between"
+            data-usertour="km-vehicle-actions"
+          >
             <p className="text-xs text-muted-foreground">
-              Applied when you save settings.
+              Saved as soon as you {vehicle ? "update" : "add"} it.
             </p>
             <div className="flex justify-end gap-2">
-              <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={saving}
+                onClick={() => onOpenChange(false)}
+              >
                 Cancel
               </Button>
-              <Button type="submit">{vehicle ? "Update vehicle" : "Add vehicle"}</Button>
+              <Button type="submit" disabled={saving}>
+                {saving && <Loader2 className="animate-spin" />}
+                {vehicle ? "Update vehicle" : "Add vehicle"}
+              </Button>
             </div>
           </DialogFooter>
         </form>

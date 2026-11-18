@@ -145,6 +145,56 @@ describe("extractInvoiceApi", () => {
     });
   });
 
+  describe("tax on the document", () => {
+    const read = async (extractedData: Record<string, unknown>) => {
+      apiMock.post.mockResolvedValue({ data: { success: true, extractedData } });
+      return extractInvoiceApi(pdf, s3, "2026-01-01");
+    };
+
+    it("keeps the GST apart from what it was charged on, and taxes the lines so the invoice adds it", async () => {
+      const { fields } = await read({
+        invoiceDate: "2016-06-15",
+        description: "In detail",
+        subtotal: 1000,
+        tax_amount: 100,
+        totalAmount: 1100,
+        items: [{ description: "In detail", qty: 1, price: 1000, amount: 1000 }],
+      });
+
+      expect(fields).toMatchObject({ subtotal: "1000", tax: "100", total: "1100" });
+      expect(fields.items).toHaveLength(1);
+      expect(fields.items[0]).toMatchObject({ price: "1000", quantity: "1", gst: true });
+    });
+
+    it("bills a document with no lines as one line before tax, not at the total", async () => {
+      const { fields } = await read({ description: "In detail", tax_amount: 100, totalAmount: 1100 });
+
+      expect(fields.items).toHaveLength(1);
+      // 1,100 less 100 GST: the invoice adds the 100 back, rather than the tax being lost.
+      expect(fields.items[0]).toMatchObject({ description: "In detail", price: "1000", gst: true });
+      expect(fields.subtotal).toBe("1000");
+    });
+
+    it("leaves GST off — and out of the fields — when the document charges none", async () => {
+      const { fields } = await read({
+        totalAmount: 55,
+        items: [{ description: "Consulting", qty: 1, price: 55, amount: 55 }],
+      });
+
+      expect(fields.tax).toBe("");
+      expect(fields.subtotal).toBe("");
+      expect(fields.items[0]).toMatchObject({ price: "55", gst: false });
+    });
+
+    it("reads a tax of 0 as no tax", async () => {
+      const { fields } = await read({ totalAmount: 55, tax_amount: 0, subtotal: 55, description: "Fee" });
+
+      expect(fields.tax).toBe("");
+      expect(fields.subtotal).toBe("");
+      expect(fields.items[0]).toMatchObject({ price: "55", gst: false });
+    });
+  });
+
   it("surfaces the plan-limit reason a 200 carries", async () => {
     apiMock.post.mockResolvedValue({
       data: { success: false, error: "Invoice limit reached." },

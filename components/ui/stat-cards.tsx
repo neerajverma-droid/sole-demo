@@ -36,6 +36,12 @@ export type StatCard = {
   active?: boolean;
   /** Spoken name for the card's button, where the label alone undersells it. */
   selectLabel?: string;
+  /**
+   * This card's own figure is still in flight, overriding the row's `loading`.
+   * For a row where one tile waits on a slower source than the rest, so the
+   * others aren't held behind it.
+   */
+  loading?: boolean;
 };
 
 const TONES: Record<string, string> = {
@@ -117,79 +123,82 @@ export function StatCards({
         className,
       )}
     >
-      {stats.map((stat) => (
-        <div
-          key={stat.key}
-          className={cn(
-            "min-w-0 rounded-lg border border-border bg-card p-4 shadow-sm",
-            stat.onSelect && "relative transition-colors hover:bg-muted/40",
-            stat.active && "border-primary/50 ring-1 ring-primary/40",
-          )}
-        >
-          {/* Stretched over the whole card rather than wrapping it: a button
-              can't hold the dt/dd pair, and the list has to stay a list. */}
-          {stat.onSelect && (
-            <button
-              type="button"
-              onClick={stat.onSelect}
-              aria-pressed={stat.active ?? false}
-              aria-label={stat.selectLabel ?? `Filter by ${stat.label.toLowerCase()}`}
-              className="absolute inset-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            />
-          )}
-          <div className="flex items-center gap-2.5">
-            <span
-              className={cn(
-                "grid size-9 shrink-0 place-items-center rounded-xl [&_svg]:size-4",
-                stat.tileTone ?? STAT_TONES[stat.tone ?? "primary"],
-              )}
-              aria-hidden
-            >
-              <stat.icon />
-            </span>
-            <dt className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
-              <span className="truncate">{stat.label}</span>
-              {stat.tip && (
-                // Above the card's own button, so the tip still opens.
-                <span className="relative z-10 inline-flex">
-                  <InfoTip text={stat.tip} />
-                </span>
-              )}
-            </dt>
-          </div>
+      {stats.map((stat) => {
+        const pending = stat.loading ?? loading;
+        return (
+          <div
+            key={stat.key}
+            className={cn(
+              "min-w-0 rounded-xl border border-border bg-card p-4 shadow-sm",
+              stat.onSelect && "relative transition-colors hover:bg-muted/40",
+              stat.active && "border-primary/50 ring-1 ring-primary/40",
+            )}
+          >
+            {/* Stretched over the whole card rather than wrapping it: a button
+                can't hold the dt/dd pair, and the list has to stay a list. */}
+            {stat.onSelect && (
+              <button
+                type="button"
+                onClick={stat.onSelect}
+                aria-pressed={stat.active ?? false}
+                aria-label={stat.selectLabel ?? `Filter by ${stat.label.toLowerCase()}`}
+                className="absolute inset-0 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            )}
+            <div className="flex items-center gap-2.5">
+              <span
+                className={cn(
+                  "grid size-9 shrink-0 place-items-center rounded-xl [&_svg]:size-4",
+                  stat.tileTone ?? STAT_TONES[stat.tone ?? "primary"],
+                )}
+                aria-hidden
+              >
+                <stat.icon />
+              </span>
+              <dt className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
+                <span className="truncate">{stat.label}</span>
+                {stat.tip && (
+                  // Above the card's own button, so the tip still opens.
+                  <span className="relative z-10 inline-flex">
+                    <InfoTip text={stat.tip} />
+                  </span>
+                )}
+              </dt>
+            </div>
 
-          {loading ? (
-            <dd className="mt-3 space-y-1.5" aria-hidden>
-              <Shimmer className="h-6 w-24 rounded-md" />
-              <Shimmer className="h-3.5 w-32 rounded-md" />
-            </dd>
-          ) : (
-            <dd className="mt-3 space-y-1.5">
-              <p className="text-xl font-semibold leading-none tracking-tight tabular">
-                {stat.value}
-              </p>
-              {stat.breakdown ? (
-                <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground tabular">
-                  {stat.breakdown.map((entry, index) => (
-                    <span key={entry.label} className="flex items-center gap-1.5">
-                      {index > 0 && <span aria-hidden>·</span>}
-                      <span className={entry.tone ? TONES[entry.tone] : undefined}>
-                        {entry.label}
-                      </span>
-                    </span>
-                  ))}
+            {pending ? (
+              <dd className="mt-3 space-y-1.5" aria-hidden>
+                <Shimmer className="h-6 w-24 rounded-md" />
+                <Shimmer className="h-3.5 w-32 rounded-md" />
+              </dd>
+            ) : (
+              <dd className="mt-3 space-y-1.5">
+                <p className="text-xl font-semibold leading-none tracking-tight tabular">
+                  {stat.value}
                 </p>
-              ) : (
-                stat.meta && (
-                  <p className="text-xs text-muted-foreground tabular">
-                    {stat.meta}
+                {stat.breakdown ? (
+                  <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground tabular">
+                    {stat.breakdown.map((entry, index) => (
+                      <span key={entry.label} className="flex items-center gap-1.5">
+                        {index > 0 && <span aria-hidden>·</span>}
+                        <span className={entry.tone ? TONES[entry.tone] : undefined}>
+                          {entry.label}
+                        </span>
+                      </span>
+                    ))}
                   </p>
-                )
-              )}
-            </dd>
-          )}
-        </div>
-      ))}
+                ) : (
+                  stat.meta && (
+                    <p className="text-xs text-muted-foreground tabular">
+                      {stat.meta}
+                    </p>
+                  )
+                )}
+              </dd>
+            )}
+          </div>
+        );
+      })}
     </dl>
   );
 }

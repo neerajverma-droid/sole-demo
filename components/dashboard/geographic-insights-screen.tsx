@@ -211,7 +211,10 @@ function RecommendedAction({
   scope: string;
 }) {
   return (
-    <div className="flex flex-wrap items-start justify-between gap-4 rounded-lg border border-primary/20 bg-primary/5 p-4">
+    <div
+      className="flex flex-wrap items-start justify-between gap-4 rounded-lg border border-primary/20 bg-primary/5 p-4"
+      data-usertour="geo-recommended"
+    >
       <div className="flex min-w-0 items-start gap-3">
         <span
           className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"
@@ -407,7 +410,10 @@ function ControlRow({
   industries: string[];
 }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card p-3 shadow-sm">
+    <div
+      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card p-3 shadow-sm"
+      data-usertour="geo-controls"
+    >
       <div className="flex min-w-0 flex-wrap items-center gap-3">
         <span className="text-xs font-medium text-muted-foreground">
           Colour &amp; size by
@@ -553,7 +559,7 @@ function AreaTable({
 
   return (
     <Card>
-      <CardHeader className="pb-4">
+      <CardHeader>
         <CardTitle className="text-base">Customers by area</CardTitle>
         <p className="text-xs text-muted-foreground">
           {scope} · ranked by {metricMeta(metric).label.toLowerCase()}
@@ -816,7 +822,7 @@ function SuggestedActions({
 
   return (
     <Card>
-      <CardHeader className="pb-4">
+      <CardHeader>
         <CardTitle className="text-base">Suggested actions</CardTitle>
       </CardHeader>
 

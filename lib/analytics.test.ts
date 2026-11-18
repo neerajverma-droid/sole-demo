@@ -1,6 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ALL_EVENT_NAMES, EVENTS, REQUIRED_PROPS } from "@/lib/analytics-events";
+import { ALL_EVENT_NAMES, REQUIRED_PROPS } from "@/lib/analytics-events";
+
+const TEST_EVENT = "test_event" as never;
 
 /**
  * The Mixpanel integration.
@@ -22,6 +24,7 @@ const mixpanel = {
   unregister: vi.fn(),
   reset: vi.fn(),
   get_distinct_id: vi.fn(() => "distinct"),
+  get_property: vi.fn<(key: string) => string | undefined>(() => undefined),
   people: { set: vi.fn() },
 };
 
@@ -68,9 +71,6 @@ describe("identify", () => {
       userId: "8421",
       email: "sam@example.org",
       name: "Sam",
-      plan: "trial",
-      trialActive: true,
-      businessId: "biz-1",
     });
 
     expect(mixpanel.identify).toHaveBeenCalledWith("8421");
@@ -97,11 +97,7 @@ describe("identify", () => {
     expect(mixpanel.identify).not.toHaveBeenCalled();
     expect(mixpanel.people.set).not.toHaveBeenCalled();
 
-    // Reported as data rather than only to a console nobody is watching.
-    expect(mixpanel.track).toHaveBeenCalledWith(
-      EVENTS.IDENTIFY_FAILED,
-      expect.objectContaining({ has_email: true }),
-    );
+    expect(mixpanel.track).not.toHaveBeenCalled();
     expect(error).toHaveBeenCalled();
   });
 
@@ -129,19 +125,30 @@ describe("identify", () => {
     expect(mixpanel.identify).toHaveBeenNthCalledWith(2, "9977");
   });
 
-  it("carries plan and trial through to the super properties", async () => {
+  it("sets the plan, its duration and the add-ons on the profile", async () => {
     const analytics = await load();
     analytics.initAnalytics();
 
-    analytics.identify({ userId: "8421", plan: "trial", trialActive: true });
+    analytics.identify({
+      userId: "8421",
+      subscription: {
+        planName: "Compliance Bundle",
+        planInterval: "annual",
+        addons: ["time", "km"],
+      } as import("@/lib/subscription").SubscriptionInfo,
+      totalBusinesses: 2,
+    });
 
-    /*
-     * In the old project every profile reads `plan: 'free'`, mid-trial people
-     * included, so filtering on plan to find trial users returns zero and
-     * they are only findable through a trial date.
-     */
-    expect(mixpanel.register).toHaveBeenCalledWith(
-      expect.objectContaining({ plan: "trial", trial_active: true }),
+    expect(mixpanel.people.set).toHaveBeenCalledWith(
+      expect.objectContaining({
+        user_id: "8421",
+        plan_name: "Compliance Bundle",
+        plan_duration: "Annually",
+        is_time_tracker_add_on: true,
+        is_km_tracker_add_on: true,
+        is_accounting_add_on: false,
+        total_businesses: 2,
+      }),
     );
   });
 
@@ -257,7 +264,7 @@ describe("initAnalytics", () => {
     expect(mixpanel.init).not.toHaveBeenCalled();
 
     analytics.identify({ userId: "8421" });
-    analytics.track(EVENTS.BUSINESS_CREATED);
+    analytics.track(TEST_EVENT);
     expect(mixpanel.identify).not.toHaveBeenCalled();
     expect(mixpanel.track).not.toHaveBeenCalled();
   });
@@ -339,7 +346,7 @@ describe("initAnalytics", () => {
 
     analytics.initAnalytics();
     analytics.identify({ userId: "8421" });
-    analytics.track(EVENTS.BUSINESS_CREATED);
+    analytics.track(TEST_EVENT);
 
     expect(mixpanel.init).not.toHaveBeenCalled();
     expect(mixpanel.identify).not.toHaveBeenCalled();
@@ -351,14 +358,14 @@ describe("track", () => {
   it("holds events fired before init and sends them after", async () => {
     const analytics = await load();
 
-    analytics.track(EVENTS.SIGNUP_INITIATED, { source: "hero" });
+    analytics.track(TEST_EVENT, { source: "hero" });
     expect(mixpanel.track).not.toHaveBeenCalled();
 
     analytics.initAnalytics();
 
     // Dropping these would be the exact failure this integration exists to
     // stop: the event was written, and never arrived.
-    expect(mixpanel.track).toHaveBeenCalledWith(EVENTS.SIGNUP_INITIATED, {
+    expect(mixpanel.track).toHaveBeenCalledWith(TEST_EVENT, {
       source: "hero",
     });
   });
@@ -367,9 +374,9 @@ describe("track", () => {
     const analytics = await load();
     analytics.initAnalytics();
 
-    analytics.track(EVENTS.INVOICE_SENT, { amount: 1200, currency: "AUD" });
+    analytics.track(TEST_EVENT, { amount: 1200, currency: "AUD" });
 
-    expect(mixpanel.track).toHaveBeenCalledWith(EVENTS.INVOICE_SENT, {
+    expect(mixpanel.track).toHaveBeenCalledWith(TEST_EVENT, {
       amount: 1200,
       currency: "AUD",
     });
@@ -393,7 +400,7 @@ describe("track", () => {
      * being silently dropped.
      */
     expect(() =>
-      analytics.track(EVENTS.INVOICE_SENT, { amount: 500 }),
+      analytics.track(TEST_EVENT, { amount: 500 }),
     ).not.toThrow();
   });
 });
@@ -475,8 +482,8 @@ describe("crash safety", () => {
     analytics.initAnalytics();
     makeEverythingThrow();
 
-    expect(() => analytics.setBusinessContext("biz-1")).not.toThrow();
-    expect(() => analytics.setBusinessContext(null)).not.toThrow();
+    expect(() => analytics.setBusinessContext({ id: "biz-1" })).not.toThrow();
+    expect(() => analytics.setBusinessContext({ id: null })).not.toThrow();
   });
 
   it("a thrown identify() does not falsely mark the session identified", async () => {
@@ -525,11 +532,38 @@ describe("setBusinessContext", () => {
     const analytics = await load();
     analytics.initAnalytics();
 
-    analytics.setBusinessContext("biz-9");
-    expect(mixpanel.register).toHaveBeenCalledWith({ business_id: "biz-9" });
+    analytics.setBusinessContext({ id: "biz-9", name: "Acme", industry: "Arts" });
+    expect(mixpanel.register).toHaveBeenCalledWith({
+      business_id: "biz-9",
+      business_name: "Acme",
+      industry: "Arts",
+    });
 
-    analytics.setBusinessContext(null);
+    analytics.setBusinessContext({ id: null });
     expect(mixpanel.unregister).toHaveBeenCalledWith("business_id");
+    expect(mixpanel.unregister).toHaveBeenCalledWith("business_name");
+    expect(mixpanel.unregister).toHaveBeenCalledWith("industry");
+  });
+
+  it("keeps the persisted name and industry while the same business's lists are still loading", async () => {
+    const analytics = await load();
+    analytics.initAnalytics();
+    mixpanel.register.mockClear();
+    mixpanel.get_property.mockImplementation((key: string) =>
+      key === "business_id" ? "biz-9" : undefined,
+    );
+
+    analytics.setBusinessContext({ id: "biz-9", name: null, industry: null });
+    expect(mixpanel.register).toHaveBeenLastCalledWith({ business_id: "biz-9" });
+
+    // A different business never inherits the previous one's name.
+    analytics.setBusinessContext({ id: "biz-10", name: null, industry: null });
+    expect(mixpanel.register).toHaveBeenLastCalledWith({
+      business_id: "biz-10",
+      business_name: null,
+      industry: null,
+    });
+    mixpanel.get_property.mockImplementation(() => undefined);
   });
 });
 
@@ -580,91 +614,372 @@ describe("the event contract", () => {
   });
 });
 
-describe("derivePlan", () => {
-  // Only the two fields `derivePlan` reads — the real `SubscriptionInfo` has
-  // more, and a test building a full one would break every time that type
-  // grows a field this function doesn't look at.
-  const sub = (over: { isTrialing?: boolean; isFree?: boolean } = {}) =>
-    ({ isTrialing: false, isFree: false, ...over }) as import("@/lib/subscription").SubscriptionInfo;
-
-  it("says 'free' before anything has loaded — not until it is actually known", async () => {
-    const { derivePlan } = await load();
-    /*
-     * `null`, not `'free'`. The old project's bug was exactly the shape
-     * "default to free and never correct it" — stamping a value here before
-     * the subscription fetch lands would reproduce it inside the fix meant to
-     * remove it.
-     */
-    expect(derivePlan(null)).toBeNull();
+describe("planSelectionProps", () => {
+  it("carries the plan, its add-ons and the amount rounded to cents", async () => {
+    const { planSelectionProps } = await load();
+    expect(
+      planSelectionProps({
+        planName: "Invoice and Expense",
+        interval: "annual",
+        addons: ["booking"],
+        paidAmount: 29.991 * 12,
+        currency: "AUD",
+        businessId: "biz-3",
+        businessName: "Acme Plumbing",
+        isOnboarding: true,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        plan_name: "Invoice and Expense",
+        plan_duration: "Annually",
+        is_booking_add_on: true,
+        is_inventory_add_on: false,
+        business_id: "biz-3",
+        business_name: "Acme Plumbing",
+        paid_amount: 359.89,
+        currency: "AUD",
+        is_onboarding: true,
+      }),
+    );
   });
 
-  it("reads 'trial' from isTrialing, never from a plan string", async () => {
-    const { derivePlan } = await load();
-    expect(derivePlan(sub({ isTrialing: true }))).toBe("trial");
-  });
-
-  it("reads 'free' only once the subscription has confirmed it", async () => {
-    const { derivePlan } = await load();
-    expect(derivePlan(sub({ isFree: true }))).toBe("free");
-  });
-
-  it("falls through to 'paid' for anything that is neither trialing nor free", async () => {
-    const { derivePlan } = await load();
-    expect(derivePlan(sub())).toBe("paid");
-  });
-
-  it("prefers isTrialing over isFree when both are somehow set", async () => {
-    const { derivePlan } = await load();
-    // Shouldn't happen from the real API, but a trial is the more specific
-    // and more useful fact if it ever does.
-    expect(derivePlan(sub({ isTrialing: true, isFree: true }))).toBe("trial");
+  it("leaves business_name to the super property when none is given", async () => {
+    const { planSelectionProps } = await load();
+    const props = planSelectionProps({
+      planName: "Pro",
+      interval: "monthly",
+      addons: [],
+      paidAmount: 10,
+      currency: "AUD",
+      businessId: "biz-3",
+      isOnboarding: false,
+    });
+    expect(props).not.toHaveProperty("business_name");
+    expect(props.is_onboarding).toBe(false);
   });
 });
 
-describe("the dev validator", () => {
-  beforeEach(() => {
-    vi.stubEnv("NODE_ENV", "development");
+describe("planProfile", () => {
+  it("is empty until the subscription has loaded", async () => {
+    const { planProfile } = await load();
+    expect(planProfile(null)).toEqual({});
   });
 
-  it("complains when an event arrives without the value it was added for", async () => {
-    const analytics = await load();
+  it("calls anything that is not annual Monthly", async () => {
+    const { planDuration } = await load();
+    expect(planDuration("annual")).toBe("Annually");
+    expect(planDuration("monthly")).toBe("Monthly");
+    expect(planDuration(null)).toBe("Monthly");
+  });
+
+  it("maps every add-on slug to its flag", async () => {
+    const { addonFlags } = await load();
+    expect(addonFlags(["accounting", "assets-advanced", "crypto"])).toEqual({
+      is_accounting_add_on: true,
+      is_time_tracker_add_on: false,
+      is_projects_add_on: false,
+      is_advanced_assets_add_on: true,
+      is_booking_add_on: false,
+      is_km_tracker_add_on: false,
+      is_inventory_add_on: false,
+      is_crypto_module_add_on: true,
+    });
+  });
+});
+
+describe("signup_initiated", () => {
+  it("sends the method with the campaign from the URL, to the event and the profile", async () => {
+    const analytics = await load({
+      search: "?utm_source=google&utm_medium=cpc&utm_campaign=spring",
+    });
     analytics.initAnalytics();
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    analytics.track(EVENTS.INVOICE_SENT, {});
+    analytics.trackSignupInitiated("google");
 
-    /*
-     * The old integration's largest reporting gap was one missing property:
-     * all 9,432 `module_used` rows carry `action: "viewed"`. A count alone
-     * does not answer "invoices sent with invoice value", which is the
-     * question actually asked of it.
-     */
-    expect(error).toHaveBeenCalledWith(
-      expect.stringContaining("missing required property: amount"),
+    const expected = {
+      signup_method: "google",
+      primary_email: null,
+      utm_source: "google",
+      utm_medium: "cpc",
+      utm_campaign: "spring",
+    };
+    expect(mixpanel.track).toHaveBeenCalledWith("signup_initiated", expected);
+    expect(mixpanel.people.set).toHaveBeenCalledWith(expected);
+  });
+
+  it("falls back to the first-touch campaign once the URL has lost it", async () => {
+    const analytics = await load({ search: "" });
+    analytics.initAnalytics();
+    mixpanel.get_property.mockImplementation((key: string) =>
+      key === "utm_source" ? "newsletter" : undefined,
     );
-    // Still sent — a warning, not a gate. Dropping it would turn a reporting
-    // gap into a reporting hole.
-    expect(mixpanel.track).toHaveBeenCalled();
+
+    analytics.trackSignupInitiated("email");
+
+    expect(mixpanel.track).toHaveBeenCalledWith(
+      "signup_initiated",
+      expect.objectContaining({
+        signup_method: "email",
+        utm_source: "newsletter",
+        utm_medium: null,
+      }),
+    );
   });
 
-  it("stays quiet when the required properties are there", async () => {
+  it("holds an event fired before init and sends it after", async () => {
+    const analytics = await load();
+    analytics.trackSignupInitiated("email");
+    expect(mixpanel.track).not.toHaveBeenCalled();
+
+    analytics.initAnalytics();
+    expect(mixpanel.track).toHaveBeenCalledWith(
+      "signup_initiated",
+      expect.objectContaining({ signup_method: "email" }),
+    );
+  });
+});
+
+describe("signup_initiated once per method", () => {
+  it("counts a login-page hand-off and the Create account press as one start", async () => {
     const analytics = await load();
     analytics.initAnalytics();
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    analytics.track(EVENTS.INVOICE_PAID, { amount: 900, days_to_payment: 12 });
+    analytics.trackSignupInitiated("email");
+    analytics.trackSignupInitiated("email");
+    analytics.trackSignupInitiated("google");
 
-    expect(error).not.toHaveBeenCalled();
+    const sent = mixpanel.track.mock.calls.filter(
+      ([event]) => event === "signup_initiated",
+    );
+    expect(sent.map(([, props]) => props.signup_method)).toEqual([
+      "email",
+      "google",
+    ]);
+  });
+});
+
+describe("plan_name for the free tier", () => {
+  it("is the tracking plan's 'Free', not the API's 'Free plan'", async () => {
+    const { planProfile } = await load();
+    const { NO_SUBSCRIPTION } = await import("@/lib/subscription");
+    expect(planProfile(NO_SUBSCRIPTION).plan_name).toBe("Free");
+    expect(
+      planProfile({ ...NO_SUBSCRIPTION, isFree: false, planName: "Pro" })
+        .plan_name,
+    ).toBe("Pro");
+  });
+});
+
+describe("pay-first sign-up: no plan before the first payment", () => {
+  it("planProfile sets nothing for an account still owing its first subscription", async () => {
+    const { planProfile } = await load();
+    const { NO_SUBSCRIPTION } = await import("@/lib/subscription");
+    expect(
+      planProfile({ ...NO_SUBSCRIPTION, requiresFirstSubscription: true }),
+    ).toEqual({});
   });
 
-  it("accepts a zero without calling it missing", async () => {
+  it("identify leaves the plan alone while the first payment is pending", async () => {
     const analytics = await load();
     analytics.initAnalytics();
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { NO_SUBSCRIPTION } = await import("@/lib/subscription");
 
-    // Paid on the day it was sent, and a $0 line is a real thing people send.
-    analytics.track(EVENTS.INVOICE_PAID, { amount: 0, days_to_payment: 0 });
+    analytics.identify({
+      userId: "42",
+      email: "new@customer.com",
+      subscription: { ...NO_SUBSCRIPTION, requiresFirstSubscription: true },
+    });
 
-    expect(error).not.toHaveBeenCalled();
+    const profile = mixpanel.people.set.mock.calls.at(-1)?.[0] ?? {};
+    expect(profile).not.toHaveProperty("plan_name");
+    expect(profile).not.toHaveProperty("is_accounting_add_on");
+  });
+
+  /** The suite's `window` stub has no storage; give these a real-shaped one. */
+  const withLocalStorage = () => {
+    const store = new Map<string, string>();
+    const sessionStorage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    };
+    vi.stubGlobal("window", {
+      ...(typeof window === "undefined" ? {} : window),
+      localStorage: sessionStorage,
+    });
+    return sessionStorage;
+  };
+
+  it("keeps the company step's profile across the Stripe round trip, then forgets it", async () => {
+    const {
+      rememberOnboardingProfile,
+      recallOnboardingProfile,
+      forgetOnboardingProfile,
+    } = await load();
+    withLocalStorage();
+    const profile = {
+      primary_country: "Australia",
+      primary_email: "new@customer.com",
+      primary_business_name: "Acme Plumbing",
+      user_name: "Sam Lee",
+      user_id: "42",
+      mobile_number: "0400 000 000",
+      abn_number: "51 824 753 556",
+    };
+    rememberOnboardingProfile(profile);
+    expect(recallOnboardingProfile()).toEqual(profile);
+    // Never another person's profile on a shared browser.
+    expect(recallOnboardingProfile("99")).toEqual({});
+    expect(recallOnboardingProfile("42")).toEqual(profile);
+    forgetOnboardingProfile();
+    expect(recallOnboardingProfile()).toEqual({});
+  });
+
+  it("remembers that signup_completed went out, per user", async () => {
+    const { signupAlreadyReported, markSignupReported } = await load();
+    withLocalStorage();
+    expect(signupAlreadyReported("42")).toBe(false);
+    markSignupReported("42");
+    expect(signupAlreadyReported("42")).toBe(true);
+    expect(signupAlreadyReported("43")).toBe(false);
+  });
+
+  it("recalls nothing rather than throwing on a corrupt entry, or with no storage at all", async () => {
+    const { recallOnboardingProfile } = await load();
+    withLocalStorage().setItem("sole-analytics-onboarding-profile", "{not json");
+    expect(recallOnboardingProfile()).toEqual({});
+    vi.stubGlobal("window", { location: window.location });
+    expect(recallOnboardingProfile()).toEqual({});
+  });
+});
+
+describe("addonFlags with older slugs", () => {
+  it("reads time-tracker and km-tracker as the add-ons they are", async () => {
+    const { addonFlags } = await load();
+    expect(addonFlags(["time-tracker", "km-tracker", "projects"])).toEqual(
+      expect.objectContaining({
+        is_time_tracker_add_on: true,
+        is_km_tracker_add_on: true,
+        is_projects_add_on: true,
+        is_accounting_add_on: false,
+      }),
+    );
+  });
+});
+
+describe("signup — the plan's five start buttons", () => {
+  /** The suite's `window` stub has no storage; this block needs sessionStorage. */
+  const withStorage = () => {
+    const store = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    };
+    vi.stubGlobal("window", {
+      ...(typeof window === "undefined" ? {} : window),
+      sessionStorage: storage,
+      localStorage: storage,
+    });
+  };
+
+  it("carries the email typed on the login page with 'Create one'", async () => {
+    const analytics = await load();
+    analytics.initAnalytics();
+    analytics.trackSignupInitiated("email", { primaryEmail: " new@customer.com " });
+    expect(mixpanel.track).toHaveBeenCalledWith(
+      "signup_initiated",
+      expect.objectContaining({ signup_method: "email", primary_email: "new@customer.com" }),
+    );
+  });
+
+  it("counts a Google press on the register page as both events, once the account is new", async () => {
+    const analytics = await load();
+    analytics.initAnalytics();
+    withStorage();
+    mixpanel.track.mockClear();
+
+    analytics.rememberSocialStart("google", "register");
+    analytics.reportSocialSignup({ email: "new@customer.com", is_first_login: true });
+
+    const names = mixpanel.track.mock.calls.map(([event]) => event);
+    expect(names).toEqual(["signup_initiated", "signup_details_entered"]);
+    expect(mixpanel.track.mock.calls[1][1]).toEqual(
+      expect.objectContaining({ signup_method: "google", primary_email: "new@customer.com" }),
+    );
+  });
+
+  it("counts a login-page Apple press as signup_initiated only", async () => {
+    const analytics = await load();
+    analytics.initAnalytics();
+    withStorage();
+    mixpanel.track.mockClear();
+
+    analytics.rememberSocialStart("apple", "login");
+    analytics.reportSocialSignup({ email: "new@customer.com", is_first_login: true });
+
+    expect(mixpanel.track.mock.calls.map(([event]) => event)).toEqual(["signup_initiated"]);
+  });
+
+  it("sends nothing when Google signs in to an account that already exists", async () => {
+    const analytics = await load();
+    analytics.initAnalytics();
+    withStorage();
+    mixpanel.track.mockClear();
+
+    analytics.rememberSocialStart("google", "login");
+    analytics.reportSocialSignup({ email: "old@customer.com", is_first_login: false });
+
+    expect(mixpanel.track).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing on a callback no button started", async () => {
+    const analytics = await load();
+    analytics.initAnalytics();
+    withStorage();
+    mixpanel.track.mockClear();
+
+    analytics.reportSocialSignup({ email: "new@customer.com", is_first_login: true });
+
+    expect(mixpanel.track).not.toHaveBeenCalled();
+  });
+});
+
+describe("profile properties land on the user's profile", () => {
+  it("identifies the user before setting them, so they aren't left in the SDK's queue", async () => {
+    const analytics = await load();
+    analytics.initAnalytics();
+    mixpanel.identify.mockClear();
+    mixpanel.people.set.mockClear();
+
+    analytics.setUserProfile({ abn_number: "51 824 753 556" }, { userId: "20666" });
+
+    expect(mixpanel.identify).toHaveBeenCalledWith("20666");
+    expect(mixpanel.identify.mock.invocationCallOrder[0]).toBeLessThan(
+      mixpanel.people.set.mock.invocationCallOrder[0],
+    );
+    expect(mixpanel.people.set).toHaveBeenCalledWith({ abn_number: "51 824 753 556" });
+
+    // Already identified as that user: not identified again.
+    analytics.setUserProfile({ mobile_number: "0400" }, { userId: "20666" });
+    expect(mixpanel.identify).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("onboarding payment for signup_completed", () => {
+  it("is read once", async () => {
+    const analytics = await load();
+    const store = new Map<string, string>();
+    vi.stubGlobal("window", {
+      ...(typeof window === "undefined" ? {} : window),
+      localStorage: {
+        getItem: (key: string) => store.get(key) ?? null,
+        setItem: (key: string, value: string) => void store.set(key, value),
+        removeItem: (key: string) => void store.delete(key),
+      },
+    });
+    analytics.rememberOnboardingPayment(479.9);
+    expect(analytics.takeOnboardingPayment()).toBe(479.9);
+    expect(analytics.takeOnboardingPayment()).toBeNull();
   });
 });

@@ -88,6 +88,16 @@ export function payrollEnabled(seats: PayrollSeats | null | undefined): boolean 
   return !!seats && seats.isActive && seats.status === "ACTIVE";
 }
 
+/**
+ * Payroll was never switched on, or has been cancelled — the states where its
+ * pages have nothing to show and the answer is to enable it. Overdue and
+ * paused stay open: the overview's banners explain those, and the history is
+ * still theirs to read.
+ */
+export function payrollLocked(seats: PayrollSeats | null | undefined): boolean {
+  return !!seats && (seats.status === "NOT_STARTED" || seats.status === "CANCELED");
+}
+
 /** Payroll is on but every paid seat is taken. */
 export function seatLimitReached(seats: PayrollSeats | null | undefined): boolean {
   if (!payrollEnabled(seats) || !seats) return false;

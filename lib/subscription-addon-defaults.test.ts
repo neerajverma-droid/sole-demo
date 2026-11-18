@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  EMPTY_ADDON_SELECTION,
   INCLUDED_ADDON_COUNT,
+  addonDisplayName,
   defaultIncludedAddons,
+  planDisplayName,
+  refillAddonSelection,
+  selectionMonthlyTotal,
+  toggleAddonSelection,
+  type AddonSelection,
   type SubscriptionPlan,
 } from "@/lib/subscription";
 
@@ -31,6 +38,7 @@ const plan = (slug: string, comingSoon = false): SubscriptionPlan => ({
   comingSoon,
   includes: [],
   excludes: [],
+  content: null,
 });
 
 /** The catalogue in its own order, as `/plans` returns it. */
@@ -53,13 +61,8 @@ describe("how many get switched on", () => {
     expect(defaultIncludedAddons("bundle", ADDONS)).toHaveLength(3);
   });
 
-  it("fills Advanced's six", () => {
-    // "Core Accounting Included" + "Any 5 Add-ons Included" = 6.
-    expect(defaultIncludedAddons("advanced", ADDONS)).toHaveLength(6);
-  });
-
-  it("switches on everything available for pro, whose allowance is unlimited", () => {
-    const result = defaultIncludedAddons("pro", ADDONS);
+  it("switches on everything available for Advanced, whose allowance is unlimited", () => {
+    const result = defaultIncludedAddons("advanced", ADDONS);
 
     expect(result).toHaveLength(ADDONS.length - 1); // minus the coming-soon one
     expect(result).not.toContain("crypto");
@@ -241,7 +244,7 @@ describe("moving between packages", () => {
   });
 
   it("refills from scratch on the way up", () => {
-    expect(move("advanced", ["accounting", "km"])).toHaveLength(6);
+    expect(move("advanced", ["accounting", "km"])).toHaveLength(ADDONS.length - 1); // minus the coming-soon one
   });
 
   it("a dismissal survives the trip up and back down", () => {
@@ -250,5 +253,142 @@ describe("moving between packages", () => {
 
     const down = move("business", ["km"], ["accounting"]);
     expect(down).toEqual(["km"]);
+  });
+});
+
+/**
+ * The picker's own bookkeeping — what the onboarding plan step runs on.
+ *
+ * The bug these pin down: pick Advanced (every add-on included), then move to the
+ * Compliance Bundle (three), and every add-on stayed ticked. The bundle covers
+ * three, so the rest turned into charges the person never asked for. A refill
+ * has to let go of what the previous package handed out.
+ */
+describe("picker selection across a package change", () => {
+  const PACKAGE_ADDONS = ADDONS.filter((addon) => !addon.comingSoon);
+
+  /** Click through packages in order, the way the picker's effect does. */
+  const through = (...slugs: string[]): AddonSelection =>
+    slugs.reduce(
+      (selection, slug) => refillAddonSelection(selection, slug, ADDONS),
+      EMPTY_ADDON_SELECTION,
+    );
+
+  it("lets go of Advanced's add-ons when moving down to the bundle", () => {
+    const onAdvanced = through("business", "advanced");
+    expect(onAdvanced.slugs).toHaveLength(PACKAGE_ADDONS.length);
+
+    const onBundle = refillAddonSelection(onAdvanced, "bundle", ADDONS);
+
+    expect(onBundle.slugs).toEqual(["accounting", "time", "project"]);
+    expect(onBundle.slugs).toHaveLength(INCLUDED_ADDON_COUNT.bundle);
+  });
+
+  it("leaves nothing to pay for after the move — the free slots cover what is ticked", () => {
+    const onBundle = through("business", "advanced", "bundle");
+    const ticked = onBundle.slugs.map(
+      (slug) => ADDONS.find((addon) => addon.slug === slug)!,
+    );
+
+    // Just the package price: three ticked, three included.
+    expect(selectionMonthlyTotal(plan("bundle"), ticked)).toBeCloseTo(4.99);
+  });
+
+  it("drops everything the package gave away when moving to one with no allowance", () => {
+    expect(through("advanced", "business").slugs).toEqual([]);
+  });
+
+  it("keeps what was ticked by hand through the move, charged rather than cancelled", () => {
+    let selection = through("business");
+    selection = toggleAddonSelection(selection, "km");
+    selection = refillAddonSelection(selection, "advanced", ADDONS);
+    selection = refillAddonSelection(selection, "bundle", ADDONS);
+
+    expect(selection.slugs).toContain("km");
+    // The allowance counts what is ticked, so the hand-ticked one takes a slot
+    // and two are left to fill.
+    expect(selection.slugs).toEqual(["km", "accounting", "time"]);
+  });
+
+  it("does not hand back an add-on that was switched off, on the way up or down", () => {
+    let selection = through("business", "bundle");
+    selection = toggleAddonSelection(selection, "accounting");
+    expect(selection.slugs).not.toContain("accounting");
+
+    selection = refillAddonSelection(selection, "advanced", ADDONS);
+    expect(selection.slugs).not.toContain("accounting");
+
+    selection = refillAddonSelection(selection, "bundle", ADDONS);
+    expect(selection.slugs).not.toContain("accounting");
+  });
+
+  it("brings an add-on back once it is ticked again", () => {
+    let selection = through("business", "bundle");
+    selection = toggleAddonSelection(selection, "accounting");
+    selection = toggleAddonSelection(selection, "accounting");
+
+    expect(selection.slugs).toContain("accounting");
+    expect(selection.dismissed).not.toContain("accounting");
+  });
+
+  it("treats a ticked add-on as a choice, not the package's doing", () => {
+    let selection = through("business", "bundle");
+    expect(selection.auto).toContain("time");
+
+    // Untick then re-tick: now it is the person's, and survives a refill.
+    selection = toggleAddonSelection(selection, "time");
+    selection = toggleAddonSelection(selection, "time");
+    expect(selection.auto).not.toContain("time");
+
+    selection = refillAddonSelection(selection, "business", ADDONS);
+    expect(selection.slugs).toContain("time");
+  });
+
+  it("is stable when the same package is refilled — an interval switch re-runs it", () => {
+    const once = through("business", "bundle");
+    const again = refillAddonSelection(once, "bundle", ADDONS);
+
+    expect(again.slugs).toEqual(once.slugs);
+    expect(again.auto).toEqual(once.auto);
+  });
+
+  it("does not mutate the selection it is given", () => {
+    const before = through("business", "advanced");
+    const snapshot = JSON.stringify(before);
+
+    refillAddonSelection(before, "bundle", ADDONS);
+    toggleAddonSelection(before, "accounting");
+
+    expect(JSON.stringify(before)).toBe(snapshot);
+  });
+});
+
+describe("planDisplayName", () => {
+  it("drops the billing cycle the catalogue appends", () => {
+    expect(planDisplayName("Compliance Bundle (Monthly)")).toBe("Compliance Bundle");
+    expect(planDisplayName("Accounting Add-on (Annual)")).toBe("Accounting Add-on");
+    expect(planDisplayName("Advanced (yearly)")).toBe("Advanced");
+  });
+
+  it("leaves a name with no cycle alone, including the free plan", () => {
+    expect(planDisplayName("Free")).toBe("Free");
+    expect(planDisplayName("Invoice and Expense")).toBe("Invoice and Expense");
+  });
+
+  it("only strips a trailing cycle, not parentheses that belong to the name", () => {
+    expect(planDisplayName("Payroll (per seat) (Monthly)")).toBe("Payroll (per seat)");
+    expect(planDisplayName("Monthly (Pro) Plan")).toBe("Monthly (Pro) Plan");
+  });
+});
+
+describe("addonDisplayName", () => {
+  it("drops both the cycle and the word Add-on", () => {
+    expect(addonDisplayName("Time Tracker Add-on (Monthly)")).toBe("Time Tracker");
+    expect(addonDisplayName("Accounting Add-on (Annual)")).toBe("Accounting");
+  });
+
+  it("leaves a name that never carried them alone", () => {
+    expect(addonDisplayName("Investment Module")).toBe("Investment Module");
+    expect(addonDisplayName("Add-on Pack")).toBe("Add-on Pack");
   });
 });

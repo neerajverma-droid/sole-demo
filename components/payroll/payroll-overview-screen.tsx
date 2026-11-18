@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Banknote,
   Calculator,
@@ -69,6 +70,18 @@ export function PayrollOverviewScreen() {
   const [connectOpen, setConnectOpen] = React.useState(false);
   const [addSeatsOpen, setAddSeatsOpen] = React.useState(false);
 
+  // `?connect=1` opens the Microkeeper dialog — the onboarding tour links here.
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const connectParam = searchParams?.get("connect");
+  React.useEffect(() => {
+    if (!connectParam) return;
+    setConnectOpen(true);
+    // Drop the param, so a refresh doesn't reopen what was closed.
+    router.replace(pathname ?? "/payroll");
+  }, [connectParam, pathname, router]);
+
   const overview = overviewQuery.data;
   const seats = seatsQuery.data;
   const connected = overview?.connection.connected ?? false;
@@ -101,7 +114,11 @@ export function PayrollOverviewScreen() {
           Refresh
         </Button>
         {overview && (
-          <Button variant={connected ? "outline" : "default"} onClick={() => setConnectOpen(true)}>
+          <Button
+            variant={connected ? "outline" : "default"}
+            onClick={() => setConnectOpen(true)}
+            data-usertour="payroll-connect-button"
+          >
             <PlugZap />
             {connected ? "Manage Microkeeper" : "Connect Microkeeper"}
           </Button>
@@ -252,13 +269,13 @@ function WorkforceCard({ overview }: { overview: PayrollOverview }) {
 
   return (
     <Card className="flex h-full flex-col">
-      <CardHeader className="flex-row items-center justify-between space-y-0 pb-4">
+      <CardHeader className="flex-row items-center justify-between space-y-0">
         <CardTitle className="text-base">Workforce</CardTitle>
         <Button variant="ghost" size="sm" asChild>
           <Link href={`${PAYROLL_ROOT}/employees`}>View employees</Link>
         </Button>
       </CardHeader>
-      <CardContent className="flex-1 space-y-3 pb-5">
+      <CardContent className="flex-1 space-y-3">
         {rows.map((row) => (
           <div key={row.label} className="space-y-1.5">
             <div className="flex items-center justify-between text-sm">
@@ -299,8 +316,12 @@ function ConnectionCard({
   const { connection } = overview;
 
   return (
-    <Card className="flex h-full flex-col" data-usertour="payroll-overview-microkeeper">
-      <CardHeader className="flex-row items-center justify-between space-y-0 pb-4">
+    <Card
+      className="flex h-full flex-col"
+      data-usertour="payroll-overview-microkeeper"
+      data-connected={connection.connected ? "true" : "false"}
+    >
+      <CardHeader className="flex-row items-center justify-between space-y-0">
         <CardTitle className="text-base">Microkeeper</CardTitle>
         <Badge
           variant={
@@ -318,7 +339,7 @@ function ConnectionCard({
               : "Connected"}
         </Badge>
       </CardHeader>
-      <CardContent className="flex-1 pb-5">
+      <CardContent className="flex-1">
         {connection.connected ? (
           <div className="space-y-3">
             <dl className="divide-y rounded-md border border-border text-sm">
@@ -370,7 +391,7 @@ function SeatsCard({
 
   return (
     <Card data-usertour="payroll-overview-seats">
-      <CardHeader className="flex-row flex-wrap items-center justify-between gap-3 space-y-0 pb-4">
+      <CardHeader className="flex-row flex-wrap items-center justify-between gap-3 space-y-0">
         <div className="flex items-center gap-2">
           <CardTitle className="text-base">Employee seats</CardTitle>
           <Badge variant={payrollStatusVariant(seats.status)}>
@@ -391,7 +412,7 @@ function SeatsCard({
           </Button>
         </div>
       </CardHeader>
-      <CardContent className="pb-5">
+      <CardContent>
         <dl className="grid gap-4 sm:grid-cols-3">
           <div className="space-y-2 rounded-md border border-border p-3">
             <dt className="text-xs text-muted-foreground">Seats in use</dt>
@@ -478,7 +499,7 @@ function LatestPayrunCard({
 
   return (
     <Card data-usertour="payroll-overview-latest-payrun">
-      <CardHeader className="flex-row flex-wrap items-center justify-between gap-3 space-y-0 pb-4">
+      <CardHeader className="flex-row flex-wrap items-center justify-between gap-3 space-y-0">
         <div className="min-w-0 space-y-1">
           <div className="flex items-center gap-2">
             <CardTitle className="text-base">Latest pay run</CardTitle>
@@ -499,7 +520,7 @@ function LatestPayrunCard({
           </Button>
         </div>
       </CardHeader>
-      <CardContent className="pb-5">
+      <CardContent>
         <dl className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <Tile icon={Calculator} label="Period" value={payPeriodLabel(run.period)} />
           <Tile icon={Banknote} label="Payment date" value={payrollDate(run.paymentDate)} />

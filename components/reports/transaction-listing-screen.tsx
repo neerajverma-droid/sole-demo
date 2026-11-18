@@ -145,7 +145,7 @@ export function TransactionListingScreen() {
           onRangeChange={setRange}
         />
 
-        <Button onClick={() => setSendOpen(true)}>
+        <Button onClick={() => setSendOpen(true)} data-usertour="report-send">
           <Send />
           Send report
         </Button>
@@ -179,7 +179,6 @@ export function TransactionListingScreen() {
         <ReportCustomRange
           from={range?.from ?? ""}
           to={range?.to ?? ""}
-          label={rangeLabel}
           onChange={setRange}
         />
       )}

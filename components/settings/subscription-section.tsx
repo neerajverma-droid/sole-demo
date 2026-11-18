@@ -37,6 +37,9 @@ import {
 } from "@/components/settings/payroll-seats-picker";
 import { SectionCard } from "@/components/settings/section-card";
 import { apiErrorMessage } from "@/lib/api-error";
+import { planSelectionProps, track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
+import { activeBaseCurrency } from "@/lib/country-context";
 import { PLAN_FEATURES } from "@/lib/settings";
 import {
   CANCELLATION_OTHER,
@@ -64,13 +67,31 @@ import {
   type SubscriptionPlan,
 } from "@/lib/subscription";
 import { AddonRow } from "@/components/pricing/addon-row";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { cn } from "@/lib/utils";
 import { useCheckoutReturn } from "@/hooks/use-checkout-return";
 import { usePayrollSeatsQuery } from "@/hooks/use-payroll-query";
 import { useSubscriptionQuery } from "@/hooks/use-subscription-query";
+import { useBusinessesStore } from "@/stores/businesses";
 import { useSubscriptionStore } from "@/stores/subscription";
+
+const PAYROLL_PENDING_KEY = "sole-analytics-payroll-pending";
+
+function rememberPayrollPending(seats: number | null): void {
+  try {
+    if (seats == null) window.sessionStorage.removeItem(PAYROLL_PENDING_KEY);
+    else window.sessionStorage.setItem(PAYROLL_PENDING_KEY, String(seats));
+  } catch {}
+}
+
+function takePayrollPending(): number | null {
+  try {
+    const value = window.sessionStorage.getItem(PAYROLL_PENDING_KEY);
+    window.sessionStorage.removeItem(PAYROLL_PENDING_KEY);
+    return value == null ? null : Number(value);
+  } catch {
+    return null;
+  }
+}
 
 /** Below this the trial reads as urgent, matching the banner. */
 const URGENT_DAYS = 7;
@@ -98,6 +119,7 @@ export function SubscriptionSection() {
   const subscriptionQuery = useSubscriptionQuery();
   const subscription = useSubscriptionStore((state) => state.subscription);
   const queryClient = useQueryClient();
+  const activeBusinessId = useBusinessesStore((state) => state.activeId);
 
   const [tab, setTab] = React.useState("overview");
   const [interval, setInterval] = React.useState<BillingInterval>("monthly");
@@ -441,15 +463,14 @@ export function SubscriptionSection() {
       return isSubscriptionActivated(fresh, result.planSlug);
     },
     {
-      onConfirmed: (result) => {
-        // The conversion `upgrade_intent` was the intent for — the one moment
-        // this app can say money actually changed hands.
-        track(EVENTS.PLAN_UPGRADED, {
-          plan: result.planSlug ?? lastSeen.current?.planSlug ?? "",
-          billing: result.billing ?? undefined,
-          amount: lastSeen.current?.planPrice ?? 0,
-          via: "checkout",
-        });
+      onConfirmed: () => {
+        const payrollSeats = takePayrollPending();
+        if (payrollSeats != null) {
+          track(EVENTS.PAYROLL_ENABLED, {
+            seats: payrollSeats,
+            business_id: activeBusinessId || null,
+          });
+        }
         void refreshSubscription();
       },
     },
@@ -470,6 +491,24 @@ export function SubscriptionSection() {
     checkout.dismiss();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [checkout.phase]);
+
+  const enablesPayroll = payrollChoice.enabled && !currentPayroll.enabled;
+
+  const reportPlanSelected = () => {
+    if (!selected) return;
+    track(
+      EVENTS.SUBSCRIPTION_PLAN_SELECTED,
+      planSelectionProps({
+        planName: selected.name,
+        interval,
+        addons: chosenAddons,
+        paidAmount: interval === "annual" ? selectionTotal * 12 : selectionTotal,
+        currency: activeBaseCurrency(),
+        businessId: activeBusinessId || null,
+        isOnboarding: false,
+      }),
+    );
+  };
 
   const onSubscribe = () =>
     run("subscribe", async () => {
@@ -496,22 +535,10 @@ export function SubscriptionSection() {
         payroll: payrollSelection,
       });
 
-      /*
-       * Intent, not conversion. Checkout is Stripe-hosted, so this app never
-       * sees the moment money changes hands — the honest event is "pressed
-       * subscribe and was handed over", and the drop between this and an
-       * actual paid subscription is itself the number worth watching.
-       *
-       * Fired before the navigation rather than after: the line below throws
-       * the page away, and an event queued after it may never be sent.
-       */
-      track(EVENTS.UPGRADE_INTENT, {
-        plan: selected.slug,
-        billing: interval,
-        amount: selected.price,
-        has_coupon: Boolean(coupon),
-      });
-
+      reportPlanSelected();
+      rememberPayrollPending(
+        enablesPayroll && payrollSelection ? payrollSelection.seats : null,
+      );
       // Stripe-hosted, so this leaves the app rather than opening a dialog.
       window.location.href = url;
     });
@@ -527,22 +554,13 @@ export function SubscriptionSection() {
         payroll: payrollSelection,
       });
 
-      /*
-       * The one place a plan change actually completes inside the app — no
-       * checkout round trip, so unlike `upgrade_intent` this really is the
-       * conversion.
-       *
-       * `trackSubscription` in the old project was the only thing that would
-       * have emitted this, and it was written, exported and never called
-       * once. It is the reason `lib/analytics-coverage.test.ts` exists.
-       */
-      track(EVENTS.PLAN_UPGRADED, {
-        plan: selected.slug,
-        billing: interval,
-        amount: selected.price,
-        has_coupon: Boolean(couponCode),
-      });
-
+      reportPlanSelected();
+      if (enablesPayroll && payrollSelection) {
+        track(EVENTS.PAYROLL_ENABLED, {
+          seats: payrollSelection.seats,
+          business_id: activeBusinessId || null,
+        });
+      }
       await refreshSubscription();
       toast.success(message || "Plan updated");
     });
@@ -568,7 +586,10 @@ export function SubscriptionSection() {
         The one place the plan state is stated: badge, plan, price and trial
         all live here, so nothing below repeats them.
       */}
-      <div className="space-y-5 rounded-lg border border-hero-border bg-hero p-[15px] text-hero-foreground">
+      <div
+        className="space-y-5 rounded-lg border border-hero-border bg-hero p-[15px] text-hero-foreground"
+        data-usertour="settings-plan-card"
+      >
         <div className="flex flex-wrap items-start justify-between gap-[15px]">
           <div className="space-y-2">
             <div className="flex flex-wrap gap-2">
@@ -713,7 +734,7 @@ export function SubscriptionSection() {
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList>
+        <TabsList data-usertour="settings-plan-tabs">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="change">Change plan</TabsTrigger>
           <TabsTrigger value="billing">Billing history</TabsTrigger>
@@ -764,6 +785,7 @@ export function SubscriptionSection() {
           ) : (
             <>
               <ToggleGroup
+                data-usertour="settings-plan-interval"
                 type="single"
                 value={interval}
                 onValueChange={(value) =>
@@ -783,7 +805,7 @@ export function SubscriptionSection() {
                   No plans came back from the server. Try again in a moment.
                 </p>
               ) : (
-                <ul className="space-y-2">
+                <ul className="space-y-2" data-usertour="settings-plan-list">
                   {plans.map((plan) => (
                     <li key={plan.slug}>
                       <PlanRow
@@ -919,6 +941,7 @@ export function SubscriptionSection() {
               )}
 
               <Button
+                data-usertour="settings-plan-action"
                 disabled={
                   busy !== null ||
                   !selected ||

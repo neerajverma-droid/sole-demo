@@ -50,18 +50,18 @@ describe("buildSmokeEvents", () => {
 
   it("sends required amounts as numbers, not strings", () => {
     const sent = buildSmokeEvents("run1", NOW);
-    const paid = sent.find((e) => e.event === EVENTS.INVOICE_PAID);
+    const created = sent.find((e) => e.event === EVENTS.INVOICE_CREATED);
 
     /*
      * The case worth proving. A string amount is accepted by Mixpanel, shows
      * up in the event feed looking perfectly normal, and sums to zero on
      * every chart built over it.
      */
-    expect(typeof paid?.properties.amount).toBe("number");
-    expect(typeof paid?.properties.days_to_payment).toBe("number");
+    expect(typeof created?.properties.amount).toBe("number");
+    expect(typeof created?.properties.invoice_id).toBe("string");
 
-    const report = sent.find((e) => e.event === EVENTS.REPORT_EXPORTED);
-    expect(typeof report?.properties.report).toBe("string");
+    const sentEvt = sent.find((e) => e.event === EVENTS.INVOICE_SENT);
+    expect(typeof sentEvt?.properties.amount).toBe("number");
   });
 
   it("tags everything so a run can never read as customer activity", () => {
@@ -107,25 +107,25 @@ describe("compareArrivals", () => {
     const sent = buildSmokeEvents("run1", NOW);
     const arrived = arrivedFrom(sent).filter(
       (row) =>
-        row.event !== EVENTS.PAYWALL_HIT && row.event !== EVENTS.INVOICE_SENT,
+        row.event !== EVENTS.QUOTE_SENT && row.event !== EVENTS.INVOICE_SENT,
     );
 
     const verdict = compareArrivals(sent, arrived);
 
     expect(passed(verdict)).toBe(false);
     expect(verdict.missing.sort()).toEqual(
-      [EVENTS.INVOICE_SENT, EVENTS.PAYWALL_HIT].sort(),
+      [EVENTS.INVOICE_SENT, EVENTS.QUOTE_SENT].sort(),
     );
     // Named, not counted — "2 events missing" sends somebody to the Mixpanel
     // UI to find out something this already knows.
-    expect(describeVerdict(verdict)).toContain(EVENTS.PAYWALL_HIT);
+    expect(describeVerdict(verdict)).toContain(EVENTS.QUOTE_SENT);
   });
 
   it("catches an event that arrived stripped of a required property", () => {
     const sent = buildSmokeEvents("run1", NOW);
     const arrived = arrivedFrom(sent).map((row) =>
-      row.event === EVENTS.INVOICE_PAID
-        ? { ...row, properties: { ...row.properties, days_to_payment: undefined } }
+      row.event === EVENTS.INVOICE_CREATED
+        ? { ...row, properties: { ...row.properties, amount: undefined } }
         : row,
     );
 
@@ -133,14 +133,14 @@ describe("compareArrivals", () => {
 
     expect(passed(verdict)).toBe(false);
     expect(verdict.incomplete).toEqual([
-      { event: EVENTS.INVOICE_PAID, missing: ["days_to_payment"] },
+      { event: EVENTS.INVOICE_CREATED, missing: ["amount"] },
     ]);
   });
 
   it("catches a number that came back as a string", () => {
     const sent = buildSmokeEvents("run1", NOW);
     const arrived = arrivedFrom(sent).map((row) =>
-      row.event === EVENTS.EXPENSE_LOGGED
+      row.event === EVENTS.INVOICE_CREATED
         ? { ...row, properties: { ...row.properties, amount: "42.5" } }
         : row,
     );
@@ -154,7 +154,7 @@ describe("compareArrivals", () => {
      */
     expect(passed(verdict)).toBe(false);
     expect(verdict.wrongType).toEqual([
-      { event: EVENTS.EXPENSE_LOGGED, prop: "amount", got: "string" },
+      { event: EVENTS.INVOICE_CREATED, prop: "amount", got: "string" },
     ]);
     expect(describeVerdict(verdict)).toContain("will read zero");
   });

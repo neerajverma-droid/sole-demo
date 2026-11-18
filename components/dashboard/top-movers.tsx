@@ -37,6 +37,7 @@ export function TopIncomeCard() {
       emptyCopy="No income recorded yet."
       emptyAction={{ label: "Create invoice", href: "/invoices/new" }}
       loading={isLoading}
+      tourId="dashboard-top-income"
     />
   );
 }
@@ -57,6 +58,7 @@ export function TopExpensesCard() {
       emptyCopy="No expenses recorded yet."
       emptyAction={{ label: "Add expense", href: "/expenses?new=1" }}
       loading={isLoading}
+      tourId="dashboard-top-expenses"
     />
   );
 }
@@ -75,6 +77,7 @@ function TopMoversCard({
   emptyCopy,
   emptyAction,
   loading,
+  tourId,
 }: {
   title: string;
   viewAllLabel: string;
@@ -86,14 +89,16 @@ function TopMoversCard({
   emptyCopy: string;
   emptyAction: { label: string; href: string };
   loading?: boolean;
+  /** What the dashboard tour calls this card. */
+  tourId?: string;
 }) {
   const data = rows;
   // The leader carries the accent at full strength; the rest recede.
   const largest = Math.max(...data.map((row) => row.amount), 0);
 
   return (
-    <Card>
-      <CardHeader className="flex-row items-center justify-between space-y-0 pb-4">
+    <Card data-usertour={tourId}>
+      <CardHeader className="flex-row items-center justify-between space-y-0">
         <CardTitle className="text-base">{title}</CardTitle>
         <Button variant="ghost" size="sm" asChild>
           <Link href={viewAllHref}>

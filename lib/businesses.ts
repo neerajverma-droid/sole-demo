@@ -12,8 +12,6 @@ import { format, parseISO } from "date-fns";
 
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { contactInitials } from "@/lib/contacts";
 import {
   FALLBACK_COUNTRY_CONTEXT,
@@ -758,17 +756,6 @@ export async function createBusinessApi(
   if (!response.data?.success || !response.data.data) {
     throw new Error(response.data?.message || "Failed to create business");
   }
-  /*
-   * Multi-business is new in this UI — the old app tracked only a switch, so
-   * there is no precedent for how many people run more than one. `abn_present`
-   * as a boolean and never the number: an ABN identifies an Australian
-   * business outright and does not belong in a third-party analytics tool.
-   */
-  track(EVENTS.BUSINESS_CREATED, {
-    industry_id: industryId,
-    abn_present: Boolean(draft.abn),
-    has_logo: Boolean(logo),
-  });
   return response.data.data;
 }
 

@@ -7,9 +7,8 @@ import { useQuery } from "@tanstack/react-query";
 import {
   ArrowLeft,
   Check,
-  ChevronRight,
   Download,
-  FileText,
+  Loader2,
   Pencil,
   Plus,
   Trash2,
@@ -21,9 +20,6 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { FilterPills } from "@/components/ui/filter-pills";
 import { Input } from "@/components/ui/input";
@@ -51,33 +47,23 @@ import { DeleteRuleDialog } from "@/components/rules/delete-rule-dialog";
 import { RuleFormDialog } from "@/components/rules/rule-form-dialog";
 import { RulesTable } from "@/components/rules/rules-table";
 import { useRulesQuery } from "@/hooks/use-rules-query";
-import { useRulesStore } from "@/stores/rules";
 import {
   TXN_AI_TARGET,
-  TXN_CSV_COLUMNS,
-  TXN_FIELD_OPTIONS,
   TXN_REVIEW_TABS,
-  TXN_SAMPLE_ROWS,
   autoMapTxnColumns,
   buildTxnRows,
   canonicalTxnType,
-  duplicateTxnMappings,
   filterReviewRows,
-  groupTxnIssues,
   importAmount,
   parseImportDate,
   txnErrorRowsCsv,
-  txnTemplateCsv,
+  txnFieldErrors,
   withTxnIssues,
   type ParsedTxnRow,
   type ParsedTxnValues,
   type TxnReviewTab,
 } from "@/lib/transaction-import";
-import {
-  IMPORT_FILE_ACCEPT,
-  downloadCsv,
-  type ParsedSheet,
-} from "@/lib/file-parser";
+import { IMPORT_FILE_ACCEPT } from "@/lib/file-parser";
 import {
   useUploadBulkTransactions,
   useValidateBulkTransactions,
@@ -101,16 +87,22 @@ import type {
 } from "@/lib/bulk-transactions";
 import { apiErrorMessage } from "@/lib/api-error";
 import {
+  PINNED_ACTIONS_CELL,
+  PINNED_ACTIONS_CELL_EDITING,
+  PINNED_ACTIONS_HEAD,
   WizardSectionHeading,
   WizardStepper,
   formatBytes,
 } from "@/components/bulk/wizard-parts";
 import { cn } from "@/lib/utils";
 import { useMigrationsStore } from "@/stores/migrations";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
+import { MIGRATIONS_MODULE } from "@/lib/analytics-modules";
+import { useTrackOnce } from "@/hooks/use-track-once";
 
 const STEPS = [
   "Import",
-  "Map data",
   "Review",
   "Matching rules",
   "Sole fields",
@@ -118,8 +110,7 @@ const STEPS = [
 ] as const;
 
 const CONTINUE_LABELS = [
-  "Format & continue",
-  "Continue to review",
+  "",
   "Continue to rules",
   "Continue to Sole fields",
   "Import transactions",
@@ -148,10 +139,6 @@ const BULK_EXCLUDED_ACCOUNTS = [
   "client refund",
 ];
 
-/** Every template column is one the import can't go without. */
-const isRequiredTxnField = (field: string) =>
-  (TXN_CSV_COLUMNS as readonly string[]).includes(field);
-
 const FIELD_DOCS = [
   { name: "Transaction type", desc: "Credit or Debit" },
   {
@@ -165,9 +152,24 @@ const FIELD_DOCS = [
   },
 ];
 
-export function BulkUploadWizard() {
+export function BulkUploadWizard({
+  from,
+}: {
+  /** Where it was opened from, when that isn't Transactions. */
+  from?: "migrations";
+} = {}) {
   const router = useRouter();
+  // Back, Cancel and Done all return to where this was opened from, named so.
+  const exit =
+    from === "migrations"
+      ? { href: "/migrations", label: "Data Migration Center" }
+      : { href: "/transactions", label: "Transactions" };
   const recordImport = useMigrationsStore((state) => state.recordImport);
+  const moduleContext = {
+    module_name: from === "migrations" ? MIGRATIONS_MODULE : "Transactions",
+    sub_module_name: "Transactions",
+  };
+  useTrackOnce(EVENTS.BULK_UPLOAD_INITIATED, true, moduleContext);
   const validateRows = useValidateBulkTransactions();
   const uploadRows = useUploadBulkTransactions();
 
@@ -191,12 +193,8 @@ export function BulkUploadWizard() {
    * AI call on each.
    */
   const [file, setFile] = React.useState<File | null>(null);
-  /** The workbook as read — kept so the Map step can re-derive rows. */
-  const [sheet, setSheet] = React.useState<ParsedSheet | null>(null);
   const [rows, setRows] = React.useState<ParsedTxnRow[]>([]);
   const [parseError, setParseError] = React.useState<string | null>(null);
-  /** File column index to Sole field, seeded by `autoMapTxnColumns`. */
-  const [mapping, setMapping] = React.useState<Record<number, string>>({});
   /** The validate response — what the Sole Fields step edits. */
   const [soleRows, setSoleRows] = React.useState<ValidatedTransactionRow[]>([]);
   const [result, setResult] = React.useState<BulkUploadResult | null>(null);
@@ -206,24 +204,21 @@ export function BulkUploadWizard() {
 
   const fileReader = useImportFileReader(TXN_AI_TARGET);
 
-  /** Holds the chosen file until Continue; a new pick drops the old read. */
-  const pickFile = (selected: File) => {
+  /**
+   * Picking a file is the whole Import step: once it passes the type and size
+   * check, Claude reformats it into the template's columns (see
+   * `lib/ai-format.ts`), falling back to a plain parse if that fails, and the
+   * wizard goes straight to Review. Columns are matched by name — Review's
+   * inline edit is where a wrong guess gets fixed.
+   */
+  const pickFile = async (selected: File) => {
     fileReader.cancel();
-    setSheet(null);
     setRows([]);
-    setMapping({});
     const invalid = importFileError(selected);
     setFile(invalid ? null : selected);
     setParseError(invalid);
-  };
-
-  /**
-   * Continue on the Import step — Claude reformats the file into the
-   * template's columns (see `lib/ai-format.ts`), falling back to a plain parse
-   * if that fails, then goes straight to Map.
-   */
-  const formatFile = async (selected: File) => {
-    setParseError(null);
+    if (invalid) return;
+    track(EVENTS.FILE_UPLOADED, moduleContext);
 
     const result = await fileReader.read(selected);
     if (!result) return;
@@ -232,13 +227,15 @@ export function BulkUploadWizard() {
       return;
     }
 
-    // Rows are built straight away so the Import step can report a count,
-    // then rebuilt on the way out of the Map step if the mapping changed.
     const { columns, rows: sheetRows } = result.sheet;
-    const guessed = autoMapTxnColumns(columns);
-    setSheet(result.sheet);
-    setMapping(guessed);
-    setRows(buildTxnRows(columns, sheetRows, guessed));
+    setRows(buildTxnRows(columns, sheetRows, autoMapTxnColumns(columns)));
+    // Columns are matched automatically, so mapping and arriving at Review
+    // happen together — the same pair the generic bulk dialog sends.
+    track(EVENTS.DATA_MAPPED, {
+      section_name: moduleContext.module_name,
+      sub_module_name: moduleContext.sub_module_name,
+    });
+    track(EVENTS.DATA_REVIEW_INITIATED, moduleContext);
     setStep(1);
   };
 
@@ -262,21 +259,18 @@ export function BulkUploadWizard() {
     fileReader.cancel();
     setStep(0);
     setFile(null);
-    setSheet(null);
     setRows([]);
     setParseError(null);
-    setMapping({});
     // Cleared too: the validated rows belong to the file being replaced, and
     // leaving them would carry one file's account matches onto another's.
     setSoleRows([]);
     setResult(null);
   };
 
-  const nothingToImport = step === 2 && cleanRows.length === 0;
+  const nothingToImport = step === 1 && cleanRows.length === 0;
   const busy =
     fileReader.formatting || validateRows.isPending || uploadRows.isPending;
-  const continueDisabled =
-    (step === 0 && !file) || (step === 2 && cleanRows.length === 0) || busy;
+  const continueDisabled = (step === 1 && cleanRows.length === 0) || busy;
 
   /** Accounts a row of this direction can book to, matching sole-webapp. */
   const accountsFor = React.useCallback(
@@ -319,35 +313,17 @@ export function BulkUploadWizard() {
 
   const onContinue = async () => {
     if (continueDisabled || nothingToImport) return;
-    if (step === 5) {
-      router.push("/transactions");
+    if (step === 4) {
+      router.push(exit.href);
       return;
     }
 
-    if (step === 0 && file) {
-      if (sheet) setStep(1);
-      else await formatFile(file);
-      return;
-    }
-
-    if (step === 1 && sheet) {
-      // Two columns on the same Sole field is the one mapping the backend
-      // can't resolve for us — it would take whichever it saw last.
-      const duplicates = duplicateTxnMappings(mapping);
-      if (duplicates.length > 0) {
-        toast.error(
-          `${duplicates.join(" and ")} ${duplicates.length === 1 ? "is" : "are"} mapped to more than one column.`,
-        );
-        return;
-      }
-      setRows(buildTxnRows(sheet.columns, sheet.rows, mapping));
-      setStep(2);
-      return;
-    }
+    if (step === 0) return;
 
     // Leaving the Matching rules step runs `validate`, which is what applies
     // those rules — the Sole Fields step then opens showing their work.
-    if (step === 3) {
+    if (step === 2) {
+      track(EVENTS.CONTINUE_TO_SOLE_FIELDS_CLICKED, moduleContext);
       try {
         const validated = await validateRows.mutateAsync(
           cleanRows.map((row) => ({
@@ -360,14 +336,14 @@ export function BulkUploadWizard() {
           })),
         );
         setSoleRows(validated);
-        setStep(4);
+        setStep(3);
       } catch (error) {
         toast.error(apiErrorMessage(error, "Could not check those rows."));
       }
       return;
     }
 
-    if (step === 4) {
+    if (step === 3) {
       // Checked here because the server is all-or-nothing and its refusal
       // names no row — one unfinished row would reject the whole file.
       const blocker = firstSoleFieldError(soleRows);
@@ -381,7 +357,11 @@ export function BulkUploadWizard() {
         setResult(outcome);
         // The Data Migration Center ticks its Bank Transactions step off this.
         recordImport("transactions", outcome.succeeded);
-        setStep(5);
+        track(EVENTS.DATA_IMPORTED, {
+          ...moduleContext,
+          count: outcome.succeeded,
+        });
+        setStep(4);
       } catch (error) {
         toast.error(apiErrorMessage(error, "Failed to import transactions."));
       }
@@ -395,9 +375,9 @@ export function BulkUploadWizard() {
     <div className="mx-auto max-w-5xl space-y-6">
       <div className="space-y-3">
         <Button variant="ghost" size="sm" asChild className="-ml-2">
-          <Link href="/transactions">
+          <Link href={exit.href}>
             <ArrowLeft />
-            Transactions
+            {exit.label}
           </Link>
         </Button>
         <div className="space-y-1">
@@ -417,27 +397,18 @@ export function BulkUploadWizard() {
         {step === 0 && (
           <ImportStep
             file={file}
-            rowCount={rows.length}
+            formatting={fileReader.formatting}
             parseError={parseError}
             onFile={pickFile}
             onRemove={() => {
               fileReader.cancel();
               setFile(null);
-              setSheet(null);
               setRows([]);
               setParseError(null);
             }}
           />
         )}
-        {step === 1 && sheet && (
-          <MapStep
-            columns={sheet.columns}
-            firstRow={sheet.rows[0]}
-            mapping={mapping}
-            onChange={setMapping}
-          />
-        )}
-        {step === 2 && (
+        {step === 1 && (
           <ReviewStep
             rows={rows}
             cleanCount={cleanRows.length}
@@ -446,8 +417,8 @@ export function BulkUploadWizard() {
             onRowDelete={deleteRow}
           />
         )}
-        {step === 3 && <RulesStep />}
-        {step === 4 && (
+        {step === 2 && <RulesStep />}
+        {step === 3 && (
           <SoleFieldsStep
             rows={soleRows}
             accountsFor={accountsFor}
@@ -456,20 +427,20 @@ export function BulkUploadWizard() {
             onChange={updateSoleRow}
           />
         )}
-        {step === 5 && <DoneStep result={result} />}
+        {step === 4 && <DoneStep result={result} />}
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-4">
         <Button variant="ghost" asChild>
-          <Link href="/transactions">{step === 5 ? "Close" : "Cancel"}</Link>
+          <Link href={exit.href}>{step === 4 ? "Close" : "Cancel"}</Link>
         </Button>
         <div className="flex flex-wrap items-center justify-end gap-2">
-          {step > 0 && step < 5 && (
+          {step > 1 && step < 4 && (
             <Button variant="outline" onClick={() => setStep(step - 1)}>
               Back
             </Button>
           )}
-          {step === 2 && (
+          {step === 1 && (
             <Button variant="outline" onClick={reset}>
               Choose a different file
             </Button>
@@ -480,18 +451,19 @@ export function BulkUploadWizard() {
               different file.
             </p>
           ) : (
-            <Button onClick={onContinue} disabled={continueDisabled}>
-              {fileReader.formatting
-                ? "Formatting with AI…"
-                : validateRows.isPending
+            step > 0 && (
+              <Button
+                onClick={onContinue}
+                disabled={continueDisabled}
+                data-usertour="txn-continue"
+              >
+                {validateRows.isPending
                   ? "Checking…"
                   : uploadRows.isPending
                     ? "Importing…"
-                    : step === 0 && sheet
-                      ? // Already formatted (they came Back) — just return to Map.
-                        "Continue to map data"
-                      : CONTINUE_LABELS[step]}
-            </Button>
+                    : CONTINUE_LABELS[step]}
+              </Button>
+            )
           )}
         </div>
       </div>
@@ -503,19 +475,22 @@ export function BulkUploadWizard() {
         module has to report.
       */}
       <BulkResultsDialog
-        open={step === 5 && result !== null}
-        onOpenChange={(next) => !next && router.push("/transactions")}
+        open={step === 4 && result !== null}
+        onOpenChange={(next) => !next && router.push(exit.href)}
         result={
           result && {
             created: result.succeeded,
             failed: result.failed,
-            skipped: issueRows.length,
+            // Never sent — rows still carrying errors, not ones the server
+            // already had, which is what "skipped" would say.
+            skipped: 0,
+            invalid: issueRows.length,
           }
         }
         fileName={file?.name}
         noun="transaction"
         nounPlural="transactions"
-        onDone={() => router.push("/transactions")}
+        onDone={() => router.push(exit.href)}
       />
     </div>
   );
@@ -523,13 +498,13 @@ export function BulkUploadWizard() {
 
 function ImportStep({
   file,
-  rowCount,
+  formatting,
   parseError,
   onFile,
   onRemove,
 }: {
   file: { name: string; size: number } | null;
-  rowCount: number;
+  formatting: boolean;
   parseError: string | null;
   onFile: (file: File) => void;
   onRemove: () => void;
@@ -539,137 +514,90 @@ function ImportStep({
 
   return (
     <div className="space-y-6">
-      <div
-        className="flex flex-wrap items-start justify-between gap-4"
-        data-usertour="txn-upload"
-      >
+      <div data-usertour="txn-upload">
         <WizardSectionHeading
           title="Upload your transactions"
-          description="A CSV export from your bank or accounting tool."
+          description="A CSV export from your bank or accounting tool. We'll read it as soon as you add it."
         />
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            // A real file with the real headers — the columns someone fills in
-            // here are the ones the Map step will recognise on the way back.
-            downloadCsv("transaction-import-template.csv", txnTemplateCsv());
-            toast.success("Template downloaded");
-          }}
-        >
-          <Download />
-          Download template
-        </Button>
       </div>
 
-      {file ? (
-        <div className="flex items-center gap-3 rounded-lg border border-border bg-card p-4 shadow-sm">
-          <FileText
-            className="size-4 shrink-0 text-muted-foreground"
-            aria-hidden
-          />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium">{file.name}</p>
-            <p className="text-xs text-muted-foreground tabular">
-              {formatBytes(file.size)}
-              {rowCount > 0 && ` · ${rowCount} rows found`}
-            </p>
-          </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-8"
-            onClick={onRemove}
-            aria-label="Remove file"
-          >
-            <X className="size-4" />
-          </Button>
-        </div>
-      ) : (
-        <div
-          onDragOver={(event) => {
-            event.preventDefault();
-            setDragging(true);
-          }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={(event) => {
-            event.preventDefault();
-            setDragging(false);
-            const dropped = event.dataTransfer.files?.[0];
-            if (dropped) onFile(dropped);
-          }}
-          className={cn(
-            "flex flex-col items-center gap-3 rounded-lg border-2 border-dashed bg-muted/30 px-6 py-10 text-center transition-colors",
-            dragging
-              ? "border-primary bg-primary/5"
-              : "border-border hover:border-primary/40",
-          )}
-        >
-          <span className="grid size-10 place-items-center rounded-full bg-primary/10 text-primary">
-            <Upload className="size-5" aria-hidden />
-          </span>
-          <div className="flex flex-wrap items-center justify-center gap-2">
-            <p className="text-sm text-muted-foreground">
-              Drop your file here, or
-            </p>
+      <div data-usertour="txn-dropzone">
+        {file && formatting ? (
+          <div className="flex items-center gap-3 rounded-lg border border-border bg-card p-4 shadow-sm">
+            <Loader2
+              className="size-4 shrink-0 animate-spin text-primary"
+              aria-hidden
+            />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium">{file.name}</p>
+              <p className="text-xs text-muted-foreground tabular">
+                {formatBytes(file.size)} · Formatting with AI…
+              </p>
+            </div>
             <Button
-              variant="outline"
-              size="sm"
-              onClick={() => inputRef.current?.click()}
+              variant="ghost"
+              size="icon"
+              className="size-8"
+              onClick={onRemove}
+              aria-label="Cancel upload"
             >
-              Choose file
+              <X className="size-4" />
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground">
-            CSV or Excel up to 5 MB
-          </p>
-          <input
-            ref={inputRef}
-            type="file"
-            accept={IMPORT_FILE_ACCEPT}
-            className="sr-only"
-            onChange={(event) => {
-              const selected = event.target.files?.[0];
-              if (selected) onFile(selected);
-              event.target.value = "";
+        ) : (
+          <div
+            onDragOver={(event) => {
+              event.preventDefault();
+              setDragging(true);
             }}
-          />
-        </div>
-      )}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(event) => {
+              event.preventDefault();
+              setDragging(false);
+              const dropped = event.dataTransfer.files?.[0];
+              if (dropped) onFile(dropped);
+            }}
+            className={cn(
+              "flex flex-col items-center gap-3 rounded-lg border-2 border-dashed bg-muted/30 px-6 py-10 text-center transition-colors",
+              dragging
+                ? "border-primary bg-primary/5"
+                : "border-border hover:border-primary/40",
+            )}
+          >
+            <span className="grid size-10 place-items-center rounded-full bg-primary/10 text-primary">
+              <Upload className="size-5" aria-hidden />
+            </span>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <p className="text-sm text-muted-foreground">
+                Drop your file here, or
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => inputRef.current?.click()}
+              >
+                Choose file
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              CSV or Excel up to 5 MB
+            </p>
+            <input
+              ref={inputRef}
+              type="file"
+              accept={IMPORT_FILE_ACCEPT}
+              className="sr-only"
+              onChange={(event) => {
+                const selected = event.target.files?.[0];
+                if (selected) onFile(selected);
+                event.target.value = "";
+              }}
+            />
+          </div>
+        )}
+      </div>
 
       {parseError && <p className="text-xs text-destructive">{parseError}</p>}
-
-      <div className="space-y-3">
-        <WizardSectionHeading title="Example of CSV structure" />
-        <div className="overflow-x-auto rounded-lg border border-border bg-card shadow-sm">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                {TXN_CSV_COLUMNS.map((column) => (
-                  <TableHead key={column} className="whitespace-nowrap">
-                    {column}
-                    <RequiredMark />
-                  </TableHead>
-                ))}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {TXN_SAMPLE_ROWS.map((row, index) => (
-                <TableRow key={index}>
-                  {row.map((cell, cellIndex) => (
-                    <TableCell
-                      key={cellIndex}
-                      className="whitespace-nowrap text-muted-foreground"
-                    >
-                      {cell}
-                    </TableCell>
-                  ))}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      </div>
 
       <div className="space-y-3">
         <WizardSectionHeading title="Mandatory fields" />
@@ -694,75 +622,16 @@ function ImportStep({
   );
 }
 
-/**
- * One row per column that's actually in the uploaded file.
- *
- * It used to list the template's four column names regardless of what was
- * uploaded, and the parser read cells by position — so a bank export with
- * its columns in any other order imported dates into the amount field
- * without ever saying so. The table is unchanged; what it lists is now the
- * file's own headers, and the choices made here are what the parser reads.
- */
-function MapStep({
-  columns,
-  firstRow,
-  mapping,
-  onChange,
-}: {
-  columns: string[];
-  firstRow: Record<string, string> | undefined;
-  mapping: Record<number, string>;
-  onChange: (next: Record<number, string>) => void;
-}) {
-  return (
-    <div className="space-y-4" data-usertour="txn-stage-map">
-      <WizardSectionHeading
-        title="Map your columns"
-        description="Match each column in your file to a Sole field."
-      />
-      <div className="rounded-lg border border-border bg-card shadow-sm">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Column in your file</TableHead>
-              <TableHead>Sample</TableHead>
-              <TableHead className="w-[220px]">Sole field</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {columns.map((column, index) => (
-              <TableRow key={`${column}-${index}`}>
-                <TableCell className="font-medium">{column}</TableCell>
-                <TableCell className="max-w-[220px] truncate text-muted-foreground">
-                  {firstRow?.[column] || "—"}
-                </TableCell>
-                <TableCell>
-                  <Select
-                    value={mapping[index] ?? "Don't import"}
-                    onValueChange={(value) =>
-                      onChange({ ...mapping, [index]: value })
-                    }
-                  >
-                    <SelectTrigger aria-label={`Sole field for ${column}`}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {TXN_FIELD_OPTIONS.map((option) => (
-                        <SelectItem key={option} value={option}>
-                          {option}
-                          {isRequiredTxnField(option) && <RequiredMark />}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
-    </div>
-  );
+const TXN_FIELDS = ["type", "amount", "date", "description"] as const;
+type TxnField = (typeof TXN_FIELDS)[number];
+
+const INVALID_CLASS = "border-destructive focus-visible:ring-destructive";
+
+/** The reason a cell in edit mode is wrong, under its control. */
+function EditError({ message }: { message?: string }) {
+  return message ? (
+    <p className="mt-1 text-xs text-destructive">{message}</p>
+  ) : null;
 }
 
 function ReviewStep({
@@ -781,9 +650,13 @@ function ReviewStep({
   const [tab, setTab] = React.useState<TxnReviewTab>("All rows");
   const [editing, setEditing] = React.useState<number | null>(null);
   const [draft, setDraft] = React.useState<ParsedTxnValues | null>(null);
+  /** The cell to put the cursor in once a row opens; `n` lets the same cell be asked for twice. */
+  const [focusRequest, setFocusRequest] = React.useState<{
+    field: TxnField;
+    n: number;
+  } | null>(null);
   const rowRefs = React.useRef<Record<number, HTMLTableRowElement | null>>({});
 
-  const groups = groupTxnIssues(rows);
   const visible = filterReviewRows(rows, tab);
 
   const counts: Partial<Record<TxnReviewTab, number>> = {
@@ -792,7 +665,22 @@ function ReviewStep({
     "Rows with issues": issueCount,
   };
 
-  const startEdit = (row: ParsedTxnRow) => {
+  const requestFocus = (field: TxnField) =>
+    setFocusRequest((current) => ({ field, n: (current?.n ?? 0) + 1 }));
+
+  React.useEffect(() => {
+    if (editing === null || !focusRequest) return;
+    // After the row has swapped its cells for editors.
+    const frame = requestAnimationFrame(() => {
+      rowRefs.current[editing]
+        ?.querySelector<HTMLElement>(`[data-txn-field="${focusRequest.field}"]`)
+        ?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [editing, focusRequest]);
+
+  /** Opens a row with the cursor on the cell clicked, else the first one in error. */
+  const startEdit = (row: ParsedTxnRow, focusField?: TxnField) => {
     setEditing(row.index);
     setDraft({
       type: canonicalTxnType(row.type),
@@ -800,6 +688,10 @@ function ReviewStep({
       date: row.date,
       description: row.description,
     });
+    const errors = txnFieldErrors(row);
+    requestFocus(
+      focusField ?? TXN_FIELDS.find((field) => errors[field]) ?? "type",
+    );
     requestAnimationFrame(() =>
       rowRefs.current[row.index]?.scrollIntoView({ block: "nearest" }),
     );
@@ -810,10 +702,57 @@ function ReviewStep({
     setDraft(null);
   };
 
+  /** What's wrong with the row as it stands in the editors, live as they type. */
+  const draftErrors = draft ? txnFieldErrors(draft) : {};
+
+  /** A row that's still wrong would only go back on the error list, so it stays open on the first cell to fix. */
   const saveEdit = () => {
     if (editing === null || !draft) return;
+    const blocking = TXN_FIELDS.find((field) => draftErrors[field]);
+    if (blocking) {
+      requestFocus(blocking);
+      return;
+    }
     onRowChange(editing, draft);
     cancelEdit();
+  };
+
+  /** Enter saves, Escape cancels, from a text box. */
+  const submitKeys = (event: React.KeyboardEvent) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      saveEdit();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      cancelEdit();
+    }
+  };
+
+  /**
+   * A read-only cell. One that's wrong says why, in red under its value, and is
+   * itself the way in: click it and the row opens with the cursor there.
+   */
+  const renderCell = (
+    row: ParsedTxnRow,
+    errors: Partial<Record<TxnField, string>>,
+    field: TxnField,
+    text: string,
+  ) => {
+    const error = errors[field];
+    if (!error) return text || "—";
+    return (
+      <button
+        type="button"
+        onClick={() => startEdit(row, field)}
+        aria-label={`Fix ${field}, row ${row.index + 1}: ${error}`}
+        className="block w-full cursor-pointer rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <span className="block truncate">{text || "—"}</span>
+        <span className="mt-0.5 block text-xs font-normal text-destructive">
+          {error}
+        </span>
+      </button>
+    );
   };
 
   const patch = (values: Partial<ParsedTxnValues>) =>
@@ -847,66 +786,39 @@ function ReviewStep({
         counts={counts}
       />
 
-      {groups.length > 0 && (
-        <div className="space-y-3 rounded-lg border border-warning/40 bg-warning/5 p-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
+      {issueCount > 0 && (
+        <div className="rounded-lg border border-warning/40 bg-warning/5 px-3 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="space-y-0.5">
               <p className="text-sm font-medium tabular">
                 {issueCount} {issueCount === 1 ? "row needs" : "rows need"}{" "}
                 attention
               </p>
               <p className="text-xs text-muted-foreground">
-                Fix them inline below, or download them to fix in a spreadsheet
-                and re-upload.
+                Rows with errors will be skipped if you import.
               </p>
             </div>
-            <Button variant="outline" size="sm" onClick={downloadErrors}>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={downloadErrors}
+            >
               <Download />
               Download rows with errors
             </Button>
           </div>
-
-          <ul className="space-y-0.5">
-            {groups.map((group) => (
-              <li key={group.message}>
-                <Collapsible>
-                  <CollapsibleTrigger className="group flex w-full items-center gap-1.5 rounded px-1 py-1 text-left text-sm hover:bg-warning/10">
-                    <ChevronRight
-                      className="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90"
-                      aria-hidden
-                    />
-                    <span className="tabular">{group.headline}</span>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent className="space-y-1 py-1 pl-6">
-                    {group.rows.map((row) => (
-                      <div
-                        key={row.index}
-                        className="flex items-center justify-between gap-3 text-xs"
-                      >
-                        <span className="truncate text-muted-foreground">
-                          Row {row.index + 1}
-                          {row.description ? ` — ${row.description}` : ""}
-                        </span>
-                        <Button
-                          variant="link"
-                          size="sm"
-                          className="h-auto shrink-0 p-0 text-xs"
-                          onClick={() => startEdit(row)}
-                        >
-                          Edit
-                        </Button>
-                      </div>
-                    ))}
-                  </CollapsibleContent>
-                </Collapsible>
-              </li>
-            ))}
-          </ul>
         </div>
       )}
 
-      <div className="max-h-96 overflow-auto rounded-lg border border-border bg-card shadow-sm">
-        <Table className="min-w-[820px]">
+      <div
+        className="overflow-hidden rounded-lg border border-border bg-card shadow-sm"
+        data-usertour="txn-review-table"
+      >
+        <Table
+          containerClassName="scrollbar-visible max-h-96"
+          className="min-w-[820px]"
+        >
           <TableHeader>
             <TableRow>
               <TableHead className="w-10">#</TableHead>
@@ -915,7 +827,11 @@ function ReviewStep({
               <TableHead className="w-[140px]">Date</TableHead>
               <TableHead>Description</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead className="w-[150px] text-right">Actions</TableHead>
+              <TableHead
+                className={cn("w-[150px] text-right", PINNED_ACTIONS_HEAD)}
+              >
+                Actions
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -931,13 +847,16 @@ function ReviewStep({
             ) : (
               visible.map((row) => {
                 const isEditing = editing === row.index && draft !== null;
+                // Only rows with problems pay for the check.
+                const fieldErrors =
+                  row.issues.length > 0 ? txnFieldErrors(row) : {};
                 return (
                   <TableRow
                     key={row.index}
                     ref={(node) => {
                       rowRefs.current[row.index] = node;
                     }}
-                    className={cn(isEditing && "bg-primary/[0.03]")}
+                    className={cn("group/row", isEditing && "bg-primary/[0.03]")}
                   >
                     <TableCell className="text-muted-foreground tabular">
                       {row.index + 1}
@@ -945,14 +864,19 @@ function ReviewStep({
 
                     {isEditing && draft ? (
                       <>
-                        <TableCell>
+                        <TableCell className="min-w-36 align-top">
                           <Select
                             value={draft.type}
                             onValueChange={(value) => patch({ type: value })}
                           >
                             <SelectTrigger
-                              className="h-8"
+                              className={cn(
+                                "h-8",
+                                draftErrors.type && INVALID_CLASS,
+                              )}
                               aria-label={`Type, row ${row.index + 1}`}
+                              aria-invalid={draftErrors.type ? true : undefined}
+                              data-txn-field="type"
                             >
                               <SelectValue placeholder="Select" />
                             </SelectTrigger>
@@ -961,41 +885,70 @@ function ReviewStep({
                               <SelectItem value="Debit">Debit</SelectItem>
                             </SelectContent>
                           </Select>
+                          <EditError message={draftErrors.type} />
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="min-w-36 align-top">
                           <Input
-                            className="h-8 tabular"
+                            className={cn(
+                              "h-8 tabular",
+                              draftErrors.amount && INVALID_CLASS,
+                            )}
                             inputMode="decimal"
                             value={draft.amount}
                             onChange={(event) =>
                               patch({ amount: event.target.value })
                             }
+                            onKeyDown={submitKeys}
                             aria-label={`Amount, row ${row.index + 1}`}
+                            aria-invalid={draftErrors.amount ? true : undefined}
+                            data-txn-field="amount"
                           />
+                          <EditError message={draftErrors.amount} />
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="min-w-40 align-top">
                           <Input
-                            className="h-8 tabular"
+                            className={cn(
+                              "h-8 tabular",
+                              draftErrors.date && INVALID_CLASS,
+                            )}
                             value={draft.date}
                             placeholder="DD/MM/YYYY"
                             onChange={(event) =>
                               patch({ date: event.target.value })
                             }
+                            onKeyDown={submitKeys}
                             aria-label={`Date, row ${row.index + 1}`}
+                            aria-invalid={draftErrors.date ? true : undefined}
+                            data-txn-field="date"
                           />
+                          <EditError message={draftErrors.date} />
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="min-w-64 align-top">
                           <Input
-                            className="h-8"
+                            className={cn(
+                              "h-8",
+                              draftErrors.description && INVALID_CLASS,
+                            )}
                             value={draft.description}
                             onChange={(event) =>
                               patch({ description: event.target.value })
                             }
+                            onKeyDown={submitKeys}
                             aria-label={`Description, row ${row.index + 1}`}
+                            aria-invalid={
+                              draftErrors.description ? true : undefined
+                            }
+                            data-txn-field="description"
                           />
+                          <EditError message={draftErrors.description} />
                         </TableCell>
                         <TableCell />
-                        <TableCell className="text-right">
+                        <TableCell
+                          className={cn(
+                            "text-right align-top",
+                            PINNED_ACTIONS_CELL_EDITING,
+                          )}
+                        >
                           <div className="flex justify-end gap-1">
                             <Button
                               size="sm"
@@ -1018,25 +971,81 @@ function ReviewStep({
                     ) : (
                       <>
                         <TableCell className="text-muted-foreground">
-                          {row.type || "—"}
+                          {fieldErrors.type ? (
+                            /*
+                              A missing or unreadable Type is a two-way pick, so
+                              the dropdown is the cell: choose straight from the
+                              row rather than open it first.
+                            */
+                            <Select
+                              value=""
+                              onValueChange={(value) =>
+                                onRowChange(row.index, {
+                                  type: value,
+                                  amount: row.amount,
+                                  date: row.date,
+                                  description: row.description,
+                                })
+                              }
+                            >
+                              <SelectTrigger
+                                className="h-8 data-[placeholder]:text-destructive"
+                                aria-label={`Type, row ${row.index + 1}`}
+                                data-txn-field="type"
+                              >
+                                <SelectValue placeholder="Choose Credit or Debit" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="Credit">Credit</SelectItem>
+                                <SelectItem value="Debit">Debit</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          ) : (
+                            renderCell(row, fieldErrors, "type", row.type)
+                          )}
                         </TableCell>
                         <TableCell className="tabular">
-                          {row.amount || "—"}
+                          {renderCell(row, fieldErrors, "amount", row.amount)}
                         </TableCell>
                         <TableCell className="text-muted-foreground tabular">
-                          {row.date || "—"}
+                          {renderCell(row, fieldErrors, "date", row.date)}
                         </TableCell>
                         <TableCell className="max-w-[26ch] truncate">
-                          {row.description || "—"}
+                          {renderCell(
+                            row,
+                            fieldErrors,
+                            "description",
+                            row.description,
+                          )}
                         </TableCell>
                         <TableCell>
                           {row.issues.length === 0 ? (
                             <Badge variant="success">Ready</Badge>
                           ) : (
-                            <Badge variant="warning" className="tabular">
-                              {row.issues.length}{" "}
-                              {row.issues.length === 1 ? "error" : "errors"}
-                            </Badge>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <button
+                                  type="button"
+                                  onClick={() => startEdit(row)}
+                                  aria-label={`Fix row ${row.index + 1}: ${row.issues.join("; ")}`}
+                                  className="rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                >
+                                  <Badge variant="warning" className="tabular">
+                                    {row.issues.length}{" "}
+                                    {row.issues.length === 1
+                                      ? "error"
+                                      : "errors"}
+                                  </Badge>
+                                </button>
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-64">
+                                <ul className="space-y-0.5">
+                                  {row.issues.map((message) => (
+                                    <li key={message}>{message}</li>
+                                  ))}
+                                </ul>
+                              </TooltipContent>
+                            </Tooltip>
                           )}
                         </TableCell>
                         {/*
@@ -1045,7 +1054,9 @@ function ReviewStep({
                           made a clean row look uneditable — sole-webapp lets
                           you open any of them.
                         */}
-                        <TableCell className="text-right">
+                        <TableCell
+                          className={cn("text-right", PINNED_ACTIONS_CELL)}
+                        >
                           <div className="flex justify-end gap-1">
                             <Tooltip>
                               <TooltipTrigger asChild>
@@ -1089,43 +1100,22 @@ function ReviewStep({
  * Add, edit and delete all happen on this step — the form opens in a dialog
  * and delete asks in place, as sole-webapp's step did. Going off to
  * /transactions/rules would lose the file mid-import.
+ *
+ * No Sync column here: sync works on transactions already saved, and this
+ * file isn't saved until the Sole Fields step. The rules reach the file when
+ * Continue runs `validate`, which the description says.
  */
 function RulesStep() {
   const rulesQuery = useRulesQuery();
   /** `null` closed, `"new"` adding, otherwise the id of the rule being edited. */
   const [formRule, setFormRule] = React.useState<string | null>(null);
 
-  /*
-   * Start sync on a row (or on all rules) reports its result through the rules
-   * store, which the Rules page shows as a dialog. This step has no such
-   * dialog, so a finished sync said nothing here — report it as a toast
-   * instead, and clear it so it doesn't reappear on the Rules page later.
-   */
-  const lastSync = useRulesStore((state) => state.lastSync);
-  const setLastSync = useRulesStore((state) => state.setLastSync);
-  React.useEffect(() => {
-    if (!lastSync) return;
-    const { matched, ruleName } = lastSync;
-    toast.success(
-      `Sync complete — ${matched} ${matched === 1 ? "transaction" : "transactions"} matched`,
-      {
-        description:
-          matched === 0
-            ? `Nothing needed recategorising for ${ruleName === "All rules" ? "your rules" : `“${ruleName}”`}.`
-            : ruleName === "All rules"
-              ? "Matched against all your active rules."
-              : `Matched using “${ruleName}”.`,
-      },
-    );
-    setLastSync(null);
-  }, [lastSync, setLastSync]);
-
   return (
     <div className="space-y-4" data-usertour="txn-stage-rules">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <WizardSectionHeading
           title="Matching rules"
-          description="Optional — rules auto-categorise matching transactions on import. You can skip this and add them later."
+          description="Optional — rules you add or edit here are applied to the rows in your file when you continue to Sole fields, where you can check and change what they filled in. You can skip this and add them later."
         />
         <Button size="sm" onClick={() => setFormRule("new")}>
           <Plus />
@@ -1136,6 +1126,7 @@ function RulesStep() {
         loading={rulesQuery.isLoading}
         onAdd={() => setFormRule("new")}
         onEdit={(rule) => setFormRule(rule.id)}
+        hideSync
       />
 
       <RuleFormDialog

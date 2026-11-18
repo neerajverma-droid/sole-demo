@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Check, Loader2, Sparkles, Trash2 } from "lucide-react";
+import { Check, Loader2, RotateCcw, Sparkles, Trash2 } from "lucide-react";
 import axios from "axios";
 import { toast } from "sonner";
 
@@ -298,7 +298,10 @@ export function DocumentCapture<E extends { confidence: number }>({
                 <Button variant="outline" onClick={openEditor}>
                   Edit
                 </Button>
-                <Button variant="ghost" onClick={remove}>
+                {/* Outlined like Edit: as a ghost it was bare text at rest,
+                    with nothing to say it could be pressed. */}
+                <Button variant="outline" onClick={remove}>
+                  <RotateCcw />
                   Start over
                 </Button>
               </div>

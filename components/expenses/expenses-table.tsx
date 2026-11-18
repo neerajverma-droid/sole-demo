@@ -9,12 +9,10 @@ import {
   ArrowUpDown,
   Copy,
   Download,
-  Eye,
   FilePlus2,
   FileText,
   Link2,
   Loader2,
-  MoreHorizontal,
   Paperclip,
   Pencil,
   Receipt,
@@ -40,12 +38,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
   Empty,
   EmptyActions,
   EmptyCue,
@@ -54,7 +46,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
-import { MenuAction } from "@/components/ui/menu-action";
+import { RowIconButton } from "@/components/ui/row-icon-button";
 import { NumberedPagination } from "@/components/ui/numbered-pagination";
 import { Shimmer } from "@/components/ui/shimmer";
 import {
@@ -427,21 +419,19 @@ export function ExpensesTable() {
   );
 
   /*
-   * Nothing recorded at all — not a search or filter that matched nothing —
-   * so there's nothing for the toolbar, bulk bar or pager to act on: just the
-   * empty state, same as the rules table. An errored fetch never lands here.
+   * Nothing recorded at all keeps the toggle, search and filters above it:
+   * the empty state takes the table's place below rather than the whole
+   * section's, the same as the Invoices list.
    */
-  const queryError = clientSideMode
-    ? fullListQuery.isError
-    : serverQuery.isError;
-  if (!loading && !queryError && !filtered && total === 0) return emptyState;
 
   return (
     <div className="space-y-[15px]">
-      <div className="flex flex-wrap items-center justify-end gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div
           className="flex flex-1 flex-wrap items-center justify-end gap-2"
           data-usertour="expense-search-filters"
+          // Same tour start signal as the Invoices list's tab strip.
+          data-usertour-loading={loading || undefined}
         >
           <div className="relative w-full sm:w-56">
             <Search
@@ -583,7 +573,7 @@ export function ExpensesTable() {
             <TableHeader>
               <TableRow>
                 <TableHead className="w-[44px]" />
-                <TableHead className="text-center">Category</TableHead>
+                <TableHead className="pl-6 text-left">Category</TableHead>
                 <TableHead className="text-center">Description</TableHead>
                 <TableHead className="text-center">Supplier</TableHead>
                 <TableHead className={cn(HUG_COLUMN, "text-center")}>
@@ -614,8 +604,14 @@ export function ExpensesTable() {
                     <Shimmer className="size-4" />
                   </TableCell>
                   {Array.from({ length: 9 }).map((__, cellIndex) => (
-                    <TableCell key={cellIndex} className="text-center">
-                      <Shimmer className="mx-auto h-4 w-20" />
+                    <TableCell
+                      key={cellIndex}
+                      className={cn("text-center", cellIndex === 0 && "pl-6")}
+                    >
+                      {/* Category, the first, sits left like its column. */}
+                      <Shimmer
+                        className={cn("h-4 w-20", cellIndex > 0 && "mx-auto")}
+                      />
                     </TableCell>
                   ))}
                   <TableCell>
@@ -644,7 +640,7 @@ export function ExpensesTable() {
                   {/* The text columns — category, description, supplier and the
                       vendor note — take the spare width. Dates, figures, the
                       two link cells and the menu hug their content. */}
-                  <TableHead className="text-center">Category</TableHead>
+                  <TableHead className="pl-6 text-left">Category</TableHead>
                   <TableHead className="text-center">Description</TableHead>
                   <TableHead className="text-center">Supplier</TableHead>
                   <TableHead className={cn(HUG_COLUMN, "text-center")}>
@@ -766,8 +762,33 @@ function ExpenseRow({
   const matched = expense.status === "Matched";
   const { country } = useCountryContext();
 
+  /*
+   * The whole row opens the expense. A click on anything interactive inside it
+   * — the checkbox, the bill/invoice links, Match, the action icons — does its
+   * own thing instead; so does one bubbling up through a portal (a tooltip),
+   * and a drag that selected some text.
+   */
+  const openFromRow = (event: React.MouseEvent<HTMLTableRowElement>) => {
+    const target = event.target as HTMLElement;
+    if (!event.currentTarget.contains(target)) return;
+    if (target.closest("button, a, input, label, [role=checkbox]")) return;
+    if (window.getSelection()?.toString()) return;
+    onView();
+  };
+
   return (
-    <TableRow data-state={selected ? "selected" : undefined}>
+    <TableRow
+      data-state={selected ? "selected" : undefined}
+      className="cursor-pointer"
+      onClick={openFromRow}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" && event.target === event.currentTarget) {
+          onView();
+        }
+      }}
+      tabIndex={0}
+      aria-label={`View ${expense.description}`}
+    >
       <TableCell>
         <Checkbox
           checked={selected}
@@ -775,7 +796,7 @@ function ExpenseRow({
           aria-label={`Select ${expense.description}`}
         />
       </TableCell>
-      <TableCell className="max-w-[180px] text-center text-muted-foreground">
+      <TableCell className="max-w-[180px] pl-6 text-left text-muted-foreground">
         <span className="block truncate">
           <Highlight text={expense.category || "—"} query={query} />
         </span>
@@ -784,6 +805,17 @@ function ExpenseRow({
         <span className="block truncate font-medium">
           <Highlight text={expense.description} query={query} />
         </span>
+        {/* Approved from a supplier bill — the bill keeps its lines and due date. */}
+        {expense.billId && (
+          <Link
+            href={`/expenses/bills/${expense.billId}`}
+            className="mx-auto mt-0.5 flex w-fit items-center gap-1 rounded-md border border-border bg-muted/60 px-1.5 py-0.5 text-xs font-medium tabular text-muted-foreground transition-colors hover:text-foreground"
+            aria-label={`Open bill ${expense.billNo ?? ""}`.trim()}
+          >
+            <FileText className="size-3" aria-hidden />
+            {expense.billNo ? `Bill ${expense.billNo}` : "From bill"}
+          </Link>
+        )}
         {/*
           What the bank called it, under what you called it. The statement line
           is how you'll find this again in a feed or a dispute, and it's no use
@@ -811,14 +843,14 @@ function ExpenseRow({
         {formatExpenseDate(expense.date)}
       </TableCell>
       <TableCell className={cn(HUG_COLUMN, "text-center font-medium tabular")}>
-        <span>
-          {formatExpenseAmount(expense)}
-          {expense.gst && (
-            <span className="ml-1 text-xs font-normal text-muted-foreground">
-              inc {taxWord(country)}
-            </span>
-          )}
-        </span>
+        <span className="block">{formatExpenseAmount(expense)}</span>
+        {/* Under the figure rather than beside it, so the column stays as
+            narrow as the amount itself. */}
+        {expense.gst && (
+          <span className="block text-xs font-normal leading-tight text-muted-foreground">
+            inc {taxWord(country)}
+          </span>
+        )}
         {/* The business/personal split — the price above is only the
             business portion, so the real original total shows alongside it,
             same as sole-webapp's own list. */}
@@ -904,63 +936,49 @@ function ExpenseRow({
         )}
       </TableCell>
       <TableCell className={HUG_COLUMN}>
-        <div className="flex justify-end">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-8"
-                aria-label={`Actions for ${expense.description}`}
-              >
-                <MoreHorizontal className="size-4 text-muted-foreground" />
-              </Button>
-            </DropdownMenuTrigger>
-            {/* View actions, then edit actions, then Delete on its own. */}
-            <DropdownMenuContent align="end" className="w-52">
-              <MenuAction icon={<Eye />} label="View" onSelect={onView} />
-              <DropdownMenuSeparator />
-              {/* Absent rather than disabled once matched: the price and
-                  category it was matched against shouldn't move without an
-                  unmatch first, same as sole-webapp's own reconciled rows. */}
-              {!matched && (
-                <MenuAction
-                  icon={<Pencil />}
-                  label="Edit"
-                  href={`/expenses/${expense.id}`}
-                />
-              )}
-              <MenuAction
-                icon={<Paperclip />}
-                label={
-                  expense.receipt ? "Replace attachment" : "Add attachment"
-                }
-                onSelect={onAttach}
-              />
-              <MenuAction
-                icon={<FilePlus2 />}
-                label="Convert to invoice"
-                onSelect={onConvert}
-                disabledReason={
-                  expense.invoiceId
-                    ? "Already on-charged to an invoice"
-                    : undefined
-                }
-              />
-              <MenuAction
-                icon={<Copy />}
-                label="Duplicate"
-                onSelect={onDuplicate}
-              />
-              <DropdownMenuSeparator />
-              <MenuAction
-                icon={<Trash2 />}
-                label="Delete"
-                onSelect={onDelete}
-                destructive
-              />
-            </DropdownMenuContent>
-          </DropdownMenu>
+        <div className="flex justify-end gap-0.5">
+          {/* Actions that don't apply are left out. Once matched, the price and
+              category it was matched against shouldn't move without an
+              unmatch first, same as sole-webapp's own reconciled rows. */}
+          {!matched && (
+            <RowIconButton
+              tooltip
+              icon={<Pencil className="size-4" />}
+              label="Edit"
+              href={`/expenses/${expense.id}`}
+            />
+          )}
+          <RowIconButton
+            tooltip
+            icon={<Paperclip className="size-4" />}
+            label={expense.receipt ? "Replace attachment" : "Add attachment"}
+            onClick={onAttach}
+          />
+          {/* Already on-charged: converting again would bill it twice. */}
+          {!expense.invoiceId && (
+            <RowIconButton
+              tooltip
+              icon={<FilePlus2 className="size-4" />}
+              label="Convert to invoice"
+              onClick={onConvert}
+            />
+          )}
+          <RowIconButton
+            tooltip
+            icon={<Copy className="size-4" />}
+            label="Duplicate"
+            onClick={onDuplicate}
+          />
+          {/* The backend refuses to delete a reconciled expense. */}
+          {!matched && (
+            <RowIconButton
+              tooltip
+              icon={<Trash2 className="size-4" />}
+              label="Delete"
+              onClick={onDelete}
+              destructive
+            />
+          )}
         </div>
       </TableCell>
     </TableRow>
@@ -972,9 +990,9 @@ function ExpenseRow({
  * treatment as the invoices and super-contributions lists' own AI Match
  * button, since it's the same signal (the backend's `possible_match` count)
  * driving the same idea: don't make someone hunt for a match that's already
- * sitting there.
+ * sitting there. The bills list uses it too, on the same signal.
  */
-function AiMatchButton({
+export function AiMatchButton({
   suggestions,
   onOpen,
 }: {

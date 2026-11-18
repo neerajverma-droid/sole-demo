@@ -75,6 +75,7 @@ function KmStatsGroups({ stats, loading }: { stats: KmStats | undefined; loading
     <section
       aria-label="Claim totals"
       data-usertour="km-stats-band"
+      data-usertour-loading={loading || undefined}
       className={cn(
         "grid gap-6 rounded-lg border border-border bg-muted/30 p-4 md:p-5",
         statutory && "xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] xl:divide-x xl:divide-border",

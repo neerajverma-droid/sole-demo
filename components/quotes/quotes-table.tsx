@@ -8,11 +8,11 @@ import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-quer
 import {
   Copy,
   Download,
-  Eye,
   FileCheck2,
   FileText,
   History,
   FilePlus2,
+  Loader2,
   MoreHorizontal,
   Pencil,
   Search,
@@ -53,7 +53,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { MenuAction } from "@/components/ui/menu-action";
 import { NumberedPagination } from "@/components/ui/numbered-pagination";
-import { RowIconButton } from "@/components/ui/row-icon-button";
 import { Shimmer } from "@/components/ui/shimmer";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -72,6 +71,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Highlight } from "@/components/contacts/highlight";
+import {
+  ROW_ICON_CLASS,
+  RowIconAction,
+  SentMark,
+  openRowOnClick,
+} from "@/components/documents/row-actions";
 import {
   activeQuoteFilterCount,
   EMPTY_QUOTE_FILTERS,
@@ -94,6 +99,7 @@ import { contactDisplayName } from "@/lib/contacts";
 import {
   formatDocumentMoney,
   formatInvoiceDate,
+  formatRecipientList,
   invoiceAmount,
   invoiceMoney,
   statusVariant,
@@ -105,7 +111,8 @@ import {
   fetchQuoteStatusCounts,
   fetchQuotesPage,
   isForeignQuote,
-  sendQuoteApi,
+  quoteSendAction,
+  sendQuoteToClientApi,
   QUOTE_FILTERS,
   quoteAmount,
   quoteAmountAud,
@@ -117,6 +124,9 @@ import {
   type QuoteListFilters,
   type QuoteStatusCounts,
 } from "@/lib/quotes";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
+import { activeBaseCurrency } from "@/lib/country-context";
 import {
   AreaFilterChip,
   useAreaFilter,
@@ -136,7 +146,6 @@ const NO_QUOTES = Object.fromEntries(
  * all go in the request, the same way the Invoices list fetches its rows.
  */
 export function QuotesTable() {
-  const baseCurrency = useCountryContext().country.currency;
   const contacts = useContactsStore((state) => state.contacts);
   const area = useAreaFilter();
   const router = useRouter();
@@ -186,7 +195,14 @@ export function QuotesTable() {
     setConvertingId(quote.id);
     const toastId = toast.loading(`Converting ${quote.number}…`);
     try {
-      await convertQuoteToInvoiceApi(quote, baseCurrency);
+      const { invoiceId } = await convertQuoteToInvoiceApi(quote);
+      track(EVENTS.INVOICE_CREATED, {
+        invoice_id: invoiceId,
+        amount: quoteAmount(quote),
+        currency: quote.currency ?? activeBaseCurrency(),
+        client_id: quote.clientId,
+        is_converted_from_quote: true,
+      });
       // The quote is now Converted and there's a new invoice, so both lists
       // and the stat cards above them are out of date.
       await queryClient.invalidateQueries({ queryKey: ["quotes"] });
@@ -215,17 +231,49 @@ export function QuotesTable() {
   };
 
   /** Emails one saved quote to its client, then refreshes what the list shows. */
+  /** The quote being emailed, so a second click can't send it twice. */
+  const [sendingId, setSendingId] = React.useState<string | null>(null);
+
+  /*
+   * A first send (draft, or one saved with Save & print) or a send again (one
+   * that was declined or has expired). The toast names every address it went
+   * to, and says so when an expired quote was given a new expiry on the way.
+   */
   const sendQuote = async (quote: Quote) => {
+    if (sendingId) return;
+    setSendingId(quote.id);
     const toastId = toast.loading(`Sending ${quote.number}…`);
     try {
-      await sendQuoteApi(quote.id);
+      const { recipients, resent, expiryExtendedTo } =
+        await sendQuoteToClientApi(quote.id);
+      track(EVENTS.QUOTE_SENT, {
+        quote_id: quote.id,
+        amount: quoteAmount(quote),
+        currency: quote.currency ?? activeBaseCurrency(),
+        client_id: quote.clientId,
+        is_recurring: false,
+      });
       await queryClient.invalidateQueries({ queryKey: ["quotes"] });
-      toast.success(`${quote.number} sent`, { id: toastId });
+      const to =
+        recipients.length > 0
+          ? formatRecipientList(recipients)
+          : resolveClient(quote);
+      toast.success(
+        `${quote.number} ${resent ? "sent again" : "sent"} to ${to}`,
+        {
+          id: toastId,
+          description: expiryExtendedTo
+            ? `New expiry date: ${formatInvoiceDate(expiryExtendedTo)}`
+            : undefined,
+        },
+      );
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Couldn't send that quote.",
         { id: toastId },
       );
+    } finally {
+      setSendingId(null);
     }
   };
 
@@ -340,6 +388,17 @@ export function QuotesTable() {
     !areaEmpty && (pageQuery.isLoading || pageQuery.isPlaceholderData);
 
   /*
+   * As many shimmer rows as the page will have, not a fixed handful: the
+   * skeleton stands in for the rows, so a shorter stand-in shortens the page
+   * under a reader who has scrolled down to the pager, and the scroll position
+   * is clamped to it. The last page is shorter than the rest, so it says so.
+   */
+  const skeletonRows =
+    total > 0
+      ? Math.max(1, Math.min(pageSize, total - pageStart))
+      : pageSize;
+
+  /*
    * Per-tab counts across the whole account, from the server rather than a
    * count of whichever page is loaded. Scoped to the same clients an area
    * deep-link narrows the rows to.
@@ -431,24 +490,10 @@ export function QuotesTable() {
   );
 
   /*
-   * No quotes at all — rather than a tab, search, filter or area that matched
-   * nothing — so the tabs, search and pager have nothing to act on: just the
-   * empty state, same as the rules table. Both search values count, so a
-   * search still settling never collapses the toolbar mid-keystroke, and an
-   * errored fetch never lands here.
+   * No quotes at all keeps the tabs and search above it: the empty state takes
+   * the table's place below rather than the whole section's, the same as the
+   * Invoices list.
    */
-  if (
-    !rowsLoading &&
-    !pageQuery.isError &&
-    !area &&
-    filter === "All" &&
-    advancedCount === 0 &&
-    !query.trim() &&
-    !debouncedQuery.trim() &&
-    total === 0
-  ) {
-    return emptyState;
-  }
 
   return (
     <div className="space-y-[15px]">
@@ -463,8 +508,10 @@ export function QuotesTable() {
         {/* The same tab strip as the Invoices list. Eight tabs with counts
             run wider than a phone, so they scroll sideways inside the row
             rather than pushing past the screen edge. */}
+        {/* Same tour start signal as the Invoices list's tab strip. */}
         <Tabs
           data-usertour="quote-filters"
+          data-usertour-loading={rowsLoading || undefined}
           className="max-w-full overflow-x-auto"
           value={filter}
           onValueChange={(value) => setFilter(value as typeof filter)}
@@ -489,8 +536,11 @@ export function QuotesTable() {
           </TabsList>
         </Tabs>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative w-full sm:w-72" data-usertour="quote-search">
+        <div
+          className="flex flex-wrap items-center gap-2"
+          data-usertour="quote-search-filters"
+        >
+          <div className="relative w-full sm:w-72">
             <Search
               className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
               aria-hidden
@@ -544,7 +594,7 @@ export function QuotesTable() {
       )}
 
       {rowsLoading ? (
-        <QuotesTableSkeleton />
+        <QuotesTableSkeleton rows={skeletonRows} />
       ) : rows.length === 0 ? (
         emptyState
       ) : (
@@ -591,7 +641,7 @@ export function QuotesTable() {
                     same thing the Invoices row does to its client line.
                   */}
                   {/* Quote # stays left (it's what's being scanned for),
-                      Actions stays right (it's reached for), and everything
+                      Actions is right-aligned over its icons, and everything
                       between reads as a centered column of its own. */}
                   <TableHead className={HUG_COLUMN}>Quote #</TableHead>
                   <TableHead className={cn(HUG_COLUMN, "text-center")}>
@@ -608,6 +658,9 @@ export function QuotesTable() {
                   </TableHead>
                   <TableHead className={cn(HUG_COLUMN, "text-center")}>
                     Status
+                  </TableHead>
+                  <TableHead className={cn(HUG_COLUMN, "text-center")}>
+                    Sent
                   </TableHead>
                   <TableHead className={cn(HUG_COLUMN, "text-center")}>
                     Amount
@@ -641,6 +694,7 @@ export function QuotesTable() {
                       onConvert={() => startConvert(quote)}
                       converting={convertingId === quote.id}
                       onSend={() => sendQuote(quote)}
+                      sending={sendingId === quote.id}
                       onView={() => setViewId(quote.id)}
                       onHistory={() => setHistoryId(quote.id)}
                       onDuplicate={() =>
@@ -728,6 +782,7 @@ function QuoteRow({
   onConvert,
   onEditInvoice,
   onSend,
+  sending,
   onView,
   onHistory,
   onDuplicate,
@@ -747,6 +802,8 @@ function QuoteRow({
   /** True while this row's conversion is in flight. */
   converting: boolean;
   onSend: () => void;
+  /** True while this row's quote is being emailed. */
+  sending: boolean;
   onView: () => void;
   onHistory: () => void;
   onDuplicate: () => void;
@@ -756,17 +813,9 @@ function QuoteRow({
   const baseCurrency = useCountryContext().country.currency;
   const deposit = quoteDepositAmount(quote);
   const status = quoteDisplayStatus(quote);
-  /**
-   * Sending is for a quote the client hasn't answered yet. Once they've accepted
-   * or declined, sending it again isn't a follow-up — it's confusing.
-   */
-  const sendReason = quote.convertedInvoice
-    ? `Already invoiced as ${quote.convertedInvoice}`
-    : quote.status === "Accepted"
-      ? "The client has already accepted this quote"
-      : quote.status === "Declined"
-        ? "This quote was declined — duplicate it to re-quote"
-        : undefined;
+  const description = (quote.description ?? "").trim();
+  /** Send to client / Send again / greyed out — see quoteSendAction. */
+  const send = quoteSendAction(quote);
 
   /**
    * Converting is blocked on only two things, which is what the reference
@@ -795,7 +844,11 @@ function QuoteRow({
     : undefined;
 
   return (
-    <TableRow data-state={selected ? "selected" : undefined}>
+    <TableRow
+      data-state={selected ? "selected" : undefined}
+      className="cursor-pointer"
+      onClick={(event) => openRowOnClick(event, onView)}
+    >
       <TableCell>
         {/* A draft was never issued, so there is nothing to download and
             nothing a batch should do to it — it's deleted from its own row. */}
@@ -814,11 +867,6 @@ function QuoteRow({
         <p className="font-medium tabular">
           <Highlight text={quote.number} query={query} />
         </p>
-        {quote.description && (
-          <p className="max-w-[22ch] truncate text-xs text-muted-foreground">
-            {quote.description}
-          </p>
-        )}
         {quote.convertedInvoice && (
           <LinkedInvoice
             number={quote.convertedInvoice}
@@ -836,9 +884,32 @@ function QuoteRow({
         client line both do.
       */}
       <TableCell className={cn(HUG_COLUMN, "text-center")}>
-        <p className="mx-auto max-w-[24ch] truncate">
-          <Highlight text={client} query={query} />
-        </p>
+        {/* Client, then the description after a dash. The description is cut
+            to what fits and the whole of it is on hover. */}
+        <div className="mx-auto flex max-w-[34ch] items-baseline justify-center">
+          <span className="max-w-[20ch] shrink-0 truncate">
+            <Highlight text={client} query={query} />
+          </span>
+          {description && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                {/* Focusable, so the full text is reachable without a mouse. */}
+                <span
+                  tabIndex={0}
+                  className="flex min-w-0 items-baseline text-muted-foreground outline-none focus-visible:underline"
+                >
+                  <span className="shrink-0 px-1" aria-hidden>
+                    -
+                  </span>
+                  <span className="min-w-0 truncate">{description}</span>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-[20rem] whitespace-pre-line break-words">
+                {description}
+              </TooltipContent>
+            </Tooltip>
+          )}
+        </div>
         {clientEmail && (
           <p className="mx-auto max-w-[24ch] truncate text-xs text-muted-foreground">
             {clientEmail}
@@ -883,6 +954,17 @@ function QuoteRow({
       <TableCell className={cn(HUG_COLUMN, "text-center")}>
         <QuoteStatusCell quote={quote} status={status} />
       </TableCell>
+      <TableCell className={cn(HUG_COLUMN, "text-center")}>
+        <SentMark
+          sent={!!quote.sentAt}
+          summary={quoteSentSummary(quote)}
+          hint={
+            !quote.sentAt && quote.status !== "Draft"
+              ? "Use Send to client in the row menu to email it."
+              : undefined
+          }
+        />
+      </TableCell>
       <TableCell
         className={cn(HUG_COLUMN, "text-center font-medium tabular")}
       >
@@ -897,59 +979,60 @@ function QuoteRow({
       </TableCell>
       <TableCell className={HUG_COLUMN}>
         {/*
-          The two actions a quote row is most often opened for, in front of the
-          menu that still holds the rest. `gap-0.5` because they're one cluster:
-          spaced any wider they read as three unrelated controls.
-
-          Sending is out here rather than converting. Converting only applies to
-          an accepted quote that isn't already an invoice, which is a minority of
-          any list — an icon that's greyed out on most rows costs a column of
-          attention and gives nothing back, so it went to the menu where a
-          disabled row is cheap. Sending is live on anything still with the
-          client, which is most of what a list is.
+          Edit, Duplicate and History stand on the row, as on the Invoices
+          list; the rest stay in the menu.
         */}
-        <div className="flex items-center justify-end gap-0.5">
-          <RowIconButton
+        <div className="flex items-center justify-end gap-1">
+          <RowIconAction
             icon={<Pencil />}
-            label={`Edit ${quote.number}`}
-            href={editReason ? undefined : `/quotes/${quote.id}`}
+            label="Edit quote"
+            href={`/quotes/${quote.id}`}
             disabledReason={editReason}
           />
-          <RowIconButton
-            icon={<Send />}
-            // The same wording the menu used: "again" is only true of a quote
-            // that has actually gone out once.
-            label={
-              quote.status === "Sent"
-                ? `Send ${quote.number} again`
-                : `Send ${quote.number} to ${client}`
-            }
-            onClick={onSend}
-            disabledReason={sendReason}
+          <RowIconAction
+            icon={<Copy />}
+            label="Duplicate quote"
+            onClick={onDuplicate}
+          />
+          <RowIconAction
+            icon={<History />}
+            label="Quote history"
+            onClick={onHistory}
           />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
                 size="icon"
-                className="size-8"
+                className={cn(ROW_ICON_CLASS, "data-[state=open]:text-primary")}
                 aria-label={`Actions for ${quote.number}`}
               >
-                <MoreHorizontal className="size-4 text-muted-foreground" />
+                <MoreHorizontal className="size-4" />
               </Button>
             </DropdownMenuTrigger>
             {/*
-              View actions, then the ones that make something new, then Delete on
-              its own. Edit and Send aren't here: they're the row's inline buttons
-              now, and keeping them in both places would be two ways to reach the
-              same thing with no way to tell which one someone had used.
+              View actions, then Edit and Send (what a row is most often opened
+              for), then the ones that make something new, then Delete on its own.
             */}
             <DropdownMenuContent align="end" className="w-52">
+              {/* Hidden for now — View (re-add the Eye import to bring it back; clicking the row already opens the preview):
               <MenuAction icon={<Eye />} label="View" onSelect={onView} />
+              */}
+              {/* Edit, Duplicate and History now live on the row itself. */}
               <MenuAction
-                icon={<History />}
-                label="History"
-                onSelect={onHistory}
+                icon={
+                  sending ? <Loader2 className="animate-spin" /> : <Send />
+                }
+                label={sending ? "Sending…" : send.label}
+                onSelect={onSend}
+                disabledReason={
+                  send.kind === "blocked"
+                    ? send.reason
+                    : sending
+                      ? "Sending…"
+                      : undefined
+                }
+                hint={send.kind === "resend" ? send.hint : undefined}
               />
               <DropdownMenuSeparator />
               <MenuAction
@@ -957,11 +1040,6 @@ function QuoteRow({
                 label={converting ? "Converting…" : "Convert to invoice"}
                 onSelect={onConvert}
                 disabledReason={converting ? "Converting…" : convertReason}
-              />
-              <MenuAction
-                icon={<Copy />}
-                label="Duplicate"
-                onSelect={onDuplicate}
               />
               <DropdownMenuSeparator />
               <MenuAction
@@ -979,12 +1057,9 @@ function QuoteRow({
 }
 
 /**
- * Stands in for the real table while the list's fetch is still out — same
- * header, same column alignment, so nothing shifts when the rows land.
- */
-/**
- * The status, with when it was sent or saved in the tooltip. A quote finalised
- * with "Save" and never emailed reads "Saved" — see `quoteDisplayStatus`.
+ * The status pill. When it was sent or saved is on hover in the Sent column; a
+ * quote finalised with "Save" and never emailed reads "Saved" — see
+ * `quoteDisplayStatus`.
  */
 function QuoteStatusCell({
   quote,
@@ -993,37 +1068,30 @@ function QuoteStatusCell({
   quote: Quote;
   status: QuoteDisplayStatus;
 }) {
-  const draft = quote.status === "Draft";
-  const sent = quote.sentAt
-    ? `Sent ${formatInvoiceDate(quote.sentAt)}`
-    : draft
-      ? "Not sent yet"
-      : quote.savedAt
-        ? `Saved ${formatInvoiceDate(quote.savedAt)}, not sent to the client`
-        : "Saved, not sent to the client";
-
   return (
-    <TooltipProvider delayDuration={200}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          {/* A div rather than a span: Badge renders a div, and Radix needs a
-              ref on the trigger, which Badge doesn't forward. */}
-          <div className="mx-auto w-fit">
-            <Badge variant={quoteStatusVariant(status)}>
-              {status}
-              <span className="sr-only">, {sent}</span>
-            </Badge>
-          </div>
-        </TooltipTrigger>
-        <TooltipContent className="max-w-[16rem]">
-          <p className="tabular">{sent}</p>
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <div className="mx-auto w-fit">
+      <Badge variant={quoteStatusVariant(status)}>
+        {status}
+        <span className="sr-only">, {quoteSentSummary(quote)}</span>
+      </Badge>
+    </div>
   );
 }
 
-function QuotesTableSkeleton() {
+/** When the quote went out, or why it hasn't. */
+function quoteSentSummary(quote: Quote): string {
+  if (quote.sentAt) return `Sent ${formatInvoiceDate(quote.sentAt)}`;
+  if (quote.status === "Draft") return "Not sent yet";
+  return quote.savedAt
+    ? `Saved ${formatInvoiceDate(quote.savedAt)}, not sent to the client`
+    : "Saved, not sent to the client";
+}
+
+/**
+ * Stands in for the real table while the list's fetch is still out — same
+ * header, same column alignment, so nothing shifts when the rows land.
+ */
+function QuotesTableSkeleton({ rows }: { rows: number }) {
   return (
     <div
       className="overflow-hidden rounded-lg border border-border bg-card shadow-sm"
@@ -1050,6 +1118,9 @@ function QuotesTableSkeleton() {
               Status
             </TableHead>
             <TableHead className={cn(HUG_COLUMN, "text-center")}>
+              Sent
+            </TableHead>
+            <TableHead className={cn(HUG_COLUMN, "text-center")}>
               Amount
             </TableHead>
             <TableHead className={cn(HUG_COLUMN, "text-right")}>
@@ -1058,14 +1129,13 @@ function QuotesTableSkeleton() {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {Array.from({ length: 8 }).map((_, index) => (
+          {Array.from({ length: rows }).map((_, index) => (
             <TableRow key={`skeleton-${index}`}>
               <TableCell>
                 <Shimmer className="size-4 rounded-sm" />
               </TableCell>
               <TableCell>
                 <Shimmer className="h-4 w-20" />
-                <Shimmer className="mt-1.5 h-3 w-28" />
               </TableCell>
               <TableCell className="text-center">
                 <Shimmer className="mx-auto h-4 w-24" />
@@ -1084,10 +1154,13 @@ function QuotesTableSkeleton() {
                 <Shimmer className="mx-auto h-5 w-20 rounded-full" />
               </TableCell>
               <TableCell className="text-center">
+                <Shimmer className="mx-auto size-4 rounded-full" />
+              </TableCell>
+              <TableCell className="text-center">
                 <Shimmer className="mx-auto h-4 w-20" />
               </TableCell>
               <TableCell>
-                <Shimmer className="ml-auto h-8 w-20 rounded-md" />
+                <Shimmer className="ml-auto h-8 w-32 rounded-md" />
               </TableCell>
             </TableRow>
           ))}

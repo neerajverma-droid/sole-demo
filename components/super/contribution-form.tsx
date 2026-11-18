@@ -9,7 +9,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { FormSection } from "@/components/ui/form-section";
-import { Input } from "@/components/ui/input";
+import { PrefixInput } from "@/components/ui/prefix-input";
 import { Shimmer } from "@/components/ui/shimmer";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
@@ -30,8 +30,9 @@ import {
   updateContributionApi,
   type ContributionDraft,
 } from "@/lib/super";
-import { cn } from "@/lib/utils";
 import { activeCurrencySymbol } from "@/lib/country-context";
+import { EVENTS } from "@/lib/analytics-events";
+import { useTrackOnce } from "@/hooks/use-track-once";
 
 /**
  * The contribution form — a page, matching the expense and vendor refund forms
@@ -47,6 +48,7 @@ export function ContributionForm({
   /** Recording another like this one: its values seed a new contribution. */
   copyOfId?: string;
 } = {}) {
+  useTrackOnce(EVENTS.CONTRIBUTION_ADD_INITIATED, !contributionId);
   const router = useRouter();
   const queryClient = useQueryClient();
 
@@ -230,6 +232,7 @@ export function ContributionForm({
         icon={PiggyBank}
         title="Contribution details"
         description="Which fund it went to, when, and how much."
+        tourId="super-contribution-details"
         className="grid gap-4 sm:grid-cols-2"
       >
         <div className="sm:col-span-2">
@@ -255,24 +258,16 @@ export function ContributionForm({
           required
           error={liveAmountError ?? issueFor("amount")}
         >
-          <div className="relative">
-            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-              {activeCurrencySymbol()}
-            </span>
-            <Input
-              id="contribution-amount"
-              value={draft.amount}
-              inputMode="decimal"
-              onChange={(event) => patch({ amount: event.target.value })}
-              placeholder="0.00"
-              aria-invalid={!!(liveAmountError ?? issueFor("amount"))}
-              className={cn(
-                "pl-7 tabular",
-                (liveAmountError ?? issueFor("amount")) &&
-                  "border-destructive focus-visible:ring-destructive",
-              )}
-            />
-          </div>
+          <PrefixInput
+            prefix={activeCurrencySymbol()}
+            id="contribution-amount"
+            value={draft.amount}
+            inputMode="decimal"
+            onChange={(event) => patch({ amount: event.target.value })}
+            placeholder="0.00"
+            aria-invalid={!!(liveAmountError ?? issueFor("amount"))}
+            className="tabular"
+          />
         </Field>
 
         <div className="sm:col-span-2">
@@ -288,7 +283,10 @@ export function ContributionForm({
         </div>
 
         <div className="sm:col-span-2">
-          <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3">
+          <label
+            className="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3"
+            data-usertour="super-tax"
+          >
             <Switch
               checked={draft.taxDeduction}
               onCheckedChange={(next) => patch({ taxDeduction: next })}
@@ -320,7 +318,11 @@ export function ContributionForm({
               : `${issues.length} fields need attention`}
           </p>
         )}
-        <Button onClick={onSave} disabled={issues.length > 0 || saving}>
+        <Button
+          onClick={onSave}
+          disabled={issues.length > 0 || saving}
+          data-usertour="super-save"
+        >
           {saving && <Loader2 className="animate-spin" />}
           {editing ? "Save changes" : "Save contribution"}
         </Button>

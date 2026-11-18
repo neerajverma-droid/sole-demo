@@ -64,14 +64,22 @@ export function contactImportSpec(
         required: true,
         desc: "Primary contact person",
         aliases: ["contact name", "name", "full name", "primary contact"],
-        review: { heading: "Name", editor: { kind: "text" } },
+        review: {
+          heading: "Name",
+          editor: { kind: "text" },
+          editWidth: "min-w-44",
+        },
       },
       {
         label: "Business name",
         apiKey: "Business Name",
         desc: "Required for a Business",
         aliases: ["business name", "company", "company name", "organisation"],
-        review: { heading: "Business name", editor: { kind: "text" } },
+        review: {
+          heading: "Business name",
+          editor: { kind: "text" },
+          editWidth: "min-w-48",
+        },
       },
       {
         label: "Contact email",
@@ -81,6 +89,7 @@ export function contactImportSpec(
         review: {
           heading: "Email",
           editor: { kind: "text", inputMode: "email" },
+          editWidth: "min-w-64",
         },
       },
       {
@@ -92,6 +101,7 @@ export function contactImportSpec(
           heading: "Phone",
           editor: { kind: "text", inputMode: "tel" },
           mono: true,
+          editWidth: "min-w-44",
         },
       },
       {
@@ -103,6 +113,7 @@ export function contactImportSpec(
         review: {
           heading: "Type",
           editor: { kind: "select", options: CONTACT_TYPES },
+          editWidth: "min-w-32",
         },
       },
       {
@@ -114,6 +125,7 @@ export function contactImportSpec(
         review: {
           heading: "Business type",
           editor: { kind: "select", options: CONTACT_BUSINESS_TYPES },
+          editWidth: "min-w-40",
         },
       },
       {
@@ -132,6 +144,13 @@ export function contactImportSpec(
           "new zealand business number",
           "business number",
         ],
+        // Checked on import, so it needs a cell to be fixed in.
+        review: {
+          heading: businessNumberLabel,
+          editor: { kind: "text" },
+          mono: true,
+          editWidth: "min-w-40",
+        },
       },
       {
         label: "Currency",
@@ -187,6 +206,8 @@ export function contactImportSpec(
     issues: [
       {
         message: "Contact name missing",
+        hint: "Required",
+        field: "Contact name",
         summary: "missing a contact name",
         // One character, not two: the backend's rule is a non-empty
         // `contact_name`, and a contact genuinely called "Q" was being refused
@@ -195,6 +216,8 @@ export function contactImportSpec(
       },
       {
         message: "Invalid email",
+        hint: "Not a valid email",
+        field: "Contact email",
         summary: "missing a valid email",
         // Only when there is one. The requirement itself is Client-only, below.
         test: (row) =>
@@ -202,6 +225,8 @@ export function contactImportSpec(
       },
       {
         message: "Email is required for clients",
+        hint: "Required for clients",
+        field: "Contact email",
         summary: "a client with no email",
         test: (row) =>
           /^client$/i.test(row["Type"].trim()) &&
@@ -209,11 +234,15 @@ export function contactImportSpec(
       },
       {
         message: "Type must be Client or Supplier",
+        hint: "Choose Client or Supplier",
+        field: "Type",
         summary: "missing a valid Type",
         test: (row) => !/^(client|supplier)$/i.test(row["Type"].trim()),
       },
       {
         message: "Business type must be Business or Individual",
+        hint: "Choose Business or Individual",
+        field: "Business type",
         summary: "missing a valid Business type",
         // "bussiness" is tolerated because sole-webapp's schema tolerates it,
         // and files exported from it carry that spelling.
@@ -222,6 +251,8 @@ export function contactImportSpec(
       },
       {
         message: "Business name required for Business",
+        hint: "Required for a Business",
+        field: "Business name",
         summary: "missing a business name",
         test: (row) =>
           /^(business|bussiness)$/i.test(row["Business type"].trim()) &&
@@ -229,6 +260,8 @@ export function contactImportSpec(
       },
       {
         message: "Phone must be 8–15 digits",
+        hint: "Use 8–15 digits",
+        field: "Mobile no",
         summary: "carrying an unusable phone number",
         test: (row) =>
           row["Mobile no"].trim() !== "" && !isPhone(row["Mobile no"]),
@@ -237,6 +270,8 @@ export function contactImportSpec(
         // The server checks the number by the business's country and fails the
         // row; caught here instead so it can be fixed before importing.
         message: `${businessNumberLabel} isn't valid`,
+        hint: "Not valid",
+        field: "ABN",
         summary: `carrying an invalid ${businessNumberLabel}`,
         test: (row) =>
           (row["ABN"] ?? "").trim() !== "" &&

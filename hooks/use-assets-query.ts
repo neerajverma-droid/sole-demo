@@ -6,6 +6,7 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type QueryClient,
 } from "@tanstack/react-query";
 
 import {
@@ -31,6 +32,10 @@ import type { BulkRow } from "@/lib/bulk-import";
  * parallel: an asset's `brand`/`assetType` are resolved from
  * `asset_brand_id`/`asset_type_id` at map time, so mapping before the
  * registry is loaded would show every asset with an empty make and type.
+ *
+ * Until the register lands the query is disabled, so its own `isLoading` is
+ * false for that whole first stretch — a screen must read the store's
+ * `hydrated` flag, not this query's `isLoading`, to know it is still waiting.
  */
 export function useAssetsQuery() {
   const setAssets = useAssetsStore((state) => state.setAssets);
@@ -40,7 +45,9 @@ export function useAssetsQuery() {
   const query = useQuery({
     queryKey: ["assets"],
     queryFn: () => fetchAssets(registry ?? { brands: [], types: [] }),
-    enabled: !!registry,
+    // Once the registry has answered, either way: if it failed, the register
+    // still loads (with blank makes and types) rather than never loading.
+    enabled: registryQuery.isSuccess || registryQuery.isError,
   });
 
   React.useEffect(() => {
@@ -75,7 +82,9 @@ export function useFilteredAssetsQuery(filters: AssetAdvancedFilters): {
   const query = useQuery({
     queryKey: ["assets", "filtered", assetFiltersToApi(filters)],
     queryFn: () => fetchAssets(registry ?? { brands: [], types: [] }, filters),
-    enabled: active && !!registry,
+    // Same rule as the unfiltered register: once the registry has answered,
+    // either way — a failed registry mustn't leave a filter loading forever.
+    enabled: active && (registryQuery.isSuccess || registryQuery.isError),
     placeholderData: keepPreviousData,
   });
 
@@ -87,11 +96,26 @@ export function useFilteredAssetsQuery(filters: AssetAdvancedFilters): {
   };
 }
 
-/** Invalidates the assets list — call after any create/update/delete succeeds. */
+/**
+ * Every cached view an asset write can change, by key prefix: the register
+ * (and its filtered views), each asset's detail, depreciation records and
+ * schedules (`["asset-depreciation", id, …]`) and the FY depreciation report.
+ * A save can change the cost, life or method these are all worked out from.
+ */
+export function invalidateAssetQueries(queryClient: QueryClient) {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: ["assets"] }),
+    queryClient.invalidateQueries({ queryKey: ["asset"] }),
+    queryClient.invalidateQueries({ queryKey: ["asset-depreciation"] }),
+    queryClient.invalidateQueries({ queryKey: ["asset-depreciation-report"] }),
+  ]);
+}
+
+/** Invalidates the asset queries — call after any create/update/delete succeeds. */
 export function useInvalidateAssets() {
   const queryClient = useQueryClient();
   return React.useCallback(
-    () => queryClient.invalidateQueries({ queryKey: ["assets"] }),
+    () => invalidateAssetQueries(queryClient),
     [queryClient],
   );
 }

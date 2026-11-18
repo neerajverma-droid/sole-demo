@@ -28,6 +28,7 @@ import {
   SOLEPAY_ID_TYPES,
   directorInvalidIssues,
   directorIssues,
+  latestEligibleDirectorDob,
   saveSolePayDraft,
   type SolePayAddress,
   type SolePayDirector,
@@ -148,6 +149,7 @@ export function SolePayDirectorScreen() {
         <FormSection
           icon={Users}
           title="Director"
+          tourId="solepay-director-details"
           description="As it appears on their photo ID."
           headerClassName={SECTION_HEADER}
           className="space-y-4 p-4 sm:p-6"
@@ -203,6 +205,10 @@ export function SolePayDirectorScreen() {
                 id="director-dob"
                 label="Date of birth"
                 value={director.dateOfBirth}
+                // Only a date that makes the director 18+ today can be
+                // picked -- covers every future date too, since all of
+                // those are after this same cutoff.
+                toDate={latestEligibleDirectorDob()}
                 onChange={(dateOfBirth) => patch({ dateOfBirth })}
               />
               {issues.dateOfBirth ? (
@@ -231,7 +237,10 @@ export function SolePayDirectorScreen() {
           {/* The ID, kept together under a rule: fields that only make sense
               read as a set, and the licence-only two only shown for one of
               the two ID types. */}
-          <div className="space-y-4 border-t border-border pt-4">
+          <div
+            className="space-y-4 border-t border-border pt-4"
+            data-usertour="solepay-director-id"
+          >
             <p className="text-sm font-medium">Identity document</p>
 
             <div className="grid gap-4 sm:grid-cols-2">
@@ -285,6 +294,7 @@ export function SolePayDirectorScreen() {
         <FormSection
           icon={MapPin}
           title="Residential address"
+          tourId="solepay-director-address"
           description="Where this director lives."
           headerClassName={SECTION_HEADER}
           className="space-y-4 p-4 sm:p-6"

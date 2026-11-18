@@ -106,6 +106,24 @@ describe("quote respond items", () => {
     expect(items[1]).toMatchObject({ id: 1, name: "Item 2", qty: 0, rate: 0 });
   });
 
+  it("carries an NDIS line's support item number and claim type", () => {
+    const [ndisLine, generalLine] = normalizeQuoteItems({
+      items: [
+        {
+          description: "Assistance With Self-Care Activities",
+          item_support_no: "01_011_0107_1_1",
+          claim_type: "Standard Service",
+        },
+        { description: "Logo design", item_support_no: null, claim_type: null },
+      ],
+    });
+    expect(ndisLine.supportItemNumber).toBe("01_011_0107_1_1");
+    expect(ndisLine.claimType).toBe("Standard Service");
+    // A general quote's lines carry neither, so nothing extra is shown for them.
+    expect(generalLine.supportItemNumber).toBeUndefined();
+    expect(generalLine.claimType).toBeUndefined();
+  });
+
   it("never reads the has-GST flag as an amount", () => {
     expect(normalizeQuoteItems({ items: [{ gst: true }] })[0].gst).toBe(0);
   });

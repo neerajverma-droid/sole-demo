@@ -1,7 +1,14 @@
 "use client";
 
 import * as React from "react";
-import { ArrowDownLeft, ArrowUpRight, Check, ChevronDown } from "lucide-react";
+import {
+  ArrowDownLeft,
+  ArrowUpRight,
+  Check,
+  ChevronDown,
+  Plus,
+} from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,11 +37,18 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { NumberedPagination } from "@/components/ui/numbered-pagination";
-import { WizardSectionHeading } from "@/components/bulk/wizard-parts";
+import {
+  ERROR_ROW_CLASS,
+  WizardSectionHeading,
+} from "@/components/bulk/wizard-parts";
 import {
   soleFieldIssue,
+  soleFieldIssueCells,
   type ValidatedTransactionRow,
 } from "@/lib/bulk-transactions";
+import { NewBusinessContactDialog } from "@/components/documents/new-business-contact-dialog";
+import { partyOptions } from "@/hooks/use-bulk-transaction-parties";
+import type { InvoiceContact } from "@/lib/invoice-clients";
 import { documentTax } from "@/lib/country-context";
 import { cn } from "@/lib/utils";
 import { useCountryContext } from "@/hooks/use-country-context";
@@ -89,6 +103,13 @@ export function SoleFieldsStep({
   onChange: (index: number, patch: Partial<ValidatedTransactionRow>) => void;
 }) {
   const [page, setPage] = React.useState(1);
+  const queryClient = useQueryClient();
+  /** The row a new client/supplier is being added for, and what was typed. */
+  const [adding, setAdding] = React.useState<{
+    index: number;
+    type: "credit" | "debit";
+    name: string;
+  } | null>(null);
   // "GST" in AU and NZ, "VAT" in ZA, or the business's own name for it.
   const { country } = useCountryContext();
   const taxName = documentTax(country).word;
@@ -160,9 +181,10 @@ export function SoleFieldsStep({
               // either, so those cells stay off rather than merely empty.
               const capital = account?.capital === true;
               const issue = soleFieldIssue(row);
+              const badCells = soleFieldIssueCells(row);
 
               return (
-                <TableRow key={index} className={cn(issue && "bg-warning/5")}>
+                <TableRow key={index} className={cn(issue && ERROR_ROW_CLASS)}>
                   <TableCell className="text-muted-foreground tabular">
                     {index + 1}
                   </TableCell>
@@ -239,8 +261,11 @@ export function SoleFieldsStep({
                     />
                   </TableCell>
 
-                  <TableCell>
+                  <TableCell
+                    className={cn(badCells.includes("client") && "bg-destructive/10")}
+                  >
                     <SearchSelect
+                      invalid={badCells.includes("client")}
                       label={`${credit ? "Client" : "Supplier"}, row ${index + 1}`}
                       placeholder={
                         !matchedRow
@@ -264,6 +289,14 @@ export function SoleFieldsStep({
                         key: party.clientId,
                         label: party.name,
                       }))}
+                      createLabel={credit ? "client" : "supplier"}
+                      onCreate={(name) =>
+                        setAdding({
+                          index,
+                          type: credit ? "credit" : "debit",
+                          name,
+                        })
+                      }
                       onSelect={(clientId) => {
                         const party = parties.find(
                           (option) => option.clientId === clientId,
@@ -286,12 +319,19 @@ export function SoleFieldsStep({
                     />
                   </TableCell>
 
-                  <TableCell>
+                  <TableCell
+                    className={cn(badCells.includes("name") && "bg-destructive/10")}
+                  >
                     {credit || capital ? (
                       <span className="text-sm text-muted-foreground">—</span>
                     ) : (
                       <Input
-                        className="h-8"
+                        className={cn(
+                          "h-8",
+                          badCells.includes("name") &&
+                            "border-destructive focus-visible:ring-destructive",
+                        )}
+                        aria-invalid={badCells.includes("name")}
                         value={row.name ?? ""}
                         disabled={!matchedRow}
                         placeholder={
@@ -326,6 +366,35 @@ export function SoleFieldsStep({
       {/* Said per row, under the table, because the server answers
           all-or-nothing and its message names no row at all. */}
       <SoleFieldIssues rows={rows} />
+
+      {/* Sibling of the table, so closing a picker can't unmount it. */}
+      <NewBusinessContactDialog
+        open={adding !== null}
+        onOpenChange={(open) => !open && setAdding(null)}
+        type={adding?.type === "debit" ? "Supplier" : "Client"}
+        initialName={adding?.name ?? ""}
+        onCreated={async (created) => {
+          if (!adding) return;
+          const { index, type } = adding;
+          const key = ["bulk-parties", type === "credit" ? 1 : 2];
+          onChange(index, {
+            client_id: Number(created.id),
+            contact_id: created.primaryContactId
+              ? Number(created.primaryContactId)
+              : null,
+            client: { id: Number(created.id), name: created.name },
+          });
+          // Refetch so every row's picker lists the new one — and, if the
+          // create didn't say which contact it made, read it from the list.
+          await queryClient.invalidateQueries({ queryKey: key });
+          if (!created.primaryContactId) {
+            const fresh = partyOptions(
+              queryClient.getQueryData<InvoiceContact[]>(key),
+            ).find((party) => party.clientId === created.id);
+            if (fresh) onChange(index, { contact_id: Number(fresh.contactId) });
+          }
+        }}
+      />
 
       {rows.length > PAGE_SIZE && (
         <NumberedPagination
@@ -392,8 +461,11 @@ function SearchSelect({
   value,
   options,
   disabled,
+  invalid,
   onSelect,
   onClear,
+  onCreate,
+  createLabel,
 }: {
   label: string;
   placeholder: string;
@@ -401,10 +473,17 @@ function SearchSelect({
   /** Options sharing a `group` are listed together under it as a heading. */
   options: { key: string; label: string; group?: string }[];
   disabled?: boolean;
+  /** Marks the picker as the field at fault. */
+  invalid?: boolean;
   onSelect: (key: string) => void;
   onClear: () => void;
+  /** Offers "Add new …" under the list; given whatever was typed to search. */
+  onCreate?: (query: string) => void;
+  /** The noun in that entry — "client" or "supplier". */
+  createLabel?: string;
 }) {
   const [open, setOpen] = React.useState(false);
+  const [query, setQuery] = React.useState("");
 
   // Grouped in first-seen order, so the caller's order is the list's order.
   const groups = options.reduce<
@@ -417,7 +496,13 @@ function SearchSelect({
   }, []);
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setQuery("");
+      }}
+    >
       <PopoverTrigger asChild>
         <Button
           type="button"
@@ -426,7 +511,10 @@ function SearchSelect({
           aria-expanded={open}
           aria-label={label}
           disabled={disabled}
-          className="h-8 w-full justify-between px-2 font-normal"
+          className={cn(
+            "h-8 w-full justify-between px-2 font-normal",
+            invalid && "border-destructive",
+          )}
         >
           <span className={cn("truncate", !value && "text-muted-foreground")}>
             {value || placeholder}
@@ -436,7 +524,12 @@ function SearchSelect({
       </PopoverTrigger>
       <PopoverContent className="w-[260px] p-0" align="start">
         <Command>
-          <CommandInput placeholder="Search…" className="h-9" />
+          <CommandInput
+            placeholder="Search…"
+            className="h-9"
+            value={query}
+            onValueChange={setQuery}
+          />
           <CommandList>
             <CommandEmpty>Nothing found.</CommandEmpty>
             {value && (
@@ -477,6 +570,27 @@ function SearchSelect({
               </CommandGroup>
             ))}
           </CommandList>
+
+          {/* Outside CommandList so a search can never filter it away. */}
+          {onCreate && (
+            <button
+              type="button"
+              onClick={() => {
+                const typed = query.trim();
+                setOpen(false);
+                setQuery("");
+                onCreate(typed);
+              }}
+              className="flex w-full items-center gap-2 border-t border-border p-2.5 text-left text-sm font-medium outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
+            >
+              <Plus className="size-4 text-primary" aria-hidden />
+              <span className="min-w-0 flex-1 truncate">
+                {query.trim()
+                  ? `Add "${query.trim()}"`
+                  : `Add new ${createLabel ?? "item"}`}
+              </span>
+            </button>
+          )}
         </Command>
       </PopoverContent>
     </Popover>

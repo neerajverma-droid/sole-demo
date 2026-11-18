@@ -79,3 +79,18 @@ describe("addBrandRecord / addTypeRecord", () => {
     expect(useAssetRegistryStore.getState().brands).toEqual(["Bosch", "Bosch", "Makita"]);
   });
 });
+
+describe("reset", () => {
+  it("empties both lists — a business switch mustn't keep the last one's ids", () => {
+    useAssetRegistryStore.getState().setRegistry({
+      brands: [{ id: 1, name: "DeWalt" }],
+      types: [{ id: 3, name: "New" }],
+    });
+    useAssetRegistryStore.getState().reset();
+    const state = useAssetRegistryStore.getState();
+    expect(state.brandRecords).toEqual([]);
+    expect(state.typeRecords).toEqual([]);
+    expect(state.brands).toEqual([]);
+    expect(state.types).toEqual([]);
+  });
+});

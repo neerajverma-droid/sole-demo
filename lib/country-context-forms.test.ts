@@ -5,6 +5,7 @@ import { contactSchemaFor, contactFormDefaults } from "@/lib/contacts";
 import {
   FALLBACK_COUNTRY_CONTEXT,
   contactDefaultCurrency,
+  contactDefaultDialCode,
   formFieldByKey,
   formFields,
   mapCountryContext,
@@ -117,5 +118,17 @@ describe("mapCurrencyOptions", () => {
       { code: "NZD", label: "New Zealand Dollar" },
       { code: "USD", label: "USD" },
     ]);
+  });
+});
+
+describe("contactDefaultDialCode", () => {
+  it("starts a new contact's phone on the business's dial code", () => {
+    expect(contactDefaultDialCode(FALLBACK_COUNTRY_CONTEXT)).toBe("+61");
+    expect(contactDefaultDialCode(mapCountryContext({ country_iso2: "NZ", phone_dial_code: "+64" }))).toBe("+64");
+  });
+
+  it("works the code out from the country when the registry sends none", () => {
+    expect(contactDefaultDialCode(mapCountryContext({ country_iso2: "NZ" }))).toBe("+64");
+    expect(contactDefaultDialCode(mapCountryContext({ country_iso2: "ZA", phone_dial_code: "27" }))).toBe("+27");
   });
 });

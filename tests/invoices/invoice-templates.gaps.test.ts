@@ -184,34 +184,29 @@ describe("accentForId", () => {
  * ------------------------------------------------------------------ */
 
 describe("filtersForTemplates", () => {
-  it("shows the saved views, then only the categories actually present, in their fixed order", () => {
-    const filters = filtersForTemplates([
-      template({ category: "Support" }),
-      template({ category: "Trades" }),
-      template({ category: "Something custom" }),
-    ]);
-    expect(filters).toEqual(["All", "Favourites", "Recent", "Popular", "Trades", "Support"]);
+  it("shows just All, Created by you and Favourites — no Popular, no category pills", () => {
+    expect(filtersForTemplates()).toEqual(["All", "Created by you", "Favourites"]);
   });
 });
 
 describe("filterTemplates", () => {
   const templates = [
-    template({ id: "1", name: "Bathroom reno", category: "Trades", popular: true }),
-    template({ id: "2", name: "Logo design", category: "Creative", recentlyUsed: true }),
-    template({ id: "3", name: "Strategy day", category: "Consulting" }),
+    template({ id: "1", name: "Bathroom reno", category: "Trades", popular: true, standard: true }),
+    template({ id: "2", name: "Logo design", category: "Creative", standard: false }),
+    template({ id: "3", name: "Strategy day", category: "Consulting", standard: true }),
   ];
   const ids = (list: InvoiceTemplate[]) => list.map((t) => t.id);
 
   it("narrows by the saved views and by category", () => {
+    // Every template, Sole's shared set and the account's own alike.
     expect(ids(filterTemplates(templates, "All", "", []))).toEqual(["1", "2", "3"]);
+    expect(ids(filterTemplates(templates, "Created by you", "", []))).toEqual(["2"]);
     expect(ids(filterTemplates(templates, "Favourites", "", ["3"]))).toEqual(["3"]);
-    expect(ids(filterTemplates(templates, "Recent", "", []))).toEqual(["2"]);
-    expect(ids(filterTemplates(templates, "Popular", "", []))).toEqual(["1"]);
     expect(ids(filterTemplates(templates, "Creative", "", []))).toEqual(["2"]);
   });
 
   it("searches name and category, case-insensitively and trimmed", () => {
-    expect(ids(filterTemplates(templates, "All", "  LOGO ", []))).toEqual(["2"]);
+    expect(ids(filterTemplates(templates, "Created by you", "  LOGO ", []))).toEqual(["2"]);
     expect(ids(filterTemplates(templates, "All", "consult", []))).toEqual(["3"]);
   });
 

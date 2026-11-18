@@ -14,7 +14,7 @@ const shape = (access: AdminAccess) =>
 describe("visibleAdminNav", () => {
   it("shows a super admin every row, including Cash and Admin access", () => {
     const nav = shape({ isSuperAdmin: true, features: [] });
-    expect(nav.Platform).toEqual(["dashboard", "tenants", "users", "countries", "chart-of-accounts"]);
+    expect(nav.Platform).toEqual(["dashboard", "tenants", "users", "countries", "chart-of-accounts", "partners", "resources", "addons"]);
     expect(nav["Command Centre"]).toContain("cc-cash");
     expect(nav.Administration).toEqual(["access"]);
   });
@@ -24,6 +24,21 @@ describe("visibleAdminNav", () => {
       Platform: ["users"],
       "Command Centre": ["command-centre", "cc-growth"],
     });
+  });
+
+  it("shows Partners only with the partners grant", () => {
+    expect(shape(delegated("partners"))).toEqual({ Platform: ["partners"] });
+    expect(shape(delegated("tenants")).Platform).not.toContain("partners");
+  });
+
+  it("never shows Add-ons to a delegated admin, whatever they were granted", () => {
+    const everyGrant = delegated("dashboard", "tenants", "users", "country_config", "partners", "resources", "addons");
+    expect(shape(everyGrant).Platform).not.toContain("addons");
+  });
+
+  it("shows Resources only with the resources grant", () => {
+    expect(shape(delegated("resources"))).toEqual({ Platform: ["resources"] });
+    expect(shape(delegated("partners")).Platform).not.toContain("resources");
   });
 
   it("drops a whole section when nothing in it is granted", () => {

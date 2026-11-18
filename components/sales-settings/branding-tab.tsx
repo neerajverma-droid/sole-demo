@@ -50,6 +50,7 @@ export function BrandingTab({
       <SalesSection
         icon={ImageIcon}
         title="Business logo"
+        tourId="sales-logo"
         description="Printed at the top of every invoice and quote. Crop it before saving so it sits the way you want."
       >
         {pending ? (
@@ -175,6 +176,7 @@ export function BrandingTab({
       <SalesSection
         icon={Palette}
         title="Colours"
+        tourId="sales-colours"
         description="Brand colour is used for headings and the accent rule; content colour is the body text."
       >
         <div className="grid gap-4 sm:grid-cols-2">

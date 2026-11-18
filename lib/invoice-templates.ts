@@ -38,12 +38,16 @@ export const TEMPLATE_CATEGORIES = [
 ] as const;
 export type TemplateCategory = (typeof TEMPLATE_CATEGORIES)[number];
 
-/** The pill row mixes three saved views with the real categories. */
+/**
+ * The views the gallery filters by. "All" is every template — the set Sole
+ * ships and the account's own — and the tab the gallery opens on; "Created by
+ * you" is the account's own; "Favourites" the starred ones. The categories can
+ * still be filtered on, but the gallery's pills show only the three views.
+ */
 export const TEMPLATE_FILTERS = [
   "All",
+  "Created by you",
   "Favourites",
-  "Recent",
-  "Popular",
   ...TEMPLATE_CATEGORIES,
 ] as const;
 export type TemplateFilter = (typeof TEMPLATE_FILTERS)[number];
@@ -142,22 +146,9 @@ export function templateIndustryTag(
   return template.industry === NDIS_INDUSTRY ? "NDIS" : template.industry;
 }
 
-/**
- * Pills for a given collection: the saved views, then only the categories that
- * actually appear in it — an NDIS provider has no use for a Retail pill.
- */
-export function filtersForTemplates(
-  templates: InvoiceTemplate[],
-): TemplateFilter[] {
-  return [
-    "All",
-    "Favourites",
-    "Recent",
-    "Popular",
-    ...TEMPLATE_CATEGORIES.filter((category) =>
-      templates.some((template) => template.category === category),
-    ),
-  ];
+/** The gallery's pills: everything, the account's own, and the starred ones. */
+export function filtersForTemplates(): TemplateFilter[] {
+  return ["All", "Created by you", "Favourites"];
 }
 
 /**
@@ -175,9 +166,8 @@ export function filterTemplates(
   return templates.filter((template) => {
     const matchesFilter =
       filter === "All" ||
+      (filter === "Created by you" && !template.standard) ||
       (filter === "Favourites" && favourites.includes(template.id)) ||
-      (filter === "Recent" && !!template.recentlyUsed) ||
-      (filter === "Popular" && !!template.popular) ||
       template.category === filter;
 
     if (!matchesFilter) return false;

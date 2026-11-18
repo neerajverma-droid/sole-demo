@@ -16,6 +16,7 @@ import {
   type AssetExtraction,
   type AssetFile,
 } from "@/lib/assets";
+import { apiErrorMessage } from "@/lib/api-error";
 import { formatBytes } from "@/lib/expenses";
 import { toIsoDate } from "@/lib/invoices";
 import { cn } from "@/lib/utils";
@@ -54,6 +55,13 @@ export function AssetUploadStep({
     cancelled.current = true;
   }, []);
 
+  /**
+   * Which pick is current. Bumped by every new file and by Remove, so a
+   * reading (or failure) that arrives for an earlier pick is dropped rather
+   * than landing on the wrong file — or on a step that's been cleared.
+   */
+  const request = React.useRef(0);
+
   const [file, setFile] = React.useState<AssetFile>();
   const [phase, setPhase] = React.useState<Phase>("empty");
   const [extraction, setExtraction] = React.useState<AssetExtraction>();
@@ -76,33 +84,43 @@ export function AssetUploadStep({
       return;
     }
 
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result));
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(chosen);
-    });
-    if (cancelled.current) return;
+    const token = ++request.current;
+    const stale = () => cancelled.current || request.current !== token;
+
+    let dataUrl: string;
+    try {
+      dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(chosen);
+      });
+    } catch {
+      if (!stale()) toast.error(`Couldn't read ${chosen.name}.`);
+      return;
+    }
+    if (stale()) return;
 
     setFile({ dataUrl, name: chosen.name, size: chosen.size });
+    setExtraction(undefined);
     setPhase("processing");
 
     try {
       const result = await extractAssetApi(chosen, toIsoDate(new Date()));
-      if (cancelled.current) return;
+      if (stale()) return;
       setExtraction(result);
       setPhase("extracted");
     } catch (error) {
-      if (cancelled.current) return;
-      toast.error(
-        error instanceof Error ? error.message : "Couldn't read that document",
-      );
+      if (stale()) return;
+      toast.error(apiErrorMessage(error, "Couldn't read that document"));
       setFile(undefined);
       setPhase("empty");
     }
   };
 
+  /** Also abandons a reading still in flight — its answer is ignored. */
   const remove = () => {
+    request.current += 1;
     setFile(undefined);
     setExtraction(undefined);
     setPhase("empty");

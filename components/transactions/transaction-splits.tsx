@@ -15,11 +15,13 @@ import { invoiceMoney } from "@/lib/invoices";
 import {
   categoryTone,
   formatTransactionDate,
+  isEntryId,
   matchedTypeOf,
   matchedTypeTone,
   splitTotal,
   splitsBalance,
   type Transaction,
+  type TransactionSplit,
 } from "@/lib/transactions";
 import { cn } from "@/lib/utils";
 import { useTransactionsStore } from "@/stores/transactions";
@@ -37,8 +39,16 @@ import { useTransactionsStore } from "@/stores/transactions";
  */
 export function TransactionSplitRows({
   transaction,
+  onUndo,
 }: {
   transaction: Transaction;
+  /**
+   * A matched line's Undo, as the Matched table's accordion does it — the
+   * caller confirms and undoes the line's journal entry on the server. Lines
+   * with no entry id show "--", as there. Without it, Undo takes a draft line
+   * back locally.
+   */
+  onUndo?: (split: TransactionSplit) => void;
 }) {
   const removeSplit = useTransactionsStore((state) => state.removeSplit);
   const total = splitTotal(transaction);
@@ -76,7 +86,7 @@ export function TransactionSplitRows({
               <TableCell className="py-2 font-medium tabular">
                 {split.id.toUpperCase()}
               </TableCell>
-              <TableCell className="py-2 tabular">
+              <TableCell className="whitespace-nowrap py-2 tabular">
                 {formatTransactionDate(split.date)}
               </TableCell>
               <TableCell className="py-2">
@@ -92,10 +102,13 @@ export function TransactionSplitRows({
                   and repeating it here costs nothing — where a line disagrees
                   with its siblings, this is the only place that says so.
                 */}
-                <span className="flex items-center gap-1.5">
+                {/* Nowrap on both pills: a pill that could wrap ("Sales
+                    Income") let the table size this column for the wrapped
+                    width, and the tag beside it ran into Reference number. */}
+                <span className="flex items-center gap-1.5 whitespace-nowrap">
                   <span
                     className={cn(
-                      "inline-flex shrink-0 rounded-md border px-2 py-0.5 font-medium",
+                      "inline-flex shrink-0 whitespace-nowrap rounded-md border px-2 py-0.5 font-medium",
                       categoryTone(split.category),
                     )}
                   >
@@ -130,12 +143,29 @@ export function TransactionSplitRows({
                 {split.referenceType}
               </TableCell>
               <TableCell className="py-2">{split.clientName}</TableCell>
-              <TableCell className="py-2 text-right font-medium tabular">
+              <TableCell className="whitespace-nowrap py-2 text-right font-medium tabular">
                 {invoiceMoney(split.amount)}
               </TableCell>
               <TableCell className="py-2 text-right">
                 {/* Undo, not Delete: this line was created by splitting, and
                     taking it back returns that much to the unsplit remainder. */}
+                {onUndo ? (
+                  isEntryId(split.id) ? (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onUndo(split);
+                      }}
+                      className="inline-flex items-center gap-1 rounded font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <Undo2 className="size-3" aria-hidden />
+                      Undo
+                    </button>
+                  ) : (
+                    <span className="text-muted-foreground">--</span>
+                  )
+                ) : (
                 <button
                   type="button"
                   onClick={(event) => {
@@ -150,6 +180,7 @@ export function TransactionSplitRows({
                   <Undo2 className="size-3" aria-hidden />
                   Undo
                 </button>
+                )}
               </TableCell>
             </TableRow>
           ))}

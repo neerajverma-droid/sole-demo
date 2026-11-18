@@ -1,4 +1,10 @@
+import type { Metadata } from "next";
+
 import { ProposalPreviewScreen } from "@/components/proposals/proposal-preview-screen";
+
+export const metadata: Metadata = {
+  title: "Proposal preview · Sole",
+};
 
 export default async function ProposalPreviewPage({
   params,

@@ -24,6 +24,9 @@ import {
   type BulkUploadResult,
   type EmployeeWriteBlock,
 } from "@/lib/payroll-employees";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
+import { useTrackOnOpen } from "@/hooks/use-track-once";
 
 /** Hands the browser a blob to save under `filename`. */
 function saveBlob(blob: Blob, filename: string) {
@@ -43,6 +46,11 @@ function countRows(text: string): number {
   return Math.max(0, lines.length - 1);
 }
 
+const EMPLOYEES_CONTEXT = {
+  module_name: "Payroll",
+  sub_module_name: "Employees",
+};
+
 /**
  * Many employees from one CSV — download the template, fill it, upload it.
  *
@@ -59,6 +67,7 @@ export function EmployeeBulkUploadDialog({
   /** The upload would take more seats than are free, or payroll is off. */
   onBlocked: (block: EmployeeWriteBlock, message: string) => void;
 }) {
+  useTrackOnOpen(EVENTS.BULK_UPLOAD_INITIATED, open, EMPLOYEES_CONTEXT);
   const uploadMutation = useBulkUploadEmployeesMutation();
   const [downloading, setDownloading] = React.useState(false);
   const [file, setFile] = React.useState<File | null>(null);
@@ -86,6 +95,7 @@ export function EmployeeBulkUploadDialog({
     }
     setFile(chosen);
     setParseError(null);
+    track(EVENTS.FILE_UPLOADED, EMPLOYEES_CONTEXT);
     try {
       setRowCount(countRows(await chosen.text()));
     } catch {
@@ -112,6 +122,13 @@ export function EmployeeBulkUploadDialog({
     try {
       const { result: next, message } = await uploadMutation.mutateAsync(file);
       setResult(next);
+      if (next.validCount > 0) {
+        track(EVENTS.EMPLOYEE_ADDED, { source: "bulk", count: next.validCount });
+        track(EVENTS.DATA_IMPORTED, {
+          ...EMPLOYEES_CONTEXT,
+          count: next.validCount,
+        });
+      }
       toast.success(message);
     } catch (error) {
       const message = employeeErrorMessage(error, "Failed to upload CSV file.");

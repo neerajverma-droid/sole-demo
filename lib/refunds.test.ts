@@ -1,5 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
+const trackMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/analytics", () => ({ track: trackMock }));
+
 import { decryptPayload } from "@/utils/encrypt";
 import apiRoutes from "@/config/api-routes";
 
@@ -487,5 +490,21 @@ describe("client refunds — filter then paginate", () => {
     const page = paginate(narrowed, 3, 10);
     expect(page.page).toBe(2);
     expect(page.pageCount).toBe(2);
+  });
+});
+
+describe("createClientRefundApi fires its Mixpanel event", () => {
+  it("fires after the server confirms", async () => {
+    trackMock.mockClear();
+    apiMock.post.mockResolvedValue({ data: { success: true, data: {} } });
+    await createClientRefundApi(draft(), 493);
+    expect(trackMock).toHaveBeenCalledWith("client_refund_issued");
+  });
+
+  it("stays silent when the server refuses", async () => {
+    trackMock.mockClear();
+    apiMock.post.mockResolvedValue({ data: { success: false, message: "no" } });
+    await expect(createClientRefundApi(draft(), 493)).rejects.toThrow();
+    expect(trackMock).not.toHaveBeenCalled();
   });
 });

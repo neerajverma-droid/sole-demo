@@ -23,7 +23,12 @@ import {
 } from "@/components/ui/table";
 import { inventoryHistoryIdAtom } from "@/lib/atoms";
 import { invoiceMoney } from "@/lib/invoices";
-import { fetchInventoryHistory, stockAdjustReasonLabel } from "@/lib/inventory";
+import {
+  fetchInventoryHistory,
+  stockAdjustReasonLabel,
+  stockAdjustmentNote,
+  stockMovementDisplay,
+} from "@/lib/inventory";
 import { cn } from "@/lib/utils";
 import { useInventoryStore } from "@/stores/inventory";
 
@@ -117,13 +122,14 @@ export function InventoryHistoryDrawer() {
                     <TableCell
                       className={cn(
                         "text-right font-medium tabular",
-                        entry.quantity > 0
-                          ? "text-success"
-                          : "text-destructive",
+                        {
+                          in: "text-success",
+                          out: "text-destructive",
+                          none: "text-muted-foreground",
+                        }[stockMovementDisplay(entry.quantity).tone],
                       )}
                     >
-                      {entry.quantity > 0 ? "+" : ""}
-                      {entry.quantity}
+                      {stockMovementDisplay(entry.quantity).text}
                     </TableCell>
                     <TableCell className="text-right text-muted-foreground tabular">
                       {entry.unitCost !== null
@@ -131,7 +137,7 @@ export function InventoryHistoryDrawer() {
                         : "—"}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {entry.note || "—"}
+                      {stockAdjustmentNote(entry)}
                     </TableCell>
                     <TableCell className="text-right font-medium tabular">
                       {entry.balanceAfter}

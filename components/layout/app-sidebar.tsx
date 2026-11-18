@@ -68,12 +68,16 @@ import {
   sidebarHiddenAtom,
   sidebarOrderAtom,
 } from "@/lib/atoms";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
 import { actionItems } from "@/lib/quick-actions";
 import { SPRINTLAW_URL } from "@/lib/partner-hubs";
 import { useSidebarSync } from "@/hooks/use-sidebar-sync";
 import { useAddons } from "@/hooks/use-addons";
+import { usePlanLock } from "@/hooks/use-plan-lock";
 import { toIsoDate } from "@/lib/invoices";
 import {
+  ADDITIONAL_NAV,
   ADDONS_SECTION,
   DASHBOARD_NAV,
   MAIN_SECTION,
@@ -85,6 +89,7 @@ import {
   addonRows,
   findOpenGroup,
   isActivePath,
+  isPinnable,
   pinTargets,
   replacedNavIds,
   sectionOrder,
@@ -96,7 +101,7 @@ import {
   type NavSection,
 } from "@/lib/nav";
 import { useCountryContext } from "@/hooks/use-country-context";
-import { returnWord } from "@/lib/country-context";
+import { hasFeature, returnWord, superWord } from "@/lib/country-context";
 import { useAccountIdentity } from "@/hooks/use-account-identity";
 import { cn } from "@/lib/utils";
 import { useExpensesStore } from "@/stores/expenses";
@@ -121,12 +126,33 @@ export function AppSidebar() {
   const [childOrder] = useAtom(sidebarChildOrderAtom);
   const [storedHidden] = useAtom(sidebarHiddenAtom);
   const [extras] = useAtom(sidebarExtraIdsAtom);
+  const activeExtras = React.useMemo(() => {
+    const list = Array.isArray(extras) ? extras : [];
+    return Array.from(new Set([...list, ...ADDITIONAL_NAV.map((item) => item.id)]));
+  }, [extras]);
   /*
    * What's on the plan, from the plan. This used to be a localStorage list that
    * agreed with the subscription only by accident — so the ADD-ONS section
    * could show rows nobody was billed for, and hide ones they were.
    */
-  const { activeIds: added } = useAddons();
+  const { activeIds: addedSlugs, includedIds } = useAddons();
+  const added = React.useMemo(() => {
+    const demoDefaults = [
+      "projects",
+      "scheduling",
+      "time-tracker",
+      "investment",
+      "proposals",
+      "reputation",
+      "tax-estimator",
+      "payroll",
+      "km-tracker",
+    ];
+    return Array.from(
+      new Set([...(addedSlugs ?? []), ...(includedIds ?? []), ...demoDefaults]),
+    );
+  }, [addedSlugs, includedIds]);
+  const lockFor = usePlanLock();
 
   /*
    * `atomWithStorage` hands back whatever localStorage holds, which is whatever
@@ -135,6 +161,16 @@ export function AppSidebar() {
    * three places below that iterate it.
    */
   const hidden = storedHidden ?? [];
+
+  /*
+   * Rows a super admin has switched off for this business's country entirely —
+   * "super" when Super/KiwiSaver contributions isn't on for it. Kept out of
+   * `storedHidden` itself: that atom is the person's own customisation, and
+   * the Customise panel still reads it directly, so this stays a render-time
+   * overlay rather than something a toggle there could accidentally undo.
+   */
+  const { country } = useCountryContext();
+  const featureHidden = hasFeature(country, "super_contributions") ? [] : ["super"];
 
   /*
    * Rows an add-on on the plan has taken over. The asset register is the first:
@@ -158,15 +194,14 @@ export function AppSidebar() {
    * the row's id stays `bas`, because pins, hidden rows and section order are
    * keyed by it and live in this person's own storage.
    */
-  const { country } = useCountryContext();
-  const navWords = { taxReturn: returnWord(country) };
+  const navWords = { taxReturn: returnWord(country), superContributions: superWord(country) };
 
   const sections = localiseNav(
     visibleNav({
       order,
       childOrder,
-      hidden,
-      extras,
+      hidden: [...hidden, ...featureHidden],
+      extras: activeExtras,
       replaced,
       pinned: pinnedIds,
     }),
@@ -180,7 +215,12 @@ export function AppSidebar() {
    * one: they asked to hide Sales, not Invoices.
    */
   const pinned = pinTargets(pinnedIds)
-    .filter((item) => !hidden.includes(item.id) && !replaced.includes(item.id))
+    .filter(
+      (item) =>
+        !hidden.includes(item.id) &&
+        !replaced.includes(item.id) &&
+        !featureHidden.includes(item.id),
+    )
     // A pinned row is the same row, so it reads the same as it does in its
     // own section rather than reverting to the Australian wording.
     .map((item) => ({
@@ -296,7 +336,7 @@ export function AppSidebar() {
   const moveMain = (dragged: string, target: string) =>
     setOrder((current) => {
       const next = reorder(
-        sectionOrder(MAIN_SECTION, current, extras),
+        sectionOrder(MAIN_SECTION, current, activeExtras),
         dragged,
         target,
       );
@@ -342,7 +382,15 @@ export function AppSidebar() {
   const closeMobile = () => setOpenMobile(false);
 
   /** Every row dismisses the mobile sheet; targetless rows also toast. */
-  const selectRow = (label: string, href?: string) => () => {
+  const selectRow = (label: string, href?: string, parent?: string) => () => {
+    if (parent) {
+      track(EVENTS.SUB_MODULE_CLICKED, {
+        module_name: parent,
+        sub_module_name: label,
+      });
+    } else {
+      track(EVENTS.MODULE_CLICKED, { module_name: label });
+    }
     closeMobile();
     if (!href) comingSoon(label);
   };
@@ -356,6 +404,7 @@ export function AppSidebar() {
     pinnedIds,
     onTogglePin: togglePin,
     alwaysShowPin: showFaintPins,
+    isLocked: (href) => !!lockFor(href),
   };
 
   return (
@@ -467,7 +516,10 @@ function FixtureRow({
   return (
     <Link
       href={href}
-      onClick={onNavigate}
+      onClick={() => {
+        track(EVENTS.MODULE_CLICKED, { module_name: label });
+        onNavigate();
+      }}
       aria-current={active ? "page" : undefined}
       className={cn(
         "relative flex w-full items-center gap-3 rounded-md py-2 pl-3 pr-2 text-left outline-none",
@@ -613,24 +665,24 @@ function DraggableRows({
             key={item.id}
             {...(drag
               ? {
-                  draggable: true,
-                  onDragStart: (event: React.DragEvent) => {
-                    event.dataTransfer.effectAllowed = "move";
-                    // Firefox starts no drag at all without payload.
-                    event.dataTransfer.setData("text/plain", item.id);
-                    drag.onStart(item.id);
-                  },
-                  onDragEnter: () => drag.onEnter(item.id),
-                  // Without this the row refuses the drop and the drag ends
-                  // nowhere.
-                  onDragOver: (event: React.DragEvent) =>
-                    event.preventDefault(),
-                  onDrop: (event: React.DragEvent) => {
-                    event.preventDefault();
-                    drag.onEnd();
-                  },
-                  onDragEnd: drag.onEnd,
-                }
+                draggable: true,
+                onDragStart: (event: React.DragEvent) => {
+                  event.dataTransfer.effectAllowed = "move";
+                  // Firefox starts no drag at all without payload.
+                  event.dataTransfer.setData("text/plain", item.id);
+                  drag.onStart(item.id);
+                },
+                onDragEnter: () => drag.onEnter(item.id),
+                // Without this the row refuses the drop and the drag ends
+                // nowhere.
+                onDragOver: (event: React.DragEvent) =>
+                  event.preventDefault(),
+                onDrop: (event: React.DragEvent) => {
+                  event.preventDefault();
+                  drag.onEnd();
+                },
+                onDragEnd: drag.onEnd,
+              }
               : {})}
             className={cn("transition-opacity", beingDragged && "opacity-50")}
           >
@@ -716,11 +768,13 @@ type EntryContext = {
   pathname: string;
   openGroup: string | null;
   onToggleGroup: (id: string) => void;
-  onSelectRow: (label: string, href?: string) => () => void;
+  onSelectRow: (label: string, href?: string, parent?: string) => () => void;
   pinnedIds: string[];
   onTogglePin: (id: string) => void;
   /** Faint always-on pin icons, until the first pin teaches the gesture. */
   alwaysShowPin: boolean;
+  /** The plan doesn't include this route — see `usePlanLock`. */
+  isLocked: (href?: string) => boolean;
 };
 
 /**
@@ -733,11 +787,13 @@ function NavEntry({
   item,
   entry,
   depth = 0,
+  parentLabel,
   className,
 }: {
   item: RowItem;
   entry: EntryContext;
   depth?: 0 | 1;
+  parentLabel?: string;
   /** Passed to the row itself — the grab cursor a draggable list wants. */
   className?: string;
 }) {
@@ -745,6 +801,18 @@ function NavEntry({
     pinned: entry.pinnedIds.includes(item.id),
     onToggle: () => entry.onTogglePin(item.id),
     alwaysVisible: entry.alwaysShowPin,
+    /*
+     * The same question `lib/nav.ts`'s `PIN_TARGETS` was built to answer, asked
+     * here instead of re-derived from `hasChildren` — which is what `NavRow`
+     * did on its own until now, and `hasChildren` alone says nothing about
+     * add-ons. A single-page add-on has no children either, so it read as
+     * pinnable by that test alone and picked up a working-looking pin button
+     * for a row `pinTargets` was built to refuse: the id can't resolve in
+     * PINNED, so the pin just sat on the add-on row, filled in, doing nothing —
+     * and if the add-on was later removed from the plan, an invisible pinned id
+     * outlived it until `useAddons`' own cleanup caught it on removal.
+     */
+    pinnable: isPinnable(item.id),
   };
 
   if (item.children?.length) {
@@ -765,13 +833,16 @@ function NavEntry({
       href={item.href}
       tone={item.tone}
       depth={depth}
+      locked={entry.isLocked(item.href)}
       active={!!item.href && isActivePath(entry.pathname, item.href)}
       // A group that reaches here has children in the catalogue but none left
       // on screen — every one switched off. It has nothing to open and nowhere
       // of its own to go, so it isn't "coming soon" either. (The all-pinned
       // version of the same emptiness never gets here: `visibleNav` drops it.)
       onClick={
-        item.children ? undefined : entry.onSelectRow(item.label, item.href)
+        item.children
+          ? undefined
+          : entry.onSelectRow(item.label, item.href, parentLabel)
       }
       pin={pin}
       className={className}
@@ -835,6 +906,13 @@ function CollapsibleNavItem({
   className?: string;
 }) {
   const isOpen = entry.openGroup === item.id;
+  // Locked as a group only when every page under it is: Transactions' three
+  // all are, but a group with one open page still has somewhere to go.
+  const childHrefs = (item.children ?? []).flatMap((child) =>
+    child.href ? [child.href] : [],
+  );
+  const locked =
+    childHrefs.length > 0 && childHrefs.every((href) => entry.isLocked(href));
   const hasActiveChild = !!item.children?.some(
     (child) => child.href && isActivePath(entry.pathname, child.href),
   );
@@ -842,7 +920,10 @@ function CollapsibleNavItem({
   return (
     <Collapsible
       open={isOpen}
-      onOpenChange={() => entry.onToggleGroup(item.id)}
+      onOpenChange={() => {
+        if (!isOpen) track(EVENTS.MODULE_CLICKED, { module_name: item.label });
+        entry.onToggleGroup(item.id);
+      }}
     >
       <CollapsibleTrigger asChild>
         <NavRow
@@ -851,6 +932,7 @@ function CollapsibleNavItem({
           tone={item.tone}
           hasChildren
           expanded={isOpen}
+          locked={locked}
           // A collapsed group owning the current route reads as active.
           active={hasActiveChild && !isOpen}
           pin={pin}
@@ -861,7 +943,12 @@ function CollapsibleNavItem({
         <ul className="mt-0.5 space-y-0.5">
           {item.children?.map((child) => (
             <li key={child.id}>
-              <NavEntry item={child} entry={entry} depth={1} />
+              <NavEntry
+                item={child}
+                entry={entry}
+                depth={1}
+                parentLabel={item.label}
+              />
             </li>
           ))}
         </ul>

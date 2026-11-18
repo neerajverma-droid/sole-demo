@@ -9,10 +9,13 @@
 
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { amountError } from "@/lib/expenses";
-import { resolveInventoryAccountId } from "@/lib/inventory";
+import {
+  depreciationErrors,
+  isValidIsoDate,
+  typedNumberForApi,
+} from "@/lib/asset-validation";
+import { resolveAssetSubcategoryIdByName } from "@/lib/inventory";
 import { invoiceMoney } from "@/lib/invoices";
 
 export const ASSET_CATEGORIES = [
@@ -29,6 +32,46 @@ export type AssetCategory = (typeof ASSET_CATEGORIES)[number];
 
 /** The one category that carries stock, and so reveals the tracking block. */
 export const TRACKED_CATEGORY: AssetCategory = "Inventory";
+
+/**
+ * Which "Assets → …" account on the user's chart of accounts each category
+ * posts to, by subcategory name. The one place to change it: saving resolves
+ * the name to the user's own `account_subcategory_id` (see
+ * `resolveAssetAccountSubcategoryId`), and an old asset with no category of
+ * its own is read back the other way (see `categoryFromAccountName`).
+ */
+export const ASSET_CATEGORY_ACCOUNTS: Record<AssetCategory, string> = {
+  Equipment: "Plant and Equipment",
+  Tools: "Plant and Equipment",
+  Vehicle: "Motor Vehicles",
+  Technology: "Office Equipment",
+  Furniture: "Office Equipment",
+  Property: "Other Assets",
+  Other: "Other Assets",
+  Inventory: "Inventory",
+};
+
+/** Where a category's account falls back to when the user's chart lacks it. */
+export const FALLBACK_ASSET_ACCOUNT = "Other Assets";
+
+/**
+ * The reverse of `ASSET_CATEGORY_ACCOUNTS`, for an asset saved before it had
+ * a category of its own — several categories share an account, so each
+ * account reads back as the one category that stands for it.
+ */
+const ACCOUNT_TO_ASSET_CATEGORY: Record<string, AssetCategory> = {
+  inventory: "Inventory",
+  "motor vehicles": "Vehicle",
+  "plant and equipment": "Equipment",
+  "office equipment": "Technology",
+};
+
+/** The category an account name stands for — anything unrecognised is Other. */
+export function categoryFromAccountName(
+  name: string | null | undefined,
+): AssetCategory {
+  return ACCOUNT_TO_ASSET_CATEGORY[(name ?? "").trim().toLowerCase()] ?? "Other";
+}
 
 /** One row of `/asset-registry/brands` or `/asset-registry/types`. */
 export type AssetRegistryEntry = { id: number; name: string };
@@ -58,14 +101,33 @@ export function registryMatch(
   return values.find((value) => value.toLowerCase() === needle);
 }
 
-export const UNIT_TYPES = [
-  "Items",
-  "Hours",
-  "Kilograms",
-  "Litres",
-  "Metres",
-  "Boxes",
-] as const;
+/**
+ * How a stock asset is counted — the same four units the Inventory module
+ * (`QUANTITY_TYPES` in `lib/inventory.ts`) understands, since the linked
+ * stock item is a `custom_product_service` row the Inventory screen reads.
+ */
+export const UNIT_TYPES = ["Items", "Hours", "Days", "Km"] as const;
+export type UnitType = (typeof UNIT_TYPES)[number];
+
+/** The `qty_type` the linked stock item stores — lower-case, "items" by default. */
+export function unitTypeToApi(unitType: string): string {
+  const match = UNIT_TYPES.find(
+    (option) => option.toLowerCase() === unitType.trim().toLowerCase(),
+  );
+  return (match ?? "Items").toLowerCase();
+}
+
+/**
+ * A stored `qty_type` back as a label. Blank stays blank, and so does anything
+ * the Inventory module doesn't know (an old "Kilograms"): the picker can't show
+ * it, and quietly reading it as Items would rewrite the unit on the next save.
+ * Unit type is required for an Inventory asset, so the user is asked to pick.
+ */
+export function unitTypeFromApi(value: string | null | undefined): string {
+  const needle = (value ?? "").trim().toLowerCase();
+  if (!needle) return "";
+  return UNIT_TYPES.find((option) => option.toLowerCase() === needle) ?? "";
+}
 
 export const DEPRECIATION_METHODS = [
   "Straight line",
@@ -92,6 +154,20 @@ export const ASSET_SORTS = [
   "Name A–Z",
 ] as const;
 export type AssetSort = (typeof ASSET_SORTS)[number];
+
+/**
+ * One bank-transaction match on an asset — a journal entry reconciled against
+ * it. An asset paid in instalments carries several, and each can be undone on
+ * its own (`journal_entry_id` on the undo endpoint).
+ */
+export type AssetMatchedEntry = {
+  journalEntryId: string;
+  bankTransactionId: string | null;
+  description: string;
+  amount: number;
+  /** ISO timestamp, or empty. */
+  matchedAt: string;
+};
 
 /** A file kept with the asset — a photo, a receipt, or a supporting document. */
 export type AssetFile = {
@@ -182,12 +258,6 @@ export type Asset = {
   costPrice: string;
   /** ISO `YYYY-MM-DD`. */
   purchaseDate: string;
-  /**
-   * Amount typed as still owed. Local to this session — the backend has no
-   * column for it, so read the figure through `assetOwing`, which also draws on
-   * `paidWithCash` and `remainingAmount`.
-   */
-  owing: string;
   /** Whether `costPrice` already contains GST. */
   gst: boolean;
   paidWithCash: boolean;
@@ -197,6 +267,12 @@ export type Asset = {
   tracked: boolean;
   openingStock: string;
   lowStockAlert: string;
+  /**
+   * What the linked stock item sells for — filled into quote and invoice
+   * lines when it's picked. Optional: blank leaves the item's own price as is
+   * (0 for a new one).
+   */
+  salePrice?: string;
   /**
    * The `custom_product_service` row this asset is linked to, once one
    * exists — set by picking an existing tracked item from the asset-name
@@ -256,9 +332,29 @@ export type Asset = {
   remainingAmount: number;
   /** Unreconciled bank transactions within tolerance of the price — "AI Match" when > 0. */
   possibleMatchCount: number;
+  /**
+   * The bank matches behind `remainingAmount`, newest first — from the list
+   * response only (`matched_journal_entries`); empty on the detail fetch.
+   */
+  matchedJournalEntries?: AssetMatchedEntry[];
+
+  /**
+   * The chart-of-accounts subcategory the asset was loaded with — `null` for
+   * a new asset or one saved without an account. An update only sends a new
+   * account when the category was changed in that edit (or there was none),
+   * so an existing asset is never silently moved to a different account.
+   */
+  accountSubcategoryId: string | null;
 };
 
-export type AssetDraft = Omit<Asset, "id">;
+/**
+ * What the form edits. The category may be blank on a new asset — it has to
+ * be chosen rather than defaulted, since it decides the account the cost
+ * posts to.
+ */
+export type AssetDraft = Omit<Asset, "id" | "category"> & {
+  category: AssetCategory | "";
+};
 
 export const MAX_DOCUMENTS = 5;
 export const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
@@ -283,9 +379,14 @@ function gstInside(total: number, ratePercent: number): number {
  * line the Expenses list draws, and sole-webapp's own ("This asset is already
  * reconciled and can't be edited"). The Edit action is left out for a matched
  * asset rather than shown disabled; View is still there, and so is Undo.
+ *
+ * Paid with cash counts as matched too — the register shows it with the same
+ * Matched badge, and its cash payment is undone before an edit.
  */
-export function canEditAsset(asset: Pick<Asset, "isReconciled">): boolean {
-  return !asset.isReconciled;
+export function canEditAsset(
+  asset: Pick<Asset, "isReconciled" | "paidWithCash">,
+): boolean {
+  return !asset.isReconciled && !asset.paidWithCash;
 }
 
 export function assetValue(asset: Pick<Asset, "costPrice">): number {
@@ -296,32 +397,23 @@ export function assetValue(asset: Pick<Asset, "costPrice">): number {
 /**
  * What's still unpaid on an asset.
  *
- * The typed "Still owing" figure has no column on the backend, so on its own it
- * made every synced asset read as paid — which is why the Paid filter returned
- * the whole register and Owing returned nothing. The books do record whether an
- * asset has been paid, just not in that field, so it's worked out from there:
+ * Worked out from what the books record:
  *
  * - Paid with cash: nothing owing.
- * - A figure typed in this session: that figure (it's the only place the
- *   amount financed is ever stated, until it's refetched).
  * - Otherwise what's left after the bank transactions matched to it —
  *   `remainingAmount`, which is the full price until a payment is matched.
  */
 export function assetOwing(
-  asset: Pick<Asset, "owing"> &
-    Partial<Pick<Asset, "paidWithCash" | "remainingAmount">>,
+  asset: Partial<Pick<Asset, "paidWithCash" | "remainingAmount">>,
 ): number {
   if (asset.paidWithCash) return 0;
-  const typed = Number((asset.owing || "0").replace(/,/g, ""));
-  if (Number.isFinite(typed) && typed > 0) return typed;
   const remaining = Number(asset.remainingAmount);
   // Sub-cent residue from price − matched is rounding, not a debt.
   return Number.isFinite(remaining) && remaining >= 0.005 ? remaining : 0;
 }
 
 export function isPaid(
-  asset: Pick<Asset, "owing"> &
-    Partial<Pick<Asset, "paidWithCash" | "remainingAmount">>,
+  asset: Partial<Pick<Asset, "paidWithCash" | "remainingAmount">>,
 ): boolean {
   return assetOwing(asset) === 0;
 }
@@ -366,6 +458,50 @@ export function assetExGstValue(
   return asset.gst ? value - gstInside(value, ratePercent) : value;
 }
 
+/**
+ * IRD's general depreciation rates, with the estimated useful life each is set
+ * for: [life in years, diminishing value %, straight line %] (IR265, assets
+ * acquired from 21 May 2010). The same table sole-ocr's
+ * `services/assetDepreciation.js` posts with (`NZ_RATE_TABLE`), so the preview
+ * shows what will actually be claimed. Keep the two in step.
+ */
+export const NZ_DEPRECIATION_RATES: readonly (readonly [number, number, number])[] = [
+  [2, 100, 100],
+  [3, 67, 67],
+  [4, 50, 40],
+  [5, 40, 30],
+  [6.66, 30, 21],
+  [8, 25, 17.5],
+  [10, 20, 13.5],
+  [12.5, 16, 10.5],
+  [15.5, 13, 8.5],
+  [20, 10, 7],
+  [25, 8, 6],
+  [33.3, 6, 4],
+  [50, 4, 3],
+  [100, 2, 1.5],
+];
+
+/**
+ * The yearly rate, as a fraction, an effective life gives — the rule the
+ * backend applies when no rate is entered. Australia (and any other country):
+ * straight line 1 ÷ life, diminishing value 200% of that. New Zealand: IRD's
+ * published rate for the nearest life it publishes.
+ */
+export function rateFromLife(
+  method: "Straight line" | "Diminishing value",
+  life: number,
+  countryIso2: string = "AU",
+): number {
+  if (countryIso2 === "NZ") {
+    const [, dv, sl] = NZ_DEPRECIATION_RATES.reduce((best, row) =>
+      Math.abs(row[0] - life) < Math.abs(best[0] - life) ? row : best,
+    );
+    return (method === "Straight line" ? sl : dv) / 100;
+  }
+  return method === "Straight line" ? 1 / life : 2 / life;
+}
+
 /** A typed figure as a number, floored at zero. Blank and rubbish both read 0. */
 function typedAmount(value: string): number {
   const parsed = Number(value.replace(/,/g, ""));
@@ -399,6 +535,8 @@ export function depreciationPreview(
   values: AssetDepreciation,
   /** The business's GST/VAT rate, in percentage points. */
   ratePercent: number = 10,
+  /** The business's country: it decides the rate an effective life gives. */
+  countryIso2: string = "AU",
 ): DepreciationPreview {
   const exGst = asset.gst;
   const base = assetExGstValue(asset, ratePercent);
@@ -438,6 +576,18 @@ export function depreciationPreview(
   }
 
   if (values.method === "Straight line") {
+    if (countryIso2 === "NZ") {
+      // IRD's straight-line rate, applied to cost less any residual — the same
+      // base the backend's schedule writes off.
+      const rate = rateFromLife("Straight line", life, countryIso2);
+      return {
+        depreciableCost,
+        openingBookValue,
+        rate,
+        annualDepreciation: (depreciableCost - residual) * rate,
+        exGst,
+      };
+    }
     return {
       depreciableCost,
       openingBookValue,
@@ -447,9 +597,9 @@ export function depreciationPreview(
     };
   }
 
-  // Diminishing value: the ATO's 200% of the straight-line rate, unless a rate
-  // has been entered by hand.
-  const rate = override > 0 ? override / 100 : 2 / life;
+  // Diminishing value: the ATO's 200% of the straight-line rate (IRD's
+  // published rate in New Zealand), unless a rate has been entered by hand.
+  const rate = override > 0 ? override / 100 : rateFromLife("Diminishing value", life, countryIso2);
   return {
     depreciableCost,
     openingBookValue,
@@ -650,14 +800,18 @@ export type AssetStats = {
 };
 
 export function assetStats(assets: Asset[]): AssetStats {
-  const totalValue = assets.reduce((sum, asset) => sum + assetValue(asset), 0);
+  // A disposed asset is no longer held or depreciating, so it stays out of the
+  // value and the depreciating count — but anything still owed on it is owed.
+  const held = assets.filter((asset) => !isDisposed(asset));
+  const totalValue = held.reduce((sum, asset) => sum + assetValue(asset), 0);
+  const heldOwing = held.reduce((sum, asset) => sum + assetOwing(asset), 0);
   const owingValue = assets.reduce((sum, asset) => sum + assetOwing(asset), 0);
   return {
     totalValue,
     // What's actually yours: the value less anything still financed.
-    paidValue: totalValue - owingValue,
+    paidValue: totalValue - heldOwing,
     owingValue,
-    depreciatingCount: assets.filter((asset) => asset.depreciation.enabled)
+    depreciatingCount: held.filter((asset) => asset.depreciation.enabled)
       .length,
     paidCount: assets.filter(isPaid).length,
     owingCount: assets.filter((asset) => !isPaid(asset)).length,
@@ -844,13 +998,24 @@ export type AssetIssue = { key: string; message: string };
  * the one that's incomplete rather than reporting an error you can't see.
  */
 export const ASSET_STEP_FIELDS: string[][] = [
-  ["name", "costPrice", "purchaseDate", "supplier", "category", "unitType"],
+  ["name", "costPrice", "purchaseDate", "supplier", "category", "unitType", "salePrice"],
   ["brand", "assetType"],
   [],
-  ["effectiveLife"],
+  ["effectiveLife", "overrideRate", "residualValue", "costLimit"],
 ];
 
-export function assetIssues(draft: AssetDraft): AssetIssue[] {
+export function assetIssues(
+  draft: AssetDraft,
+  /** The business's GST/VAT rate, in percentage points — for the ex-GST cap. */
+  gstRatePercent: number = 10,
+  /**
+   * `advanced: false` is a plan without Advanced Assets: its form has no
+   * Details or Depreciation step (old AddAssets: Asset + Photos only), so make,
+   * type and depreciation are neither asked nor checked.
+   */
+  options: { advanced?: boolean } = {},
+): AssetIssue[] {
+  const advanced = options.advanced !== false;
   const issues: AssetIssue[] = [];
   const require = (key: string, value: string, message: string) => {
     if (!value.trim()) issues.push({ key, message });
@@ -866,26 +1031,52 @@ export function assetIssues(draft: AssetDraft): AssetIssue[] {
   }
 
   require("purchaseDate", draft.purchaseDate, "When was it bought?");
-  require("supplier", draft.supplierName, "Who did you buy it from?");
+  if (!draft.supplierName.trim()) {
+    issues.push({ key: "supplier", message: "Who did you buy it from?" });
+  } else if (!draft.supplierId) {
+    // A name with no contact behind it (an OCR reading, say) would save with
+    // no supplier at all — the backend only keeps `client_id`.
+    issues.push({
+      key: "supplier",
+      message: "Pick the supplier from your contacts, or add it.",
+    });
+  }
   require("category", draft.category, "Pick a category.");
 
   // Only asked for once the category is the one that carries stock.
   if (draft.category === TRACKED_CATEGORY) {
     require("unitType", draft.unitType, "Pick a unit type.");
+    const salePrice = amountError(draft.salePrice ?? "");
+    if (salePrice) {
+      issues.push({ key: "salePrice", message: salePrice });
+    }
   }
+
+  if (!advanced) return issues;
 
   require("brand", draft.brand, "Enter the make or brand.");
   require("assetType", draft.assetType, "Pick an asset type.");
 
+  // The depreciation screen's rules: an effective life of at least six months
+  // (none for a full write-off), an override rate only for diminishing value,
+  // residual and cost limit 0 or more and no more than the ex-GST cost. The cap
+  // is skipped while the cost itself is missing — that has its own issue on
+  // step one.
   if (draft.depreciation.enabled) {
-    const life = draft.depreciation.effectiveLife.trim();
-    if (!life) {
-      issues.push({
-        key: "effectiveLife",
-        message: "Enter an effective life.",
-      });
-    } else if (!Number.isFinite(Number(life)) || Number(life) <= 0) {
-      issues.push({ key: "effectiveLife", message: "Years must be a number." });
+    const errors = depreciationErrors(draft.depreciation, {
+      assetValue:
+        assetValue(draft) > 0 ? assetExGstValue(draft, gstRatePercent) : null,
+      fullWriteOff: draft.depreciation.method === "Full depreciation on purchase",
+      overrideRateApplies: draft.depreciation.method === "Diminishing value",
+    });
+    for (const key of [
+      "effectiveLife",
+      "overrideRate",
+      "residualValue",
+      "costLimit",
+    ] as const) {
+      const message = errors[key];
+      if (message) issues.push({ key, message });
     }
   }
 
@@ -915,18 +1106,19 @@ export const EMPTY_DEPRECIATION: AssetDepreciation = {
 export function emptyAssetDraft(today: string): AssetDraft {
   return {
     name: "",
-    category: "Inventory",
+    // Chosen, not defaulted: it decides which account the cost posts to.
+    category: "",
     supplierId: null,
     supplierName: "",
     costPrice: "",
     purchaseDate: today,
-    owing: "",
     gst: true,
     paidWithCash: false,
     unitType: "",
     tracked: false,
     openingStock: "",
     lowStockAlert: "",
+    salePrice: "",
     inventoryProductId: null,
     brand: "",
     // Empty, not "New": the first entry of a list is not a default, and a form
@@ -947,6 +1139,8 @@ export function emptyAssetDraft(today: string): AssetDraft {
     isReconciled: false,
     remainingAmount: 0,
     possibleMatchCount: 0,
+    matchedJournalEntries: [],
+    accountSubcategoryId: null,
   };
 }
 
@@ -996,12 +1190,10 @@ export function assetStatsCards(stats: AssetStats) {
  * Backend wiring — sole-ocr's /assets, /asset-registry and
  * /asset-insurance resources.
  *
- * `owing` (financed / still-owed) has no column on the backend's `assets`
- * table — confirmed against both the Sequelize model and sole-webapp's own
- * submit payload. It stays local-only: never sent, never hydrated from a
- * fetch. What a synced asset still owes is derived instead in `assetOwing`,
- * from `paid_with_cash` and the matched-payment `remainingAmount` the list
- * response does carry.
+ * There is no "still owing" field: the `assets` table has no column for it
+ * (and the old app never had one). What an asset still owes is derived in
+ * `assetOwing`, from `paid_with_cash` and the matched-payment `remainingAmount`
+ * the list response carries.
  *
  * Bank-transaction reconciliation (`isReconciled`/`remainingAmount`/
  * `possibleMatchCount`) is read-only from this module — mapped straight
@@ -1031,12 +1223,38 @@ export function depreciationMethodFromApi(value: string | null): DepreciationMet
   return (value && DEPRECIATION_METHOD_FROM_API[value]) || "Straight line";
 }
 
+/** A category name from the fixed list, case-insensitively — or undefined. */
+function matchCategory(value: string | null | undefined): AssetCategory | undefined {
+  const needle = (value ?? "").trim().toLowerCase();
+  return ASSET_CATEGORIES.find((category) => category.toLowerCase() === needle);
+}
+
 /** Matches a category name against the fixed list, case-insensitively. */
 export function categoryFromApi(value: string | null): AssetCategory {
-  const needle = (value ?? "").trim().toLowerCase();
+  return matchCategory(value) ?? "Other";
+}
+
+/**
+ * The category a saved asset reads back as.
+ *
+ * A linked stock item makes it Inventory whatever else is stored — reading it
+ * as anything else would save it without `is_inventory_category`, and the
+ * backend soft-deletes the stock item behind an asset that's no longer
+ * Inventory. Then the stored category if it's one of ours; an older asset
+ * holds null or a type name ("Laptop") there, so its account decides instead.
+ */
+export function categoryForApiAsset(raw: {
+  inventory_product_id?: number | string | null;
+  asset_category?: string | null;
+  subcategory_name?: string | null;
+  account_subcategory?: { name?: string | null } | null;
+}): AssetCategory {
+  if (raw.inventory_product_id != null && raw.inventory_product_id !== "") {
+    return "Inventory";
+  }
   return (
-    ASSET_CATEGORIES.find((category) => category.toLowerCase() === needle) ??
-    "Other"
+    matchCategory(raw.asset_category) ??
+    categoryFromAccountName(raw.account_subcategory?.name ?? raw.subcategory_name)
   );
 }
 
@@ -1073,6 +1291,14 @@ export type AssetRegistrySnapshot = {
  */
 type ApiAssetDocument = { id: number | string; file_path: string; file_name: string };
 
+type ApiMatchedJournalEntry = {
+  journal_entry_id?: number | string | null;
+  bank_transaction_id?: number | string | null;
+  transaction_description?: string | null;
+  matched_amount?: number | string | null;
+  matched_at?: string | null;
+};
+
 type ApiAsset = {
   asset_id?: number | string;
   id?: number | string;
@@ -1093,6 +1319,11 @@ type ApiAsset = {
   remainingAmount?: number | string | null;
   possible_match?: number | string | null;
   inventory_product_id?: number | string | null;
+  account_subcategory_id?: number | string | null;
+  subcategory_name?: string | null;
+  account_subcategory?: { name?: string | null } | null;
+  /** List response only — every journal entry reconciled against the asset. */
+  matched_journal_entries?: ApiMatchedJournalEntry[] | null;
   documents?: ApiAssetDocument[];
   /**
    * Lost/damaged/stolen *and* disposal share one row (`AssetStatus`) — a
@@ -1118,6 +1349,8 @@ type ApiAsset = {
   qty_type?: string | null;
   inventory_count?: number | string | null;
   low_stock_threshold?: number | string | null;
+  /** The linked stock item's sale price. */
+  selling_price?: number | string | null;
   is_depreciation?: number | boolean | null;
   depreciation_method?: string | null;
   effective_life_years?: number | string | null;
@@ -1126,6 +1359,22 @@ type ApiAsset = {
   cost_limit?: number | string | null;
   depreciation_start_date?: string | null;
 };
+
+/**
+ * A saved photo slot's display name, with the extension of the stored file —
+ * the receipt slot takes PDFs, and naming one `receipt.jpg` made the preview
+ * treat it as an image. Falls back to `.jpg` when the URL carries none.
+ */
+export function savedPhotoName(slot: AssetPhotoSlot, url: string): string {
+  let path = url;
+  try {
+    path = new URL(url).pathname;
+  } catch {
+    path = url.split(/[?#]/)[0];
+  }
+  const extension = /\.([a-z0-9]{1,5})$/i.exec(path)?.[1];
+  return `${slot}.${extension ? extension.toLowerCase() : "jpg"}`;
+}
 
 /** A backend row, as the `Asset` every screen in this module reads. */
 function mapApiAssetToAsset(
@@ -1138,7 +1387,7 @@ function mapApiAssetToAsset(
 
   const photos: Partial<Record<AssetPhotoSlot, AssetFile>> = {};
   const photoUrl = (slot: AssetPhotoSlot, url: string | null | undefined) => {
-    if (url) photos[slot] = { dataUrl: url, name: `${slot}.jpg`, size: 0 };
+    if (url) photos[slot] = { dataUrl: url, name: savedPhotoName(slot, url), size: 0 };
   };
   photoUrl("photo", raw.asset_photo_url);
   photoUrl("serial", raw.serial_no_photo_url);
@@ -1155,20 +1404,22 @@ function mapApiAssetToAsset(
   return {
     id,
     name: raw.name ?? "",
-    category: categoryFromApi(raw.asset_category ?? null),
+    category: categoryForApiAsset(raw),
     supplierId: raw.client_id != null ? String(raw.client_id) : null,
     supplierName: raw.client?.business_name || raw.client?.name || "",
     costPrice: Number.isFinite(priceValue) && priceValue > 0 ? String(priceValue) : "",
     purchaseDate: raw.date_of_purchase ?? "",
-    // No backend column — see the note above this section.
-    owing: "",
     gst: Boolean(Number(raw.gst)),
     paidWithCash: Boolean(Number(raw.paid_with_cash)),
 
-    unitType: tracked ? (raw.qty_type ?? "") : "",
+    // Read whenever there's a linked stock item, tracked or not: an untracked
+    // Inventory asset still needs its unit to pass validation on the next save.
+    unitType: unitTypeFromApi(raw.qty_type),
     tracked,
     openingStock: tracked ? String(Number(raw.inventory_count) || 0) : "",
     lowStockAlert: tracked ? String(Number(raw.low_stock_threshold) || 0) : "",
+    salePrice:
+      Number(raw.selling_price) > 0 ? String(Number(raw.selling_price)) : "",
     inventoryProductId:
       raw.inventory_product_id != null ? String(raw.inventory_product_id) : null,
 
@@ -1208,6 +1459,20 @@ function mapApiAssetToAsset(
     isReconciled: Boolean(Number(raw.is_reconciled)),
     remainingAmount: raw.remainingAmount != null ? Number(raw.remainingAmount) : 0,
     possibleMatchCount: Number(raw.possible_match) || 0,
+    matchedJournalEntries: (raw.matched_journal_entries ?? [])
+      .filter((entry) => Number(entry.journal_entry_id) > 0)
+      .map((entry) => ({
+        journalEntryId: String(entry.journal_entry_id),
+        bankTransactionId:
+          entry.bank_transaction_id != null ? String(entry.bank_transaction_id) : null,
+        description: entry.transaction_description ?? "",
+        amount: Number(entry.matched_amount) || 0,
+        matchedAt: entry.matched_at ?? "",
+      })),
+    accountSubcategoryId:
+      raw.account_subcategory_id != null && raw.account_subcategory_id !== ""
+        ? String(raw.account_subcategory_id)
+        : null,
   };
 }
 
@@ -1228,19 +1493,36 @@ function isFreshFile(file: AssetFile | undefined): file is AssetFile {
 }
 
 /**
- * The one account subcategory an Inventory-category asset's cost posts to —
- * the same "Assets → Inventory" lookup `lib/inventory.ts` already resolves
- * for a tracked stock item. No other asset category has a confirmed
- * chart-of-accounts subcategory name to match against, so this only resolves
- * for the one category proven against sole-webapp's own submit payload —
- * guessing a subcategory for the rest risks silently misfiling the asset
- * under the wrong account, which omitting the field never does.
+ * The chart-of-accounts subcategory a category's cost posts to: the user's own
+ * "Assets → …" account named in `ASSET_CATEGORY_ACCOUNTS`, found the same way
+ * the Inventory form finds "Inventory". Falls back to "Other Assets" when the
+ * named account isn't on the user's chart, and to `null` (nothing sent) when
+ * that isn't either — without an account the backend can't post the journal,
+ * so sending one is what lets "Paid with cash" save at all.
  */
-async function resolveAssetAccountSubcategoryId(
-  category: AssetCategory,
+export async function resolveAssetAccountSubcategoryId(
+  category: AssetCategory | "",
 ): Promise<number | null> {
-  if (category === TRACKED_CATEGORY) return resolveInventoryAccountId();
-  return null;
+  if (!category) return null;
+  const named = await resolveAssetSubcategoryIdByName(
+    ASSET_CATEGORY_ACCOUNTS[category],
+  );
+  if (named != null) return named;
+  return resolveAssetSubcategoryIdByName(FALLBACK_ASSET_ACCOUNT);
+}
+
+/**
+ * Whether an update should (re)resolve the asset's account from its category.
+ *
+ * Only when the category was changed in this edit, or the asset was never
+ * given an account — otherwise an existing asset keeps whatever account it
+ * was filed under, even if the mapping has moved on since.
+ */
+export function shouldResolveAccountOnUpdate(
+  draft: Pick<AssetDraft, "category">,
+  original: Pick<Asset, "category" | "accountSubcategoryId">,
+): boolean {
+  return draft.category !== original.category || !original.accountSubcategoryId;
 }
 
 /**
@@ -1251,15 +1533,50 @@ async function resolveAssetAccountSubcategoryId(
  *
  * A photo slot is only appended when it's a freshly picked file
  * (`isFreshFile`) — on update, leaving an existing photo's field out of the
- * form entirely is what keeps it in place; sending it empty would clear it.
+ * form entirely is what keeps it in place; a saved slot the user removed is
+ * cleared with `remove_photos` (see `removedPhotoFields`), on update only.
  * Documents are only attached inline on create — an update's new documents
  * go through `attachAssetDocumentApi` instead, the same split sole-webapp's
  * own form makes.
+ *
+ * Without Advanced Assets (`advanced: false`) the form has no Details or
+ * Depreciation step and only the asset photo slot, so none of those fields
+ * are sent — an OCR-read serial or warranty date would otherwise be saved
+ * from fields the user never saw. On update, leaving them out keeps the
+ * stored values.
  */
+/** Each photo slot and the `/assets/create|update` field that carries it. */
+const PHOTO_FIELDS: [AssetPhotoSlot, string][] = [
+  ["photo", "asset_photo"],
+  ["serial", "serial_no_photo"],
+  ["receipt", "receipt_photo"],
+  ["marks", "identifiable_marks_photo"],
+];
+
+/**
+ * The saved photo slots this edit removed, as the field names `/assets/update`
+ * clears through `remove_photos`. Leaving a field out keeps the stored photo,
+ * so a slot the user emptied has to be named. A slot holding a new file is
+ * replaced by the upload instead; on the basic plan only the asset photo slot
+ * is on the form, so only it can have been removed.
+ */
+export function removedPhotoFields(
+  saved: Partial<Record<AssetPhotoSlot, AssetFile>>,
+  draft: Partial<Record<AssetPhotoSlot, AssetFile>>,
+  advanced = true,
+): string[] {
+  return PHOTO_FIELDS.filter(
+    ([slot]) => (advanced || slot === "photo") && saved[slot] && !draft[slot],
+  ).map(([, field]) => field);
+}
+
 async function assetDraftToFormData(
   draft: AssetDraft,
   registry: AssetRegistrySnapshot,
   mode: "create" | "update",
+  /** False leaves `account_subcategory_id` out, keeping the stored account. */
+  resolveAccount = true,
+  advanced = true,
 ): Promise<FormData> {
   const form = new FormData();
 
@@ -1271,9 +1588,9 @@ async function assetDraftToFormData(
   form.append("client_id", draft.supplierId ?? "");
   form.append("client_name", draft.supplierName.trim());
 
-  const accountSubcategoryId = await resolveAssetAccountSubcategoryId(
-    draft.category,
-  );
+  const accountSubcategoryId = resolveAccount
+    ? await resolveAssetAccountSubcategoryId(draft.category)
+    : null;
   if (accountSubcategoryId != null) {
     form.append("account_subcategory_id", String(accountSubcategoryId));
   }
@@ -1283,12 +1600,18 @@ async function assetDraftToFormData(
     form.append("is_inventory_category", "1");
     form.append("is_inventory", tracked ? "1" : "0");
     form.append("inventory_flag", tracked ? "1" : "0");
-    form.append("qty_type", draft.unitType || "Items");
+    // The linked stock item's own vocabulary, so the Inventory screen can read it.
+    form.append("qty_type", unitTypeToApi(draft.unitType));
     form.append("inventory_count", String(tracked ? Number(draft.openingStock) || 0 : 0));
     form.append(
       "low_stock_threshold",
       String(tracked ? Number(draft.lowStockAlert) || 0 : 0),
     );
+    // Blank sends nothing, so an existing item's own sale price is kept.
+    const salePrice = (draft.salePrice ?? "").replace(/,/g, "").trim();
+    if (salePrice) {
+      form.append("selling_price", String(Number(salePrice)));
+    }
     // Links to an existing product instead of letting the backend create a
     // second, duplicate one behind this asset — set when a suggestion from
     // the asset-name autocomplete already had one.
@@ -1297,24 +1620,21 @@ async function assetDraftToFormData(
     }
   }
 
-  const brand = registryEntryByName(registry.brands, draft.brand);
-  if (brand) form.append("asset_brand_id", String(brand.id));
-  const assetType = registryEntryByName(registry.types, draft.assetType);
-  if (assetType) form.append("asset_type_id", String(assetType.id));
   form.append("asset_category", draft.category);
-  form.append("model_no", draft.modelNo || "");
-  form.append("serial_no", draft.serialNo || "");
-  form.append("identifiable_marks", draft.identifyingMarks || "");
-  if (draft.warrantyExpiry) form.append("warranty_date", draft.warrantyExpiry);
-  if (draft.testAndTagDate) form.append("test_and_tag_date", draft.testAndTagDate);
+  if (advanced) {
+    const brand = registryEntryByName(registry.brands, draft.brand);
+    if (brand) form.append("asset_brand_id", String(brand.id));
+    const assetType = registryEntryByName(registry.types, draft.assetType);
+    if (assetType) form.append("asset_type_id", String(assetType.id));
+    form.append("model_no", draft.modelNo || "");
+    form.append("serial_no", draft.serialNo || "");
+    form.append("identifiable_marks", draft.identifyingMarks || "");
+    if (draft.warrantyExpiry) form.append("warranty_date", draft.warrantyExpiry);
+    if (draft.testAndTagDate) form.append("test_and_tag_date", draft.testAndTagDate);
+  }
 
-  const photoFields: [AssetPhotoSlot, string][] = [
-    ["photo", "asset_photo"],
-    ["serial", "serial_no_photo"],
-    ["receipt", "receipt_photo"],
-    ["marks", "identifiable_marks_photo"],
-  ];
-  for (const [slot, field] of photoFields) {
+  for (const [slot, field] of PHOTO_FIELDS) {
+    if (!advanced && slot !== "photo") continue;
     const photo = draft.photos[slot];
     if (isFreshFile(photo)) {
       const file = await fileFromDataUrl(photo);
@@ -1329,16 +1649,29 @@ async function assetDraftToFormData(
     }
   }
 
-  if (draft.depreciation.enabled) {
+  if (!advanced) {
+    // No Depreciation step on this plan: nothing sent, so the server keeps
+    // whatever the asset already has.
+  } else if (draft.depreciation.enabled) {
+    const { method } = draft.depreciation;
     form.append("is_depreciation", "1");
-    form.append(
-      "depreciation_method",
-      DEPRECIATION_METHOD_TO_API[draft.depreciation.method],
-    );
-    form.append("effective_life_years", draft.depreciation.effectiveLife || "");
-    form.append("depreciation_rate", draft.depreciation.overrideRate || "");
-    form.append("residual_value", draft.depreciation.residualValue || "");
-    form.append("cost_limit", draft.depreciation.costLimit || "");
+    form.append("depreciation_method", DEPRECIATION_METHOD_TO_API[method]);
+    // Only what applies to the method, as on the depreciation screen: a full
+    // write-off has no life or rate, and only diminishing value takes a rate.
+    if (method !== "Full depreciation on purchase") {
+      form.append(
+        "effective_life_years",
+        typedNumberForApi(draft.depreciation.effectiveLife),
+      );
+    }
+    if (method === "Diminishing value") {
+      form.append(
+        "depreciation_rate",
+        typedNumberForApi(draft.depreciation.overrideRate),
+      );
+    }
+    form.append("residual_value", typedNumberForApi(draft.depreciation.residualValue));
+    form.append("cost_limit", typedNumberForApi(draft.depreciation.costLimit));
     form.append(
       "depreciation_start_date",
       draft.depreciation.startDate || draft.purchaseDate,
@@ -1396,11 +1729,24 @@ export async function fetchAssetDetails(
   return mapApiAssetToAsset(response.data.data, registry);
 }
 
+/** What the payload builder needs to know about the plan. */
+export type AssetSaveOptions = {
+  /** False on a plan without Advanced Assets — see `assetDraftToFormData`. */
+  advanced?: boolean;
+};
+
 export async function createAssetApi(
   draft: AssetDraft,
   registry: AssetRegistrySnapshot,
+  options: AssetSaveOptions = {},
 ): Promise<void> {
-  const form = await assetDraftToFormData(draft, registry, "create");
+  const form = await assetDraftToFormData(
+    draft,
+    registry,
+    "create",
+    true,
+    options.advanced !== false,
+  );
   const response = await api.post<ApiEnvelope<unknown>>(
     apiRoutes.asset.add,
     form,
@@ -1409,22 +1755,31 @@ export async function createAssetApi(
     throw new Error(response.data?.message || "Failed to create asset.");
   }
 
-  // `value` rather than `amount`, matching the contract — an asset has a cost
-  // price, not a transaction amount, and calling them the same thing would
-  // invite someone to sum the two together.
-  track(EVENTS.ASSET_ADDED, {
-    value: assetValue(draft),
-    is_financed: assetOwing(draft) > 0,
-  });
 }
 
 export async function updateAssetApi(
   id: string,
   draft: AssetDraft,
   registry: AssetRegistrySnapshot,
+  /**
+   * The asset as it was loaded for this edit. Without it the account is
+   * resolved from the category, as on create.
+   */
+  original?: Pick<Asset, "category" | "accountSubcategoryId"> &
+    Partial<Pick<Asset, "photos">>,
+  options: AssetSaveOptions = {},
 ): Promise<void> {
-  const form = await assetDraftToFormData(draft, registry, "update");
+  const advanced = options.advanced !== false;
+  const form = await assetDraftToFormData(
+    draft,
+    registry,
+    "update",
+    original ? shouldResolveAccountOnUpdate(draft, original) : true,
+    advanced,
+  );
   form.append("asset_id", id);
+  const removed = removedPhotoFields(original?.photos ?? {}, draft.photos, advanced);
+  if (removed.length > 0) form.append("remove_photos", removed.join(","));
   const response = await api.post<ApiEnvelope<unknown>>(
     apiRoutes.asset.update,
     form,
@@ -1477,6 +1832,63 @@ export async function deleteAssetDocumentApi(documentId: string): Promise<void> 
   if (!response.data?.success) {
     throw new Error(response.data?.message || "Failed to remove file.");
   }
+}
+
+/** Whether a document is one already on the server (it has a URL, not data). */
+export function isSavedAssetFile(file: AssetFile): boolean {
+  return !isFreshFile(file);
+}
+
+export type AssetDocumentSyncResult = {
+  uploaded: number;
+  removed: number;
+  /** One line per document that couldn't be attached or removed. */
+  failures: string[];
+};
+
+/**
+ * Brings an existing asset's documents in line with the edit form.
+ *
+ * `/assets/update` doesn't read `files[]`, so on an edit the form's document
+ * list is applied here instead: every freshly picked file is attached, and
+ * every saved document that was in `before` but is gone from `after` is
+ * deleted by its id. Each is tried on its own, so one bad file doesn't stop
+ * the rest — what failed comes back rather than throwing, since the asset
+ * itself has already been saved by then.
+ */
+export async function syncAssetDocumentsApi(
+  assetId: string,
+  before: AssetFile[],
+  after: AssetFile[],
+): Promise<AssetDocumentSyncResult> {
+  const result: AssetDocumentSyncResult = { uploaded: 0, removed: 0, failures: [] };
+  const kept = new Set(after.map((file) => file.id).filter(Boolean));
+
+  for (const file of before) {
+    if (!file.id || kept.has(file.id)) continue;
+    try {
+      await deleteAssetDocumentApi(file.id);
+      result.removed += 1;
+    } catch (error) {
+      result.failures.push(
+        `${file.name}: ${error instanceof Error ? error.message : "couldn't be removed"}`,
+      );
+    }
+  }
+
+  for (const file of after) {
+    if (!isFreshFile(file)) continue;
+    try {
+      await attachAssetDocumentApi(assetId, file);
+      result.uploaded += 1;
+    } catch (error) {
+      result.failures.push(
+        `${file.name}: ${error instanceof Error ? error.message : "couldn't be attached"}`,
+      );
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -1571,9 +1983,11 @@ export async function extractAssetApi(
       category: categoryFromApi(fields.category ?? null),
       supplierName: fields.supplier ?? "",
       costPrice: Number.isFinite(priceValue) && priceValue > 0 ? String(priceValue) : "",
-      purchaseDate: fields.date_of_purchase || today,
+      // Only a real YYYY-MM-DD reaches the draft — the reader can return
+      // "15/03/2026" or "2026-02-30", which the date pickers can't hold.
+      purchaseDate: isValidIsoDate(fields.date_of_purchase) ? fields.date_of_purchase : today,
       serialNo: fields.serial_no ?? "",
-      warrantyExpiry: fields.warranty_expiry ?? "",
+      warrantyExpiry: isValidIsoDate(fields.warranty_expiry) ? fields.warranty_expiry : "",
       gst: true,
     },
   };
@@ -1643,26 +2057,34 @@ export async function saveAssetDepreciationApi(
     {
       asset_id: assetId,
       depreciation_method: DEPRECIATION_METHOD_TO_API[values.method],
-      effective_life_years: values.effectiveLife || null,
-      depreciation_rate: values.overrideRate || null,
-      residual_value: values.residualValue || null,
-      cost_limit: values.costLimit || null,
+      // Only what applies to the method, as the screen's disabled fields say.
+      effective_life_years:
+        values.method === "Full depreciation on purchase"
+          ? null
+          : typedNumberForApi(values.effectiveLife) || null,
+      depreciation_rate:
+        values.method === "Diminishing value"
+          ? typedNumberForApi(values.overrideRate) || null
+          : null,
+      residual_value: typedNumberForApi(values.residualValue) || null,
+      cost_limit: typedNumberForApi(values.costLimit) || null,
       start_date: values.startDate,
     },
   );
   if (!response.data?.success || !response.data.data) {
     throw new Error(response.data?.message || "Failed to save depreciation.");
   }
-  // Which method people actually choose is the useful part — the depreciation
-  // flow offers four and the UI is built around the assumption that one of
-  // them is the common case.
-  track(EVENTS.DEPRECIATION_REPORT_RUN, { method: values.method });
   return mapApiDepreciation(response.data.data);
 }
 
-export async function deleteAssetDepreciationApi(depreciationId: string): Promise<void> {
+/**
+ * `DELETE /assets/depreciation/:id` — where `:id` is the **asset** id: the
+ * backend looks up the asset's active depreciation record itself
+ * (`assetDepreciation` service's `deleteDepreciation(…, asset_id)`).
+ */
+export async function deleteAssetDepreciationApi(assetId: string): Promise<void> {
   const response = await api.delete<ApiEnvelope<unknown>>(
-    apiRoutes.asset.depreciation.delete + depreciationId,
+    apiRoutes.asset.depreciation.delete + assetId,
   );
   if (!response.data?.success) {
     throw new Error(response.data?.message || "Failed to remove depreciation.");
@@ -1711,8 +2133,8 @@ function insurancePayload(record: AssetInsurance) {
     insurer_email: record.insurerEmail,
     broker_name: record.brokerName,
     broker_phone: record.brokerPhone,
-    coverage_amount: record.coverageAmount || 0,
-    premium_amount: record.premiumAmount || null,
+    coverage_amount: typedNumberForApi(record.coverageAmount) || 0,
+    premium_amount: typedNumberForApi(record.premiumAmount) || null,
     start_date: record.startDate,
     end_date: record.endDate,
     notes: record.notes,
@@ -1737,7 +2159,6 @@ export async function createAssetInsuranceApi(
   if (!response.data?.success || !response.data.data) {
     throw new Error(response.data?.message || "Failed to add insurance.");
   }
-  track(EVENTS.ASSET_INSURANCE_RECORDED);
   return mapApiInsurance(response.data.data);
 }
 
@@ -1776,12 +2197,47 @@ export async function sendAssetInsuranceReportApi(recordId: string): Promise<voi
  * Disposal — /assets/disposal
  * ------------------------------------------------------------------ */
 
+/**
+ * What `GET /assets/disposal/:id` knows about an asset. `disposedDate` is
+ * empty while the asset is still held (see `hasDisposal`) — the record still
+ * comes back then, because the suggested sale value from its insurance cover
+ * is what the disposal form starts from.
+ */
 export type AssetDisposalRecord = {
   disposedDate: string;
   saleValue: string;
+  /** The latest policy's coverage amount, or empty. */
   suggestedSaleValue: string;
+  /** That policy's end date, or empty. */
+  insuranceEndDate: string;
 };
 
+/** Whether a disposal has actually been recorded — the date is the disposal. */
+export function hasDisposal(
+  record: Pick<AssetDisposalRecord, "disposedDate"> | null | undefined,
+): boolean {
+  return !!record?.disposedDate;
+}
+
+/**
+ * What the insurer says the asset is worth, if anyone has said — the disposal
+ * form's starting sale value.
+ *
+ * The server's own suggestion first (the latest policy's coverage, which
+ * `GET /assets/disposal/:id` returns whether or not a disposal exists).
+ * Failing that, the first policy on file: a second policy on the same asset
+ * covers something narrower — tools in transit, say — so the first is the one
+ * that stands for the whole thing. A suggestion either way; the field stays
+ * editable.
+ */
+export function suggestedDisposalSaleValue(
+  disposal: Pick<AssetDisposalRecord, "suggestedSaleValue"> | null | undefined,
+  insurance: Pick<AssetInsurance, "coverageAmount">[],
+): string {
+  return disposal?.suggestedSaleValue || insurance[0]?.coverageAmount || "";
+}
+
+/** `null` only when the server has nothing at all for the asset (a 404). */
 export async function fetchAssetDisposal(
   assetId: string,
 ): Promise<AssetDisposalRecord | null> {
@@ -1791,15 +2247,17 @@ export async function fetchAssetDisposal(
         disposed_date?: string | null;
         sale_value?: number | string | null;
         suggested_sale_value?: number | string | null;
+        insurance_end_date?: string | null;
       }>
     >(apiRoutes.asset.disposal.byAsset + assetId);
     const data = response.data?.data;
-    if (!data?.disposed_date) return null;
+    if (!data) return null;
     return {
-      disposedDate: data.disposed_date,
+      disposedDate: data.disposed_date ?? "",
       saleValue: data.sale_value != null ? String(data.sale_value) : "",
       suggestedSaleValue:
         data.suggested_sale_value != null ? String(data.suggested_sale_value) : "",
+      insuranceEndDate: data.insurance_end_date ?? "",
     };
   } catch (error) {
     const status = (error as { response?: { status?: number } }).response?.status;
@@ -1817,7 +2275,7 @@ export async function recordAssetDisposalApi(
     {
       asset_id: assetId,
       disposed_date: values.disposedDate,
-      sale_value: values.saleValue || null,
+      sale_value: typedNumberForApi(values.saleValue) || null,
     },
   );
   if (!response.data?.success) {

@@ -4,7 +4,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useAtom, useSetAtom } from "jotai";
 import { useQuery } from "@tanstack/react-query";
-import { FileSignature, Loader2 } from "lucide-react";
+import { FileSignature } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -15,13 +15,35 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
+import { Shimmer } from "@/components/ui/shimmer";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
 import { commandOpenAtom, viewProposalIdAtom } from "@/lib/atoms";
-import { searchTargets } from "@/lib/nav";
+import { searchTargets, type SearchTarget } from "@/lib/nav";
 import { fetchProposalsPage, proposalStatusLabel } from "@/lib/proposals";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 
 /** Below this the server's title search would match nearly everything. */
 const MIN_RECORD_QUERY = 2;
+
+/**
+ * The events the rail sends for the same destination, so a module opened from
+ * search counts as opened. A sub-module (Invoices, under Sales) is its module
+ * opened too — the rail's group click — so it sends both. Shortcuts and
+ * resources ("Create invoice", a widget) aren't modules and send nothing.
+ */
+function reportSearchNavigation(target: SearchTarget): void {
+  if (target.kind === "module") {
+    track(EVENTS.MODULE_CLICKED, { module_name: target.label, source: "search" });
+  } else if (target.kind === "sub_module" && target.parent) {
+    track(EVENTS.MODULE_CLICKED, { module_name: target.parent, source: "search" });
+    track(EVENTS.SUB_MODULE_CLICKED, {
+      module_name: target.parent,
+      sub_module_name: target.label,
+      source: "search",
+    });
+  }
+}
 
 export function CommandPalette() {
   const router = useRouter();
@@ -99,12 +121,20 @@ export function CommandPalette() {
                 </span>
               </CommandItem>
             ))}
-            {searchingProposals && proposals.length === 0 && (
-              <CommandItem disabled value={`proposal-searching ${query}`}>
-                <Loader2 className="animate-spin text-muted-foreground" aria-hidden />
-                <span className="text-muted-foreground">Searching proposals…</span>
-              </CommandItem>
-            )}
+            {searchingProposals && proposals.length === 0 &&
+              // Skeleton rows while the search is on its way.
+              [0, 1, 2].map((index) => (
+                <CommandItem
+                  key={`proposal-skeleton-${index}`}
+                  disabled
+                  value={`proposal-searching-${index} ${query}`}
+                  aria-label="Searching proposals"
+                >
+                  <Shimmer className="size-4 rounded" />
+                  <Shimmer className="h-3.5 w-48" />
+                  <Shimmer className="ml-auto h-3 w-12" />
+                </CommandItem>
+              ))}
           </CommandGroup>
         )}
         <CommandGroup heading="Go to">
@@ -115,6 +145,7 @@ export function CommandPalette() {
               onSelect={() => {
                 setOpen(false);
                 if (target.href) {
+                  reportSearchNavigation(target);
                   router.push(target.href);
                 } else {
                   toast(`${target.label} is coming soon`);

@@ -13,6 +13,7 @@ import {
   type AssetFile,
   type BulkDeleteResult,
 } from "@/lib/assets";
+import { useAssetAccess } from "@/components/assets/asset-access";
 import { useInvalidateAssets } from "@/hooks/use-assets-query";
 import { useAssetRegistryStore } from "@/stores/asset-registry";
 
@@ -63,6 +64,7 @@ export function useDuplicateAssetMutation() {
   const invalidateAssets = useInvalidateAssets();
   const brandRecords = useAssetRegistryStore((state) => state.brandRecords);
   const typeRecords = useAssetRegistryStore((state) => state.typeRecords);
+  const { advanced } = useAssetAccess();
   return useMutation({
     mutationFn: (source: Asset) => {
       const { id: _id, ...draft } = source;
@@ -72,14 +74,23 @@ export function useDuplicateAssetMutation() {
         name: `${source.name} (copy)`,
         serialNo: "",
         // A fresh, unreconciled asset of its own — not the original's match.
+        // Unpaid too: copying "paid with cash" would post a second cash
+        // payment for money that only left once.
+        paidWithCash: false,
         isReconciled: false,
         remainingAmount: assetValue(draft),
         possibleMatchCount: 0,
+        matchedJournalEntries: [],
         // A copy is a second physical thing — it gets its own product record
-        // rather than sharing the original's stock.
+        // rather than sharing the original's stock, and starts with none.
         inventoryProductId: null,
+        openingStock: "",
       };
-      return createAssetApi(copy, { brands: brandRecords, types: typeRecords });
+      return createAssetApi(
+        copy,
+        { brands: brandRecords, types: typeRecords },
+        { advanced },
+      );
     },
     onSuccess: () => invalidateAssets(),
   });

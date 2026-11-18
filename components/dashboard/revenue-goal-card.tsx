@@ -20,17 +20,21 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Shimmer } from "@/components/ui/shimmer";
-import { useFiscalYearStart } from "@/hooks/use-fiscal-year-start";
+import { useDashboardPeriod } from "@/hooks/use-dashboard-period";
 import { accountStageAtom } from "@/lib/atoms";
 import { money } from "@/lib/dashboard-data";
-import { currentFinancialYear, financialYearRevenue } from "@/lib/invoices";
+import { financialYearRevenue } from "@/lib/invoices";
 import {
   useRevenueGoalQuery,
   useSaveRevenueGoalMutation,
 } from "@/hooks/use-goal-tracker-query";
 import { useDashboardStore } from "@/stores/dashboard";
-import { useInvoicesStore } from "@/stores/invoices";
 import { activeCurrencySymbol } from "@/lib/country-context";
+import { useIsDashboardDemo } from "@/hooks/use-dashboard-demo";
+import {
+  useDashboardGoalTarget,
+  useDashboardInvoices,
+} from "@/hooks/use-dashboard-source";
 
 /**
  * Progress against the year's target.
@@ -44,14 +48,23 @@ import { activeCurrencySymbol } from "@/lib/country-context";
 export function RevenueGoalCard() {
   const goalQuery = useRevenueGoalQuery();
   const stage = useAtomValue(accountStageAtom);
-  const goalTarget = useDashboardStore((s) => s.goalTarget);
-  const invoices = useInvoicesStore((s) => s.invoices);
-  const invoicesHydrated = useInvoicesStore((s) => s.hydrated);
+  const goalTarget = useDashboardGoalTarget();
+  const { invoices, hydrated: invoicesHydrated } = useDashboardInvoices();
+  // The sample's goal is made up; editing it would save a real goal while the
+  // card kept showing the sample's, so it waits for the real figures.
+  const demo = useIsDashboardDemo();
   const [editing, setEditing] = React.useState(false);
   const loading = goalQuery.isLoading || !invoicesHydrated;
 
-  const fiscalYearStart = useFiscalYearStart();
-  const year = currentFinancialYear(new Date(), fiscalYearStart);
+  /*
+   * The goal is a year's, so it's measured against the financial year the
+   * chosen period sits in — the current one for Monthly and Yearly, last
+   * year's for Previous Year — as sole-webapp's goal tracker was. Last year's
+   * goal is history, so it can't be edited from there.
+   */
+  const { window: periodWindow } = useDashboardPeriod();
+  const year = periodWindow.financialYear;
+  const readOnly = periodWindow.isPast;
   const isActive = stage === "active";
 
   /*
@@ -62,7 +75,13 @@ export function RevenueGoalCard() {
   const billed = financialYearRevenue(isActive ? invoices : [], year);
   const earned = billed.amount;
 
-  const pct = goalTarget > 0 ? Math.min((earned / goalTarget) * 100, 100) : 0;
+  // The real share of the goal achieved — can pass 100% — and the bar's fill,
+  // which can't. $217,830 of $200,000 is 108%, not "100% complete".
+  const achievedPct = goalTarget > 0 ? (earned / goalTarget) * 100 : 0;
+  const pct = Math.min(achievedPct, 100);
+  const goalExceeded = goalTarget > 0 && earned > goalTarget;
+  // Rounded down, so 99.6% short of the goal never reads as "100%".
+  const achievedLabel = `${Math.floor(achievedPct)}%`;
   const monthlyTarget = goalTarget > 0 ? Math.round(goalTarget / 12) : 0;
 
   /*
@@ -86,18 +105,31 @@ export function RevenueGoalCard() {
           <CardTitle className="text-base">Revenue goal</CardTitle>
           <p className="text-xs text-muted-foreground">{year.label}</p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setEditing(true)}
+          data-usertour="dashboard-edit-goal"
+          disabled={readOnly || demo}
+          title={
+            demo
+              ? "This is sample data. You can set your own goal once the tour ends."
+              : readOnly
+                ? "Switch to Yearly or Monthly to edit this year's goal"
+                : undefined
+          }
+        >
           <Pencil className="text-muted-foreground" />
           Edit goal
         </Button>
       </CardHeader>
 
-      <CardContent className="space-y-5">
+      <CardContent className="space-y-3">
         {loading ? (
           <>
-            <Shimmer className="h-8 w-40" />
+            <Shimmer className="h-7 w-40" />
             <Shimmer className="h-2 w-full" />
-            <div className="grid grid-cols-3 gap-4 border-t pt-4">
+            <div className="grid grid-cols-3 gap-4 border-t pt-3">
               <Shimmer className="h-10 w-full" />
               <Shimmer className="h-10 w-full" />
               <Shimmer className="h-10 w-full" />
@@ -105,8 +137,8 @@ export function RevenueGoalCard() {
           </>
         ) : (
           <>
-            <div className="flex flex-wrap items-baseline gap-2">
-              <span className="text-2xl font-semibold tracking-tight tabular">
+            <div className="flex flex-wrap items-baseline gap-x-2">
+              <span className="text-2xl font-semibold leading-8 tracking-tight tabular">
                 <CountUp value={earned} format={money} />
               </span>
               <span className="text-sm text-muted-foreground tabular">
@@ -114,17 +146,19 @@ export function RevenueGoalCard() {
               </span>
             </div>
 
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground">Progress</span>
                 <span className="font-medium tabular">
-                  {Math.round(pct)}% complete
+                  {goalExceeded
+                    ? `${achievedLabel} of goal · exceeded`
+                    : `${achievedLabel} complete`}
                 </span>
               </div>
               <Progress value={pct} aria-label="Revenue goal progress" />
             </div>
 
-            <dl className="grid grid-cols-3 gap-4 border-t pt-4">
+            <dl className="grid grid-cols-3 gap-4 border-t pt-3">
               <Stat
                 label="To stay on track"
                 value={
@@ -174,7 +208,7 @@ function Stat({
   return (
     <div>
       <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="mt-1 text-base font-semibold tabular">
+      <dd className="mt-0.5 text-base font-semibold tabular">
         {value}
         {suffix && (
           <span className="text-xs font-normal text-muted-foreground">

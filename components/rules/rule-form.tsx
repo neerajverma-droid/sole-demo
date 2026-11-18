@@ -64,6 +64,10 @@ import {
   type RuleType,
 } from "@/lib/rules";
 import { cn } from "@/lib/utils";
+import { EVENTS } from "@/lib/analytics-events";
+import { useTrackOnce } from "@/hooks/use-track-once";
+import { track } from "@/lib/analytics";
+import { bulkTransactionsContext } from "@/lib/analytics-modules";
 
 export function RuleForm({
   ruleId,
@@ -77,6 +81,10 @@ export function RuleForm({
    */
   onDone?: () => void;
 }) {
+  const ruleModule = {
+    module_name: onDone ? bulkTransactionsContext().module_name : "Transactions",
+  };
+  useTrackOnce(EVENTS.MATCHING_RULE_INITIATED, !ruleId, ruleModule);
   const router = useRouter();
   const queryClient = useQueryClient();
   const embedded = !!onDone;
@@ -216,6 +224,12 @@ export function RuleForm({
     } else {
       createRule.mutate(draft, {
         onSuccess: () => {
+          track(EVENTS.MATCHING_RULE_CREATED, {
+            ...ruleModule,
+            account_category:
+              categoriesQuery.data?.find((option) => option.id === draft.categoryId)
+                ?.name ?? null,
+          });
           toast.success("Rule added");
           finish();
         },
@@ -280,7 +294,7 @@ export function RuleForm({
                   : `${issues.length} fields need attention`}
               </p>
             )}
-            <Button onClick={onSave} disabled={saving}>
+            <Button onClick={onSave} disabled={saving} data-usertour="rules-save">
               {saving && <Loader2 className="animate-spin" />}
               {editing ? "Save changes" : "Save rule"}
             </Button>
@@ -293,6 +307,7 @@ export function RuleForm({
         title="Rule basics"
         description="What this rule is called and which transactions it looks at."
         className="grid gap-4 sm:grid-cols-2"
+        tourId="rules-basics"
       >
         <Field label="Transaction type">
           <Select
@@ -345,6 +360,7 @@ export function RuleForm({
         icon={Filter}
         title="Conditions"
         description="A transaction has to match these for the rule to fire."
+        tourId="rules-conditions"
       >
         <div className="grid gap-4 sm:grid-cols-3">
           <Step number={1} label="What to check">
@@ -438,6 +454,7 @@ export function RuleForm({
                 )}
                 disabled={!valueInput.trim()}
                 onClick={commitValue}
+                data-usertour="rules-add-value"
               >
                 <Plus className="size-4" />
                 Add
@@ -520,6 +537,7 @@ export function RuleForm({
         icon={Tag}
         title="Assign"
         description="What the rule sets on a transaction that matches."
+        tourId="rules-assign"
       >
         <div className="grid gap-4 sm:grid-cols-2">
           <RuleCategorySelect

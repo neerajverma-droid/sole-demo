@@ -19,8 +19,6 @@
  */
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
 import { activeBaseCurrency } from "@/lib/country-context";
 import {
@@ -69,6 +67,21 @@ export type InvoiceSubmitContext = {
 /** Two decimals, the precision every money column on the server holds. */
 export function money(value: number): number {
   return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+/**
+ * An exchange rate at the precision it is stored and sent: six places, the same
+ * as the server's `exchange_rate` column.
+ *
+ * One value has to be used for everything — the totals divided by it *and* the
+ * rate put on the wire. Dividing by the full-precision rate while sending it
+ * rounded to two places made the server's own division land on different cents
+ * (100 / 0.6107 = 163.75 here, 100 / 0.61 = 163.93 there), and it rejected the
+ * invoice with "sub_total does not match its line items".
+ */
+export function roundRate(rate: number | null | undefined): number | null {
+  if (!rate || !(rate > 0)) return rate ?? null;
+  return Math.round(rate * 1_000_000) / 1_000_000;
 }
 
 export function toNumber(value: string | undefined): number {
@@ -351,7 +364,7 @@ export function buildInvoicePayload(
   const baseCurrency = context.baseCurrency ?? activeBaseCurrency();
   const converting =
     !!draft.convertCurrency && !!draft.currency && draft.currency !== baseCurrency;
-  const rate = converting ? context.exchangeRate : null;
+  const rate = converting ? roundRate(context.exchangeRate) : null;
 
   /*
    * A document billed in a foreign currency with no rate to convert it back
@@ -429,7 +442,7 @@ export function buildInvoicePayload(
   };
 
   if (converting && rate) {
-    payload.exchange_rate = money(rate);
+    payload.exchange_rate = rate;
     payload.total_after_exchange = document.total;
     payload.is_exchange_rate_edited = draft.rateEdited ? 1 : 0;
   }
@@ -523,31 +536,6 @@ export async function saveInvoiceApi(
   if (id == null)
     throw new Error("The invoice saved but the server returned no id.");
 
-  /*
-   * After the server confirmed it, and carrying what the invoice is worth.
-   *
-   * A count on its own does not answer "invoices sent with invoice value",
-   * which is the question actually being asked of this — so `amount` is a
-   * required property of both events and the dev validator says so when it is
-   * missing. `payload.total` is the AUD figure the server was sent, not a
-   * second calculation that could drift from it.
-   *
-   * Created and sent are separate events because they are separate decisions:
-   * an invoice saved as a draft and never sent is a different outcome from one
-   * that went out, and an edit that sends an existing invoice is a send
-   * without a create.
-   */
-  const amount = Number(payload.total) || 0;
-  const common = {
-    amount,
-    currency: String(payload.currency_code ?? context.baseCurrency ?? activeBaseCurrency()),
-    line_count: Array.isArray(payload.item) ? payload.item.length : 0,
-    is_ndis: Boolean(draft.ndis),
-  };
-
-  if (!context.invoiceId) track(EVENTS.INVOICE_CREATED, common);
-  if (mode === "send") track(EVENTS.INVOICE_SENT, common);
-
   return { id: String(id) };
 }
 
@@ -589,7 +577,22 @@ export async function fetchInvoiceRuntimePreviewBlob(
     ...(context.invoiceId ? { invoiceId: context.invoiceId } : {}),
   };
 
-  const body = buildEncryptedRequestBody(payload, context.files);
+  const encrypted = buildEncryptedRequestBody(payload) as { data: string };
+
+  /*
+   * Attachments go under `files` — the one field this route's multer accepts.
+   * `buildEncryptedRequestBody` would send them as `files[]`, which the route
+   * rejects as an unexpected field (LIMIT_UNEXPECTED_FILE). The save endpoints
+   * take `files[]`, so only the preview builds its own form.
+   */
+  const { files } = context;
+  let body: FormData | { data: string } = encrypted;
+  if (files.length > 0) {
+    const form = new FormData();
+    form.append("data", encrypted.data);
+    files.forEach((file) => form.append("files", file));
+    body = form;
+  }
 
   const response = await api.post(apiRoutes.templates.runtimePreview, body, {
     responseType: "blob",

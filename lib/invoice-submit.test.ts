@@ -320,6 +320,34 @@ describe("an invoice written in the client's currency", () => {
     expect(payload.total).toBeCloseTo(645.87, 2);
   });
 
+  it("divides by the same rate it sends, so the server reproduces the AUD totals to the cent", () => {
+    // A rate with more than two decimals, as the published ones are. Sending it
+    // rounded to two while dividing by the full figure made the server's own
+    // division land on different cents and refuse the invoice.
+    const fullRate = 1.0911;
+    const payload = buildInvoicePayload(converted, "draft", {
+      ...CONTEXT,
+      exchangeRate: fullRate,
+    });
+
+    expect(payload.exchange_rate).toBe(1.0911);
+    const sent = payload.exchange_rate as number;
+    expect(payload.sub_total).toBe(
+      Math.round(((payload.exchange_sub_total as number) / sent) * 100) / 100,
+    );
+    expect(payload.total).toBe(
+      Math.round(((payload.exchange_total as number) / sent) * 100) / 100,
+    );
+  });
+
+  it("sends the rate at six decimals and no coarser", () => {
+    const payload = buildInvoicePayload(converted, "draft", {
+      ...CONTEXT,
+      exchangeRate: 0.61234567,
+    });
+    expect(payload.exchange_rate).toBe(0.612346);
+  });
+
   it("ignores a rate left over from a client who was since swapped out", () => {
     const payload = buildInvoicePayload(
       draft({ currency: "NZD", convertCurrency: false }),

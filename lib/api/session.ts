@@ -27,12 +27,16 @@ import { clearClientState } from "@/lib/api/teardown";
 export const LOGIN_ROUTE = "/login";
 export const REGISTER_ROUTE = "/register";
 
+/** The link in an accountant's invite email; reached with no session. */
+export const ACCOUNTANT_INVITE_ROUTE = "/accountant-invite";
+
 /**
- * Screens a signed-out visitor is meant to be on: sign-in, sign-up, and the
- * /auth/* steps around them (forgot password, verify email, two-step…).
+ * Screens a signed-out visitor is meant to be on: sign-in, sign-up, the
+ * /auth/* steps around them (forgot password, verify email, two-step…), and
+ * the accountant invite landing page.
  */
 export function isSignedOutRoute(pathname: string): boolean {
-  return [LOGIN_ROUTE, REGISTER_ROUTE, "/auth"].some(
+  return [LOGIN_ROUTE, REGISTER_ROUTE, "/auth", ACCOUNTANT_INVITE_ROUTE].some(
     (route) => pathname === route || pathname.startsWith(`${route}/`),
   );
 }
@@ -45,35 +49,6 @@ export type SessionTokens = {
 export const getAccessToken = (): string | null => getStoredToken();
 export const getRefreshToken = (): string | null => getStoredRefreshToken();
 
-/* ------------------------------------------------------------------ *
- * Demo visits (lib/demo.ts)
- * ------------------------------------------------------------------ */
-
-/**
- * A demo visit's access token starts with this — sole-ocr's demo
- * `TOKEN_PREFIX`. Here rather than in lib/demo.ts, which imports this file.
- */
-const DEMO_TOKEN_PREFIX = "demo_";
-
-/**
- * Whether the session just cleared was a demo visit. The token is gone by the
- * time anything redirects, so it is noted on the way out; it lasts until the
- * page is left, or the next session starts.
- */
-let demoJustEnded = false;
-
-const holdsDemoSession = (): boolean =>
-  Boolean(getAccessToken()?.startsWith(DEMO_TOKEN_PREFIX));
-
-/**
- * Why a dead session is being sent to sign-in. A demo that ended — timed out,
- * or wiped while the tab sat open — says so, rather than "your session
- * expired", which reads like a fault to someone who never had an account.
- */
-export function sessionEndReason(): "demo_ended" | "session_expired" {
-  return demoJustEnded || holdsDemoSession() ? "demo_ended" : "session_expired";
-}
-
 /**
  * Persist a login/refresh response. Accepts either the `user` object from
  * login/signup/verify or the `data` object from /auth/refresh — both carry the
@@ -81,7 +56,6 @@ export function sessionEndReason(): "demo_ended" | "session_expired" {
  */
 export function setSession(payload: SessionTokens | null | undefined): void {
   if (!payload) return;
-  demoJustEnded = false;
   if (payload.token) setStoredToken(payload.token);
   if (payload.refresh_token) setStoredRefreshToken(payload.refresh_token);
 }
@@ -107,7 +81,6 @@ export function onSessionCleared(listener: SessionListener): () => void {
 }
 
 export function clearSession(): void {
-  demoJustEnded = demoJustEnded || holdsDemoSession();
   // Cookies first, so the browser stops being able to authenticate even if
   // something below throws.
   clearAuthCookies();
@@ -135,20 +108,13 @@ export function clearSession(): void {
   }
 }
 
-/**
- * Send the user back to sign-in after an unrecoverable auth failure. The end
- * of a demo visit, by timeout or by "Exit demo", always says that's what it was.
- */
+/** Send the user back to sign-in after an unrecoverable auth failure. */
 export function redirectToLogin(
   reason: "session_expired" | "signed_out" | "account_deleted" = "session_expired",
 ): void {
   if (typeof window === "undefined") return;
   if (isSignedOutRoute(window.location.pathname)) return;
-  const shown =
-    reason !== "account_deleted" && sessionEndReason() === "demo_ended"
-      ? "demo_ended"
-      : reason;
-  window.location.href = `${LOGIN_ROUTE}?error=${shown}`;
+  window.location.href = `${LOGIN_ROUTE}?error=${reason}`;
 }
 
 /* ------------------------------------------------------------------ *

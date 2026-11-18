@@ -3,7 +3,6 @@
 import * as React from "react";
 import Link from "next/link";
 import {
-  ArrowRight,
   ClipboardList,
   Target,
   TrendingUp,
@@ -17,6 +16,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Empty,
   EmptyActions,
+  EmptyCue,
   EmptyDescription,
   EmptyMedia,
   EmptyTitle,
@@ -83,6 +83,9 @@ export function PlannerOverview({
   banks = [],
   overview = null,
   loading = false,
+  loadingBanks = false,
+  banksFailed = false,
+  firstStep = false,
 }: {
   goals: Goal[];
   plans: ExpensePlan[];
@@ -105,6 +108,20 @@ export function PlannerOverview({
    * real, since a count of nothing loaded is not a count of nothing.
    */
   loading?: boolean;
+  /**
+   * The bank balances are still out. Held apart from `loading` because only the
+   * available-cash tile reads them: the bank feed is the slowest source on the
+   * page, and the other tiles have nothing to wait for.
+   */
+  loadingBanks?: boolean;
+  /** The bank balances couldn't be fetched, so cash on hand is the wallet alone. */
+  banksFailed?: boolean;
+  /**
+   * An untouched planner — no goal, budget or plan yet. The goals card then
+   * carries the first step, so the rest of the overview stays in place around
+   * it rather than the whole screen giving way to an empty state.
+   */
+  firstStep?: boolean;
 }) {
   // The wallet balance the overview reports is the same one the store holds;
   // preferring it keeps this card agreeing with the server even if the wallet
@@ -128,7 +145,12 @@ export function PlannerOverview({
   const localGoalCounts = goalStatusCounts(goals, today);
   const localPlanCounts = planStatusCounts(plans);
 
-  const goalCounts = overview
+  // The goals list is the screen's source of truth for each goal's badge, so
+  // the tile counts those same statuses. The overview's own tallies are only
+  // the stand-in until the list has loaded: they're worked out separately on the
+  // server and can call a goal "behind" while its row says "on track".
+  const goalCounts =
+    overview && goals.length === 0
     ? {
         onTrack: overview.goals.onTrack,
         behind: overview.goals.behind,
@@ -159,7 +181,11 @@ export function PlannerOverview({
       value: invoiceMoney(available),
       // Names what's actually counted, so the figure and the label can't
       // disagree the way "bank balance" did while the wallet held the money.
-      meta: `${invoiceMoney(onHand)} on hand across ${cashAccounts(walletBalance, banks).length} accounts`,
+      meta: banksFailed
+        ? `${invoiceMoney(onHand)} — bank balances unavailable, cash wallet only`
+        : `${invoiceMoney(onHand)} on hand across ${cashAccounts(walletBalance, banks).length} accounts`,
+      // Needs the bank balances as well as everything the other tiles need.
+      loading: loading || loadingBanks,
       icon: Wallet,
     },
     {
@@ -203,7 +229,7 @@ export function PlannerOverview({
       meta:
         gaps > 0
           ? `across ${planCounts.fundingGap} ${planCounts.fundingGap === 1 ? "plan" : "plans"}`
-          : loading
+          : loading || planTotal === 0
             ? undefined
             : "Every plan is fully funded",
       icon: TriangleAlert,
@@ -224,8 +250,15 @@ export function PlannerOverview({
   ];
 
   return (
-    <div className="space-y-6">
-      <StatCards stats={stats} loading={loading} />
+    <div className="space-y-4">
+      <div
+        data-usertour="planner-stats"
+        // The available-cash tile waits on the bank balances too, so the tour
+        // holds for those as well rather than pointing at a shimmer.
+        data-usertour-loading={loading || loadingBanks || undefined}
+      >
+        <StatCards stats={stats} loading={loading} />
+      </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
         <CashPositionCard
@@ -243,7 +276,7 @@ export function PlannerOverview({
         <PlanFundingCard plans={plans} committed={committed} gaps={gaps} />
       </div>
 
-      <GoalsProgressCard goals={goals} today={today} />
+      <GoalsProgressCard goals={goals} today={today} firstStep={firstStep} />
     </div>
   );
 }
@@ -303,7 +336,7 @@ function CashPositionCard({
 
   return (
     <Card className="flex h-full flex-col" data-usertour="planner-cash-position">
-      <CardHeader className="flex-row items-baseline justify-between space-y-0 pb-4">
+      <CardHeader className="flex-row items-baseline justify-between space-y-0">
         <CardTitle className="text-base">Cash position</CardTitle>
         <span className="text-xs text-muted-foreground tabular">
           {invoiceMoney(onHand)} on hand
@@ -427,7 +460,7 @@ function PlanFundingCard({
 
   return (
     <Card className="flex h-full flex-col">
-      <CardHeader className="flex-row items-baseline justify-between space-y-0 pb-4">
+      <CardHeader className="flex-row items-baseline justify-between space-y-0">
         <CardTitle className="text-base">Expense plan funding</CardTitle>
         <span className="text-xs text-muted-foreground tabular">
           {invoiceMoney(total)} forecast
@@ -500,13 +533,16 @@ function PlanFundingCard({
 function GoalsProgressCard({
   goals,
   today,
+  firstStep,
 }: {
   goals: Goal[];
   today: string;
+  /** See `PlannerOverview`'s own — the planner's first step goes here. */
+  firstStep: boolean;
 }) {
   return (
     <Card>
-      <CardHeader className="pb-4">
+      <CardHeader>
         {/* The weekly explanation lives here rather than on each row: it's the
             same sentence every time, and it keeps the clickable rows free of
             anything else that takes focus or a click. */}
@@ -524,12 +560,16 @@ function GoalsProgressCard({
               <Target aria-hidden />
             </EmptyMedia>
             <div className="space-y-1">
-              <EmptyTitle>No goals yet</EmptyTitle>
+              <EmptyTitle>
+                {firstStep ? "Start with a savings goal" : "No goals yet"}
+              </EmptyTitle>
               <EmptyDescription>
-                Set a savings goal and your allocations against target will show
-                here.
+                {firstStep
+                  ? "A buffer or a BAS set-aside gives the rest of the planner something to work from."
+                  : "Set a savings goal and your allocations against target will show here."}
               </EmptyDescription>
             </div>
+            {firstStep && <EmptyCue label="Start here" />}
             <EmptyActions>
               <Button size="sm" asChild>
                 <Link href={`${PLANNER_ROOT}/goals/new`}>Create goal</Link>
@@ -590,33 +630,3 @@ function GoalsProgressCard({
   );
 }
 
-/**
- * An untouched planner's one empty view, standing in for the tabs until the
- * first goal, budget or plan exists — the shared Empty, so it reads like every
- * other module's "nothing yet". A goal is where a new planner starts, so that's
- * the one action it carries.
- */
-export function PlannerFirstStep() {
-  return (
-    <Empty>
-      <EmptyMedia>
-        <Target aria-hidden />
-      </EmptyMedia>
-      <div className="space-y-1">
-        <EmptyTitle>Start with a savings goal</EmptyTitle>
-        <EmptyDescription>
-          A buffer or a BAS set-aside gives the rest of the planner something to
-          work from.
-        </EmptyDescription>
-      </div>
-      <EmptyActions>
-        <Button size="sm" asChild>
-          <Link href={`${PLANNER_ROOT}/goals/new`}>
-            Create goal
-            <ArrowRight />
-          </Link>
-        </Button>
-      </EmptyActions>
-    </Empty>
-  );
-}

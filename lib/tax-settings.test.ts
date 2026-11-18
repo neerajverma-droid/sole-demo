@@ -4,7 +4,6 @@ import { decryptPayload } from "@/utils/encrypt";
 
 const apiMock = { get: vi.fn(), post: vi.fn() };
 vi.mock("@/utils/axiosInstance", () => ({ default: apiMock }));
-vi.mock("@/lib/analytics", () => ({ track: vi.fn() }));
 
 const { DEFAULT_TAX_RATE, fetchTaxRate, saveTaxRate, taxPercentageError } =
   await import("@/lib/tax-settings");

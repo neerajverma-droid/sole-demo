@@ -26,6 +26,7 @@ import {
 import { CONTROL_SURFACE_TRIGGER } from "@/components/ui/control-surface";
 import { FormSection } from "@/components/ui/form-section";
 import { Input } from "@/components/ui/input";
+import { PrefixInput } from "@/components/ui/prefix-input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
@@ -50,8 +51,6 @@ import {
   usePlannerStagesQuery,
   useProjectJobsQuery,
 } from "@/hooks/use-calendar-query";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { apiErrorMessage } from "@/lib/api-error";
 import { createCalendarTask, updateCalendarTask } from "@/lib/calendar-api";
 import {
@@ -461,7 +460,6 @@ export function TaskForm({
           pendingFiles.map((item) => item.file),
         );
         updateEventsCache((rows) => [...rows, normalizeSavedTask(saved, payload, fallbackUser)]);
-        track(EVENTS.CALENDAR_EVENT_CREATED, { timestamp: new Date().toISOString() });
       }
 
       toast.success(
@@ -903,22 +901,18 @@ export function TaskForm({
         />
         {values.is_billable && (
           <Field label="Amount" htmlFor="task-fixed_amount" required error={errors.fixed_amount}>
-            <div className="relative">
-              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-                {activeCurrencySymbol()}
-              </span>
-              <Input
-                id="task-fixed_amount"
-                type="number"
-                min={0}
-                step="0.01"
-                placeholder="0.00"
-                value={values.fixed_amount}
-                aria-invalid={Boolean(errors.fixed_amount) || undefined}
-                onChange={(e) => set("fixed_amount", e.target.value)}
-                className={cn("pl-7 tabular-nums", errors.fixed_amount && "border-destructive")}
-              />
-            </div>
+            <PrefixInput
+              prefix={activeCurrencySymbol()}
+              id="task-fixed_amount"
+              type="number"
+              min={0}
+              step="0.01"
+              placeholder="0.00"
+              value={values.fixed_amount}
+              aria-invalid={Boolean(errors.fixed_amount) || undefined}
+              onChange={(e) => set("fixed_amount", e.target.value)}
+              className="tabular-nums"
+            />
           </Field>
         )}
       </FormSection>

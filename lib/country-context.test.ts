@@ -39,7 +39,7 @@ const NZ: CountryContext = mapCountryContext({
   labels: { tax: "GST", business_id: "NZBN", bank_branch: null, tax_return: "GST return" },
   features: { ndis: false },
   identifier_schema: [{ key: "business_registration_number", label: "NZBN", required: false, pattern: "^\\d{13}$", validator: "nzbn_gs1" }],
-  bank_account_schema: [{ key: "account_number", label: "Account number", required: true, pattern: "^\\d{2}-?\\d{4}-?\\d{7}-?\\d{2,3}$", mask: "99-9999-9999999-999" }],
+  bank_account_schema: [{ key: "account_number", label: "Account number", required: true, pattern: "^\\d{2}-?\\d{4}-?\\d{7}-?\\d{2,3}$", mask: "99-9999-9999999-999", validator: "nz_bank_account" }],
   has_identifier_lookup: true,
   registry_version: 4,
 });
@@ -163,6 +163,33 @@ describe("bank fields", () => {
 
     expect(bankFieldError(ZA, "branch_code", "250655")).toBeUndefined();
     expect(bankFieldError(ZA, "branch_code", "25065")).toBeTruthy();
+  });
+
+  it("runs the registry's named validator after the pattern, as the server does", () => {
+    // Right shape, but bank 00 / branch 0000 are not issued ranges: the server
+    // answers 422 for these, so the form has to as well.
+    expect(bankFieldError(NZ, "account_number", "00-0123-0123456-00")).toContain("Account number");
+    expect(bankFieldError(NZ, "account_number", "01-0000-0123456-00")).toContain("Account number");
+    expect(bankFieldError(NZ, "account_number", "01-0123-0123456-00")).toBeUndefined();
+    expect(bankFieldError(NZ, "account_number", "010123012345600")).toBeUndefined();
+
+    const IN = mapCountryContext({
+      country_iso2: "IN",
+      bank_account_schema: [
+        { key: "branch_code", label: "IFSC code", required: true, pattern: "^[A-Za-z]{4}0[A-Za-z0-9]{6}$", validator: "in_ifsc" },
+        { key: "account_number", label: "Account number", required: true, pattern: "^\\d{9,18}$" },
+      ],
+    });
+    expect(bankFieldError(IN, "branch_code", "hdfc0001234")).toBeUndefined();
+    expect(bankFieldError(IN, "branch_code", "HDFC1001234")).toContain("IFSC code");
+  });
+
+  it("lets a validator the build does not know pass, leaving the verdict to the server", () => {
+    const odd = mapCountryContext({
+      country_iso2: "XX",
+      bank_account_schema: [{ key: "account_number", label: "Account number", pattern: "^\\d+$", validator: "not_built_yet" }],
+    });
+    expect(bankFieldError(odd, "account_number", "123")).toBeUndefined();
   });
 
   it("names the field the way its country does when it complains", () => {

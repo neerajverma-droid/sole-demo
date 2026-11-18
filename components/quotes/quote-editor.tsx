@@ -28,7 +28,10 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { FormSection } from "@/components/ui/form-section";
+import {
+  FormSection,
+  FormSectionDensityProvider,
+} from "@/components/ui/form-section";
 import { Input } from "@/components/ui/input";
 import { CurrencyConversionCard } from "@/components/documents/currency-conversion-card";
 import { DatePicker } from "@/components/documents/date-picker";
@@ -36,6 +39,7 @@ import { Field } from "@/components/documents/field";
 import { InvoiceClientSelect } from "@/components/documents/invoice-client-select";
 import { DocumentLineItems } from "@/components/documents/line-items";
 import { NdisLineItems } from "@/components/documents/ndis-line-items";
+import { NdisPricingNote } from "@/components/documents/ndis-price-tier";
 import { NdisNumberDialog } from "@/components/documents/ndis-number-dialog";
 import { RuntimePreviewDialog } from "@/components/documents/runtime-preview-dialog";
 import { SaveAsTemplateDialog } from "@/components/invoices/save-as-template-dialog";
@@ -49,17 +53,20 @@ import {
 import {
   fetchClientNdisDetails,
   fetchInvoiceContacts,
-  ndisClientIssue,
+  ndisClaimIssue,
 } from "@/lib/invoice-clients";
 import {
   deleteInvoiceAttachmentApi,
+  documentHasDraftContent,
   documentIssues,
+  EMPTY_DRAFT_MESSAGE,
   savePdfBlob,
   invoiceTotals,
   ndisIssues,
   newLineItem,
   newNdisLineItem,
   parseIsoDate,
+  stockIssues,
   toIsoDate,
   type DocumentCurrency,
   type InvoiceLineItem,
@@ -87,6 +94,8 @@ import {
 import { isGlobalTemplateOwner } from "@/lib/invoice-templates";
 import { useActiveBusiness } from "@/hooks/use-active-business";
 import { useCountryContext } from "@/hooks/use-country-context";
+import { useInventoryQuery } from "@/hooks/use-inventory-query";
+import { resetQuoteListCache } from "@/hooks/use-quotes-query";
 import {
   fetchExchangeRates,
   fetchInvoiceBranding,
@@ -104,6 +113,12 @@ import { addDays } from "@/lib/invoices";
 import { cn } from "@/lib/utils";
 import { useSalesSettings } from "@/lib/use-sales-settings";
 import { useQuotesStore } from "@/stores/quotes";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
+
+// Same section density as the invoice form: headers 0.35rem top and bottom,
+// bodies 0.75rem all round, general and NDIS alike.
+const QUOTE_DENSITY = { header: "items-center py-[0.35rem]", body: "p-3" };
 
 export function QuoteEditor({
   quoteId,
@@ -418,8 +433,12 @@ export function QuoteEditor({
    * Validation
    * ---------------------------------------------------------------- */
 
-  /** GST applies only where the business charges it, and Sales settings shows it. */
-  const showGst = tax.gstEnabled && sales.quoteFields.gst;
+  /**
+   * GST applies only where the business charges it. Sales settings' GST switch
+   * only decides whether the printed quote shows a GST column on each line — it
+   * has no say over what is charged.
+   */
+  const showGst = tax.gstEnabled;
 
   /*
    * With GST off for this document the column isn't rendered at all, so a line
@@ -447,7 +466,7 @@ export function QuoteEditor({
    */
   const claimIssue =
     ndis && !ndisDetailsQuery.isFetching
-      ? ndisClientIssue(ndisDetailsQuery.data, draft.clientId)
+      ? ndisClaimIssue(ndisDetailsQuery.data, draft.clientId)
       : undefined;
 
   const totals = invoiceTotals(draft.items, draft.extraDiscount, tax.gstPercent);
@@ -468,6 +487,18 @@ export function QuoteEditor({
         : new Set([...current, ...keys]),
     );
 
+  // Stock on hand per tracked product, for the over-stock check below.
+  const inventoryQuery = useInventoryQuery();
+  const stockAvailable = React.useMemo(
+    () =>
+      new Map(
+        (inventoryQuery.data ?? [])
+          .filter((item) => item.tracked)
+          .map((item) => [item.id, Number(item.openingStock) || 0] as const),
+      ),
+    [inventoryQuery.data],
+  );
+
   const fieldRefs = React.useRef<Record<string, HTMLElement | null>>({});
   const register = (key: string) => (node: HTMLElement | null) => {
     fieldRefs.current[key] = node;
@@ -476,11 +507,18 @@ export function QuoteEditor({
   const issues = [
     ...documentIssues(draft, "quote"),
     ...(ndis ? ndisIssues(draft.items) : []),
+    // Same rule as an invoice: a quote can't promise more of a tracked item
+    // than is on the shelf ("Only 4 in stock"), or it fails when converted.
+    // Nothing is added back — a quote never holds stock.
+    ...stockIssues(draft.items, stockAvailable),
   ];
-  const issueFor = (key: string) =>
-    attempted || touched.has(key)
-      ? issues.find((issue) => issue.key === key)?.message
+  const issueFor = (key: string) => {
+    const issue = issues.find((entry) => entry.key === key);
+    // A value that is merely not there yet waits for a save attempt.
+    return issue && (attempted || (!issue.submitOnly && touched.has(key)))
+      ? issue.message
       : undefined;
+  };
 
   const blocked = issues.length > 0 || !!claimIssue;
   /** Why the quote can't be saved yet, in one sentence. */
@@ -569,9 +607,21 @@ export function QuoteEditor({
   };
 
   const save = async (mode: QuoteSubmitMode) => {
-    setAttempted(true);
+    /*
+     * A draft is work in progress, so it's allowed to be incomplete — no client,
+     * a half-written line. It only has to have *something* in it. Sending or
+     * saving as final keeps every rule.
+     */
+    if (mode === "draft") {
+      if (!documentHasDraftContent(draft)) {
+        toast.error(EMPTY_DRAFT_MESSAGE);
+        return;
+      }
+    } else {
+      setAttempted(true);
+    }
 
-    if (blocked) {
+    if (mode !== "draft" && blocked) {
       // The participant's NDIS number: add it here, then carry on.
       if (claimIssue) {
         setNdisPendingMode(mode);
@@ -593,6 +643,18 @@ export function QuoteEditor({
     setSaving(mode);
     try {
       const saved = await saveQuoteApi(draft, mode, submitContext);
+      const documentProps = {
+        quote_id: saved.id,
+        amount: totals.total,
+        currency: documentCurrency,
+        client_id: draft.clientId || null,
+        is_template: !!templateId && !sourceId,
+        template_name: templateId && !sourceId ? templateName || null : null,
+      };
+      if (!quoteId) track(EVENTS.QUOTE_CREATED, documentProps);
+      if (mode === "send") {
+        track(EVENTS.QUOTE_SENT, { ...documentProps, is_recurring: false });
+      }
 
       // The list, the stat cards and the next available number are all
       // downstream of this having happened.
@@ -631,6 +693,8 @@ export function QuoteEditor({
         }
       }
 
+      // Land on the list loading, not on the stale page it cached.
+      resetQuoteListCache(queryClient);
       router.push("/quotes");
     } catch (error) {
       toast.error(
@@ -694,21 +758,32 @@ export function QuoteEditor({
   }
 
   return (
+    <FormSectionDensityProvider value={QUOTE_DENSITY}>
     <div className="space-y-[15px]">
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <Button variant="ghost" size="sm" asChild className="-ml-2 gap-3">
-            <Link href={editing ? "/quotes" : "/quotes/new"}>
-              <ArrowLeft />
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="icon" asChild className="-ml-2">
+              <Link
+                href={editing ? "/quotes" : "/quotes/new"}
+                aria-label="Back"
+              >
+                <ArrowLeft />
+              </Link>
+            </Button>
+            <h1 className="text-sm font-medium">
               {editing
                 ? `Edit ${editing.number}`
                 : ndis
                   ? "New NDIS quote"
                   : "New quote"}
-            </Link>
-          </Button>
+            </h1>
+          </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div
+            className="flex flex-wrap items-center gap-2"
+            data-usertour="quote-top-actions"
+          >
             <Button
               type="button"
               variant="outline"
@@ -842,6 +917,7 @@ export function QuoteEditor({
         icon={FileText}
         title="Quote details"
         className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4"
+        tourId="quote-details"
       >
         <Field
           label="Quote number"
@@ -942,14 +1018,13 @@ export function QuoteEditor({
 
       {/* Line items — supports on an NDIS quote, ordinary lines otherwise */}
       <section className="space-y-2" data-usertour="quote-line-items">
-        <h2 className="text-sm font-medium">
-          {ndis ? "Support items" : "Line items"}
-        </h2>
-        {issueFor(`item-${draft.items[0]?.id}-description`) && (
-          <p className="text-xs text-destructive">
-            {issueFor(`item-${draft.items[0]?.id}-description`)}
-          </p>
-        )}
+        {/* On an NDIS quote the heading carries a note on where the prices come from. */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <h2 className="text-sm font-medium">
+            {ndis ? "Support items" : "Line items"}
+          </h2>
+          {ndis && <NdisPricingNote />}
+        </div>
         {ndis ? (
           <NdisLineItems
             items={draft.items}
@@ -973,6 +1048,7 @@ export function QuoteEditor({
             onRemove={removeItem}
             onAdd={() => addItem({ ...newLineItem(), gst: showGst })}
             register={register}
+            issueFor={issueFor}
             currency={documentCurrency}
             clientCurrency={clientCurrency}
             convertCurrency={!!draft.convertCurrency}
@@ -988,32 +1064,35 @@ export function QuoteEditor({
        */}
       <div className="grid items-start gap-[15px] lg:grid-cols-2">
         <div className="space-y-[15px]">
-          <AttachmentsCard
-            files={draft.attachments ?? []}
-            onChange={(value) => patchSetting({ attachments: value })}
-            onFilesSelected={(picked) =>
-              setFiles((current) => [...current, ...picked])
-            }
-            onRemoveFile={(file) => {
-              // A file already on the server has to be deleted there too; one
-              // picked a moment ago has only ever existed in this form.
-              const local = files.some((entry) => entry.id === file.id);
-              if (local) {
-                setFiles((current) =>
-                  current.filter((entry) => entry.id !== file.id),
-                );
-              } else if (quoteId) {
-                deleteInvoiceAttachmentApi(file.id).catch(() =>
-                  toast.error(`Couldn't remove ${file.name}.`),
-                );
+          <div data-usertour="quote-attachments">
+            <AttachmentsCard
+              files={draft.attachments ?? []}
+              pickedFiles={files}
+              onChange={(value) => patchSetting({ attachments: value })}
+              onFilesSelected={(picked) =>
+                setFiles((current) => [...current, ...picked])
               }
-              patchSetting({
-                attachments: (draft.attachments ?? []).filter(
-                  (entry) => entry.id !== file.id,
-                ),
-              });
-            }}
-          />
+              onRemoveFile={(file) => {
+                // A file already on the server has to be deleted there too; one
+                // picked a moment ago has only ever existed in this form.
+                const local = files.some((entry) => entry.id === file.id);
+                if (local) {
+                  setFiles((current) =>
+                    current.filter((entry) => entry.id !== file.id),
+                  );
+                } else if (quoteId) {
+                  deleteInvoiceAttachmentApi(file.id).catch(() =>
+                    toast.error(`Couldn't remove ${file.name}.`),
+                  );
+                }
+                patchSetting({
+                  attachments: (draft.attachments ?? []).filter(
+                    (entry) => entry.id !== file.id,
+                  ),
+                });
+              }}
+            />
+          </div>
         </div>
 
         <div className="space-y-[15px]">
@@ -1057,23 +1136,27 @@ export function QuoteEditor({
             />
           )}
 
-          <DepositCard
-            deposit={draft.deposit ?? null}
-            onChange={(value) => patchSetting({ deposit: value })}
-            total={totals.total}
-            items={draft.items}
-            gstPercent={tax.gstPercent}
-            issued={draft.issued}
-            currency={documentCurrency}
-          />
+          <div data-usertour="quote-deposit">
+            <DepositCard
+              deposit={draft.deposit ?? null}
+              onChange={(value) => patchSetting({ deposit: value })}
+              total={totals.total}
+              items={draft.items}
+              gstPercent={tax.gstPercent}
+              issued={draft.issued}
+              currency={documentCurrency}
+            />
+          </div>
 
           {/* Notes only: a quote has no saved-note toggle and no extra note.
               Whatever the record already carries for those is left untouched
               and sent back as it was. */}
-          <InvoiceNotesCard
-            notes={draft.notes}
-            onNotesChange={(value) => patch({ notes: value })}
-          />
+          <div data-usertour="quote-notes">
+            <InvoiceNotesCard
+              notes={draft.notes}
+              onNotesChange={(value) => patch({ notes: value })}
+            />
+          </div>
         </div>
       </div>
 
@@ -1124,5 +1207,6 @@ export function QuoteEditor({
         </div>
       </div>
     </div>
+    </FormSectionDensityProvider>
   );
 }

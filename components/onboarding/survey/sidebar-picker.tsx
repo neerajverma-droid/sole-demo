@@ -23,8 +23,8 @@ import { cn } from "@/lib/utils";
  * - Source grouped rows under several labelled sections (`NAV_GROUPS`, one per
  *   nav category). This app's rail itself has a single "Main" section, plus a
  *   separate catalogue of items that start life in More
- *   (`ADDITIONAL_NAV` — Liabilities, Contacts, the reporting suite,
- *   Migrations). Both catalogues are pinnable (`pinTargets` resolves ids
+ *   (`ADDITIONAL_NAV` — Liabilities, Contacts, Migrations,
+ *   Tax estimator). Both catalogues are pinnable (`pinTargets` resolves ids
  *   against all of them, not just what's currently in the rail), so this
  *   picker shows both, under two headings: "Your sidebar" for what ships by
  *   default, "More" for what a pin can add before it's ever been added to Main.
@@ -141,12 +141,17 @@ function Row({
 }
 
 /*
- * A group and its pages are one tree of checkboxes, but not one list of pins.
+ * A group and its pages are one tree of checkboxes, but one flat list of pages
+ * underneath.
  *
- * Pinning a group already brings every page along as its submenu
- * (`lib/nav.ts`'s `PIN_TARGETS`), so a group with all its pages ticked is
- * stored as the group's id alone — storing the pages too would put each of
- * them in the sidebar twice. Only a partial selection is stored page by page.
+ * A group's own id is never stored, whether one page is ticked or all of them.
+ * `lib/nav.ts`'s `PIN_TARGETS` refuses anything with a submenu — a group row
+ * goes nowhere itself, so a shortcut to it saves nobody the step it promises —
+ * which means a stored group id resolves to nothing in PINNED. It doesn't sit
+ * there harmlessly either: a pin is a move, so the id took the group out of
+ * MAIN on its way to a section that then couldn't draw it, and ticking
+ * "Expenses" here was enough to make Expenses disappear from the rail. Ticking
+ * a group stores its pages, every one of them.
  */
 
 function groupState(
@@ -154,20 +159,27 @@ function groupState(
   pinnedIds: string[],
 ): boolean | "indeterminate" {
   const children = item.children ?? [];
-  if (pinnedIds.includes(item.id)) return true;
-  if (children.length === 0) return false;
+  // A row without pages is its own pin — Assets, Migrations.
+  if (children.length === 0) return pinnedIds.includes(item.id);
+
   const ticked = children.filter((child) => pinnedIds.includes(child.id));
   if (ticked.length === 0) return false;
   return ticked.length === children.length ? true : "indeterminate";
 }
 
-/** Ticks every page (as the group's own id), or clears them all. */
+/** Ticks every page of a group, or clears them all. */
 function toggleGroupPin(item: NavItem, pinnedIds: string[]): string[] {
   const childIds = (item.children ?? []).map((child) => child.id);
+  /*
+   * The group's own id comes out either way. Nothing writes one any more, but
+   * accounts hold them from when this stored a ticked group that way, and
+   * leaving it in would keep a dead id travelling alongside the live ones.
+   */
   const rest = pinnedIds.filter(
     (id) => id !== item.id && !childIds.includes(id),
   );
-  return groupState(item, pinnedIds) === true ? rest : [...rest, item.id];
+  if (groupState(item, pinnedIds) === true) return rest;
+  return [...rest, ...(childIds.length ? childIds : [item.id])];
 }
 
 function toggleChildPin(
@@ -177,7 +189,8 @@ function toggleChildPin(
 ): string[] {
   const childIds = (item.children ?? []).map((child) => child.id);
 
-  // Unticking one page of a whole group: the group pin becomes its siblings.
+  // A stored group id stood for every page, so unticking one of them has to
+  // leave the siblings behind rather than take the lot away with it.
   if (pinnedIds.includes(item.id)) {
     return [
       ...pinnedIds.filter((id) => id !== item.id),
@@ -189,11 +202,9 @@ function toggleChildPin(
     return pinnedIds.filter((id) => id !== childId);
   }
 
-  // Ticking the last page left: collapse the pages back into the group.
-  const next = [...pinnedIds, childId];
-  return childIds.every((id) => next.includes(id))
-    ? [...next.filter((id) => !childIds.includes(id)), item.id]
-    : next;
+  // The last page of a group is still that page: ticking it completes the
+  // group's checkbox without the group's id ever being stored.
+  return [...pinnedIds, childId];
 }
 
 export function SidebarPicker({

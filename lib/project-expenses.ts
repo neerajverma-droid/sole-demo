@@ -22,13 +22,13 @@
  */
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
 import type { ExpenseDraft } from "@/lib/expenses";
 import { newLineItem, type InvoiceLineItem, type InvoiceSeed } from "@/lib/invoices";
 import type { PageInfo } from "@/lib/products";
 import { compactPayload, num, optionalId, str, type Project } from "@/lib/projects";
+import { track } from "@/lib/analytics";
+import { EVENTS } from "@/lib/analytics-events";
 
 type ApiEnvelope<T> = {
   success: boolean;
@@ -302,13 +302,9 @@ export async function createProjectExpenseApi(input: {
   if (!response.data?.success || response.data.data?.id == null) {
     throw new Error(response.data?.message || "Failed to save expense.");
   }
-  // Same event the main expense form fires, so project-created expenses count too.
-  track(EVENTS.EXPENSE_LOGGED, {
-    amount: input.draft.amount,
-    has_receipt: input.files.length > 0,
-    has_gst: Boolean(input.draft.gst),
-    payment_method: input.draft.paymentMethod ?? null,
-    is_split: Boolean(input.draft.splitEnabled),
+  track(EVENTS.EXPENSE_ADDED, {
+    source: "project",
+    expense_category: input.draft.category || null,
   });
   return { id: String(response.data.data.id) };
 }

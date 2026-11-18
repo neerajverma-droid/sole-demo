@@ -22,6 +22,7 @@ import {
   usePackTemplates,
   useReportCatalogue,
 } from "@/hooks/use-report-packs";
+import { useFiscalYearStart } from "@/hooks/use-fiscal-year-start";
 import { apiErrorMessage } from "@/lib/api-error";
 import {
   CUSTOM_PERIOD,
@@ -51,6 +52,7 @@ export function NewPackDialog({
   const templates = usePackTemplates();
   const catalogue = useReportCatalogue();
   const create = useCreatePack();
+  const fiscalYearStart = useFiscalYearStart();
 
   const starters = catalogue.data?.starterTemplates ?? [];
   const yours = templates.data?.templates ?? [];
@@ -112,7 +114,7 @@ export function NewPackDialog({
     if (preset) setPickedPeriod(preset);
   };
 
-  const range = period === CUSTOM_PERIOD ? { from, to } : presetRange(period);
+  const range = period === CUSTOM_PERIOD ? { from, to } : presetRange(period, fiscalYearStart);
   const valid = Boolean(
     source && name.trim() && range.from && range.to && range.from < range.to,
   );

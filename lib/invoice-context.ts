@@ -143,6 +143,12 @@ export type NextInvoiceNumber = {
   number: string;
   /** The saved invoice note, which prefills a new document's notes field. */
   note: string;
+  /**
+   * How many invoices the business has raised so far, drafts and deleted ones
+   * included — the one being written is the next. Undefined if the server
+   * didn't say.
+   */
+  count?: number;
 };
 
 /**
@@ -153,13 +159,38 @@ export type NextInvoiceNumber = {
 export async function fetchNextInvoiceNumber(): Promise<NextInvoiceNumber> {
   const response = await api.get<{
     success: boolean;
-    data?: { no?: string; note?: string };
+    data?: { no?: string; note?: string; count?: number | string };
   }>(apiRoutes.invoice.getNo);
 
+  const count = Number(response.data?.data?.count);
   return {
     number: response.data?.data?.no ?? "",
     note: response.data?.data?.note ?? "",
+    count: Number.isFinite(count) ? count : undefined,
   };
+}
+
+/**
+ * Whether a typed invoice number is already used in this business — the same
+ * test the server applies on save, asked early so the form can say so while
+ * the number is being typed. `excludeId` is the invoice being edited, which
+ * must not clash with its own number.
+ */
+export async function checkInvoiceNumberTaken(
+  number: string,
+  excludeId?: string,
+): Promise<boolean> {
+  const response = await api.get<{
+    success: boolean;
+    data?: { exists?: boolean };
+  }>(apiRoutes.invoice.checkNo, {
+    params: {
+      invoice_no: number.trim(),
+      ...(excludeId ? { exclude_id: excludeId } : {}),
+    },
+  });
+
+  return response.data?.data?.exists === true;
 }
 
 /**

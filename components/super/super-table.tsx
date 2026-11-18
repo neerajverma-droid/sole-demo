@@ -5,7 +5,6 @@ import { useAtom, useSetAtom } from "jotai";
 import {
   Copy,
   Link2,
-  MoreHorizontal,
   Pencil,
   PiggyBank,
   Search,
@@ -17,12 +16,6 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
   Empty,
   EmptyActions,
   EmptyCue,
@@ -31,7 +24,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
-import { MenuAction } from "@/components/ui/menu-action";
+import { RowIconButton } from "@/components/ui/row-icon-button";
 import { NumberedPagination } from "@/components/ui/numbered-pagination";
 import { Shimmer } from "@/components/ui/shimmer";
 import {
@@ -44,6 +37,8 @@ import {
 } from "@/components/ui/table";
 import { Highlight } from "@/components/contacts/highlight";
 import { SUPER_ROOT } from "@/components/super/super-screen";
+import { useCountryContext } from "@/hooks/use-country-context";
+import { superContributionsLabel, superWord } from "@/lib/country-context";
 import {
   deleteContributionIdAtom,
   matchContributionIdAtom,
@@ -85,6 +80,7 @@ export function SuperTable({
   const [query, setQuery] = useAtom(superQueryAtom);
   const setMatchId = useSetAtom(matchContributionIdAtom);
   const setDeleteId = useSetAtom(deleteContributionIdAtom);
+  const { country } = useCountryContext();
 
   const rows = contributions;
   const searching = !!query.trim();
@@ -98,13 +94,13 @@ export function SuperTable({
         <div className="space-y-1">
           <EmptyTitle>No contributions yet</EmptyTitle>
           <EmptyDescription>
-            Record what you pay into super, then match each payment to the
-            money that left your account.
+            Record what you pay into {superWord(country)}, then match each
+            payment to the money that left your account.
           </EmptyDescription>
         </div>
         <EmptyCue label="Start here" />
         <EmptyActions>
-          <Button size="sm" asChild>
+          <Button size="sm" asChild data-usertour="super-new-button">
             <Link href={`${SUPER_ROOT}/new`}>New contribution</Link>
           </Button>
         </EmptyActions>
@@ -139,7 +135,7 @@ export function SuperTable({
                 <TableHead className="text-center">Remaining amount</TableHead>
                 <TableHead className="text-center">Match transaction</TableHead>
                 <TableHead className="text-center">Status</TableHead>
-                <TableHead className="w-[60px] text-right">Actions</TableHead>
+                <TableHead className="w-px whitespace-nowrap text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody aria-hidden>
@@ -199,7 +195,7 @@ export function SuperTable({
                 Clear search
               </Button>
             ) : (
-              <Button size="sm" asChild>
+              <Button size="sm" asChild data-usertour="super-new-button">
                 <Link href={`${SUPER_ROOT}/new`}>New contribution</Link>
               </Button>
             )}
@@ -217,7 +213,7 @@ export function SuperTable({
                   <TableHead className="text-center">Remaining amount</TableHead>
                   <TableHead className="text-center">Match transaction</TableHead>
                   <TableHead className="text-center">Status</TableHead>
-                  <TableHead className="w-[60px] text-right">Actions</TableHead>
+                  <TableHead className="w-px whitespace-nowrap text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -240,7 +236,7 @@ export function SuperTable({
             onPageChange={onPageChange}
             onPageSizeChange={onPageSizeChange}
             itemLabel="contribution"
-            navLabel="Super contributions pages"
+            navLabel={`${superContributionsLabel(country)} pages`}
           />
         </>
       )}
@@ -299,52 +295,38 @@ function ContributionRow({
         <Badge variant={contributionStatusVariant(status)}>{status}</Badge>
       </TableCell>
       <TableCell>
-        <div className="flex justify-end">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-8"
-                aria-label={`Actions for ${contribution.fundName} on ${formatContributionDate(contribution.date)}`}
-              >
-                <MoreHorizontal className="size-4 text-muted-foreground" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              {/* Fully matched is read-only from here on — the server itself
-                  rejects deleting a reconciled contribution, and editing one
-                  whose bank transaction is already reconciled isn't offered
-                  either, same as sole-webapp's own list. Duplicate still
-                  makes sense: it's a new, unmatched record either way. */}
-              {status !== "Matched" && (
-                <MenuAction
-                  icon={<Pencil />}
-                  label="Edit"
-                  href={`${SUPER_ROOT}/${contribution.id}`}
-                />
-              )}
-              {/* Same flow as editing: the new-contribution form fetches this
-                  record's real detail and prefills from it, then saves as a
-                  new record rather than updating this one. */}
-              <MenuAction
-                icon={<Copy />}
-                label="Duplicate"
-                href={`${SUPER_ROOT}/new?copy=${contribution.id}`}
-              />
-              {status !== "Matched" && (
-                <>
-                  <DropdownMenuSeparator />
-                  <MenuAction
-                    icon={<Trash2 />}
-                    label="Delete"
-                    onSelect={onDelete}
-                    destructive
-                  />
-                </>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
+        <div className="flex justify-end gap-0.5">
+          {/* Fully matched is read-only from here on — the server itself
+              rejects deleting a reconciled contribution, and editing one
+              whose bank transaction is already reconciled isn't offered
+              either, same as sole-webapp's own list. Duplicate still makes
+              sense: it's a new, unmatched record either way. */}
+          {status !== "Matched" && (
+            <RowIconButton
+              tooltip
+              icon={<Pencil className="size-4" />}
+              label="Edit"
+              href={`${SUPER_ROOT}/${contribution.id}`}
+            />
+          )}
+          {/* Same flow as editing: the new-contribution form fetches this
+              record's real detail and prefills from it, then saves as a new
+              record rather than updating this one. */}
+          <RowIconButton
+            tooltip
+            icon={<Copy className="size-4" />}
+            label="Duplicate"
+            href={`${SUPER_ROOT}/new?copy=${contribution.id}`}
+          />
+          {status !== "Matched" && (
+            <RowIconButton
+              tooltip
+              icon={<Trash2 className="size-4" />}
+              label="Delete"
+              onClick={onDelete}
+              destructive
+            />
+          )}
         </div>
       </TableCell>
     </TableRow>

@@ -86,6 +86,7 @@ export function NexxtapOwnersScreen() {
         <FormSection
           icon={Users}
           title="Beneficial owners"
+          tourId="nexttap-owners"
           description={`Everyone who ultimately owns the business — up to ${MAX_OWNERS}.`}
           headerClassName={NEXXTAP_SECTION_HEADER}
           className="space-y-4 p-4 sm:p-6"
@@ -231,6 +232,7 @@ export function NexxtapOwnersScreen() {
             className="rounded-[9px]"
             onClick={addOwner}
             disabled={draft.length >= MAX_OWNERS}
+            data-usertour="nexttap-add-owner"
           >
             <Plus />
             Add owner

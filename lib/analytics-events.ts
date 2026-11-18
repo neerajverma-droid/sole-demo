@@ -22,193 +22,140 @@
  */
 
 export const EVENTS = {
-  // ── auth and signup ──────────────────────────────────────────────────────
-  // Names shared deliberately with the previous project so the two signup
-  // funnels can be read side by side across the switch.
   SIGNUP_INITIATED: "signup_initiated",
-  SIGNUP_PASSWORD_SUBMITTED: "signup_password_submitted",
-  SIGNUP_OTP_REQUESTED: "signup_otp_requested",
-  SIGNUP_OTP_VERIFIED: "signup_otp_verified",
-  SIGNIN_COMPLETED: "signin_completed",
-  // New here — the previous app had no two-factor step at all.
-  TWO_FACTOR_CHALLENGED: "two_factor_challenged",
-  TWO_FACTOR_VERIFIED: "two_factor_verified",
+  SIGNUP_DETAILS_ENTERED: "signup_details_entered",
+  /** Onboarding's company step, "Choose your plan" pressed and saved. */
+  ONBD_CHOOSE_PLAN_CLICKED: "onbd_choose_plan_clicked",
+  /** Onboarding's plan step; `subscription_plan_selected` is everywhere else. */
+  ONBD_SUBSCRIPTION_PLAN_SELECTED: "onbd_subscription_plan_selected",
+  /** The onboarding payment confirmed — sign-up is complete only once paid. */
+  SIGNUP_COMPLETED: "signup_completed",
 
-  // ── onboarding ───────────────────────────────────────────────────────────
-  // Already live in this app. Do not touch the strings.
-  ONBOARDING_SURVEY_SHOWN: "onboarding_survey_shown",
-  ONBOARDING_SURVEY_COMPLETED: "onboarding_survey_completed",
-  ONBOARDING_SURVEY_DISMISSED: "onboarding_survey_dismissed",
-  ONBOARDING_SURVEY_INDUSTRY_SELECTED: "onboarding_survey_industry_selected",
-  ONBOARDING_SURVEY_PINS_SAVED: "onboarding_survey_pins_saved",
-  ONBOARDING_REFERRAL_PROMPT_SHOWN: "onboarding_referral_prompt_shown",
-  ACTIVATION_NUDGE_SHOWN: "activation_nudge_shown",
-  ACTIVATION_NUDGE_CTA_CLICKED: "activation_nudge_cta_clicked",
-  ACTIVATION_NUDGE_DISMISSED: "activation_nudge_dismissed",
+  ONBD_SURVEY_SHOWN: "onbd_survey_shown",
+  ONBD_INDUSTRY_SELECTED: "onbd_industry_selected",
+  ONBD_BEFORE_SOLE: "onbd_before_sole",
+  ONBD_WIDGETS_ADDED: "onbd_widgets_added",
+  ONBD_FIRST_JOB_OPTION_SELECTED: "onbd_first_job_option_selected",
+  ONBD_SURVEY_CLOSED: "onbd_survey_closed",
 
-  // ── identity and session ─────────────────────────────────────────────────
-  PAGE_VIEW: "page_view",
-  /** A signed-in session with no backend id. A defect, reported rather than hidden. */
-  IDENTIFY_FAILED: "identify_failed",
+  ADD_BUSINESS_INITIATED: "add_business_initiated",
+  BUSINESS_DETAILS_ADDED: "business_details_added",
+  SUBSCRIPTION_PLAN_SELECTED: "subscription_plan_selected",
 
-  // ── businesses ───────────────────────────────────────────────────────────
-  BUSINESS_CREATED: "business_created",
-  BUSINESS_SWITCHED: "business_switched",
+  MODULE_CLICKED: "module_clicked",
+  SUB_MODULE_CLICKED: "sub_module_clicked",
 
-  // ── money in ─────────────────────────────────────────────────────────────
+  INVOICE_CREATION_INITIATED: "invoice_creation_initiated",
   INVOICE_CREATED: "invoice_created",
   INVOICE_SENT: "invoice_sent",
-  INVOICE_PAID: "invoice_paid",
+
+  CONTACT_CREATION_INITIATED: "contact_creation_initiated",
+  CONTACT_CREATED: "contact_created",
+
+  BANK_ACCOUNT_CONNECTED: "bank_account_connected",
+
+  SCHEDULE_SUPPORT_CLICKED: "schedule_support_clicked",
+  SUPPORT_MEETING_BOOKED: "support_meeting_booked",
+
+  QUOTE_CREATION_INITIATED: "quote_creation_initiated",
   QUOTE_CREATED: "quote_created",
   QUOTE_SENT: "quote_sent",
-  QUOTE_ACCEPTED: "quote_accepted",
-  CLIENT_REFUND_RECORDED: "client_refund_recorded",
-  /*
-   * No `payment_recorded`. This app has no standalone record-a-payment flow —
-   * an invoice is settled either by the cash dialog or by a bank match, and
-   * both are `invoice_paid`. A second name for the same action would be
-   * double-counted by anyone who summed them.
-   */
 
-  // ── money out ────────────────────────────────────────────────────────────
-  EXPENSE_LOGGED: "expense_logged",
-  SUPER_CONTRIBUTION_RECORDED: "super_contribution_recorded",
-  /*
-   * No `receipt_captured`: a receipt is attached while logging an expense,
-   * never on its own, so it is a property of `expense_logged` (`has_receipt`)
-   * rather than an event. And no `vendor_refund_recorded` — /expenses/
-   * vendor-refunds is a read-only list with no create route, so nothing in
-   * this app could ever fire it.
-   */
+  INVENTORY_ADDITION_INITIATED: "inventory_addition_initiated",
+  INVENTORY_ADDED: "inventory_added",
 
-  // ── banking and transactions ─────────────────────────────────────────────
-  BANK_ACCOUNT_CONNECTED: "bank_account_connected",
-  TRANSACTION_RECONCILED: "transaction_reconciled",
-  TRANSACTION_RULE_CREATED: "transaction_rule_created",
-  TRANSACTIONS_BULK_ACTIONED: "transactions_bulk_actioned",
+  CUSTOM_PRODUCT_CREATION_INITIATED: "custom_product_creation_initiated",
+  CUSTOM_PRODUCT_ADDED: "custom_product_added",
 
-  // ── assets ───────────────────────────────────────────────────────────────
-  // The previous app stopped at "added". The lifecycle after that is most of
-  // what this module does.
-  ASSET_ADDED: "asset_added",
-  ASSET_DISPOSED: "asset_disposed",
-  ASSET_INSURANCE_RECORDED: "asset_insurance_recorded",
-  DEPRECIATION_REPORT_RUN: "depreciation_report_run",
+  ADD_EXPENSE_INITIATED: "add_expense_initiated",
+  EXPENSE_ADDED: "expense_added",
 
-  // ── ledger ───────────────────────────────────────────────────────────────
-  CONTACT_CREATED: "contact_created",
-  CONTACTS_IMPORTED: "contacts_imported",
-  /*
-   * One name, not two. /sales/products and /inventory are two screens over the
-   * same `createInventoryItemApi` call — the products screen's own comment
-   * says "both actions create a Custom item" — so a separate `product_created`
-   * would have been a second name for one action, and anyone summing the two
-   * would have counted every item twice.
-   */
-  INVENTORY_ITEM_CREATED: "inventory_item_created",
-  LIABILITY_ADDED: "liability_added",
-  EQUITY_RECORDED: "equity_recorded",
+  MATCHING_RULE_INITIATED: "matching_rule_initiated",
+  MATCHING_RULE_CREATED: "matching_rule_created",
 
-  // ── operations ───────────────────────────────────────────────────────────
-  // Same name the previous app fired from its KM tracker, so the two can be
-  // read side by side across the switch.
-  KM_TRIP_LOGGED: "km_trip_logged",
-  // The previous app's name too; fired for a manual log and a saved timer
-  // session, the two ways time gets recorded.
-  TIME_ENTRY_LOGGED: "time_entry_logged",
+  CLIENT_REFUND_INITIATED: "client_refund_initiated",
+  CLIENT_REFUND_ISSUED: "client_refund_issued",
 
-  // ── planning and tax ─────────────────────────────────────────────────────
-  BUDGET_CREATED: "budget_created",
+  CREATE_GOAL_INITIATED: "create_goal_initiated",
   GOAL_CREATED: "goal_created",
-  // No `plan_created`: the business planner is budgets, goals and the wallet.
-  // There is no "plan" entity behind it and no endpoint that would create one.
-  TAX_ESTIMATOR_USED: "tax_estimator_used",
-  GST_SETTINGS_CONFIGURED: "gst_settings_configured",
 
-  // ── scheduling ───────────────────────────────────────────────────────────
-  // The previous project's own name, kept so its calendar report carries on.
-  CALENDAR_EVENT_CREATED: "calendar_event_created",
+  CONTRIBUTION_ADD_INITIATED: "contribution_add_initiated",
+  CONTRIBUTION_ADDED: "contribution_added",
 
-  // ── reports ──────────────────────────────────────────────────────────────
-  // One name with a `report` property, not ten names. There are ten report
-  // routes today and there will be more.
-  REPORT_VIEWED: "report_viewed",
-  REPORT_EXPORTED: "report_exported",
+  PAYROLL_ENABLED: "payroll_enabled",
+
+  EMPLOYEE_ADDITION_INITIATED: "employee_addition_initiated",
+  EMPLOYEE_ADDED: "employee_added",
+
+  BULK_UPLOAD_INITIATED: "bulk_upload_initiated",
+  FILE_UPLOADED: "file_uploaded",
+  DATA_MAPPED: "data_mapped",
+  DATA_REVIEW_INITIATED: "data_review_initiated",
+  DATA_IMPORTED: "data_imported",
+  CONTINUE_TO_SOLE_FIELDS_CLICKED: "continue_to_sole_fields_clicked",
+
+  INVOICE_BRANDING_UPLOAD: "invoice_branding_upload",
+
+  VEHICLE_ADDITION_INITIATED: "vehicle_addition_initiated",
+  VEHICLE_ADDED: "vehicle_added",
+  TRIP_ADDITION_INITIATED: "trip_addition_initiated",
+  TRIP_ADDED: "trip_added",
+
+  ADD_TRANSACTION_INITIATED: "add_transaction_initiated",
+
+  ASSET_ADDITION_INITIATED: "asset_addition_initiated",
+  ASSET_DETAILS_ADDED: "asset_details_added",
+  ASSET_PHOTO_UPLOAD_INITIATED: "asset_photo_upload_initiated",
+  ASSET_ADDED: "asset_added",
+
+  ADD_ON_SELECTED: "add_on_selected",
+  /*
+   * The plan's row 66 reads `add_added_to_plan`, which drops the "on" from
+   * add-on; named to match `add_on_selected` instead.
+   */
+  ADD_ON_ADDED_TO_PLAN: "add_on_added_to_plan",
 
   /*
-   * ── migration ────────────────────────────────────────────────────────────
-   *
-   * "Migration" in this app is the five-step bring-your-data-in checklist, not
-   * a transfer out of a named accounting package. There is no source system to
-   * record and no failure state — a step either imported rows or it did not —
-   * so the `migration_started` / `migration_failed` / `source_system` shape
-   * this list first carried described a product that does not exist here.
-   * Corrected before anything shipped, which is the only time a name can be
-   * changed without orphaning somebody's saved report.
+   * Not in the tracking plan — fired when an AI-suggested document match is
+   * approved on a bank line. Kept because it is the only signal of that
+   * feature being used; add it to the plan rather than removing it.
    */
-  MIGRATION_STEP_COMPLETED: "migration_step_completed",
-  MIGRATION_COMPLETED: "migration_completed",
-
-  /*
-   * ── payment provider onboarding ──────────────────────────────────────────
-   *
-   * No SolePay or NextTap names here, by request — both out until each module
-   * is called stable. Neither is reused for anything else: when they come
-   * back, same names, same shape, one `step` per endpoint (see the plan doc,
-   * group 11).
-   */
-
-  // ── subscription ─────────────────────────────────────────────────────────
-  // Every one of these was dead or near-dead in the previous project. Confirm
-  // each actually fires before trusting a conversion number built on it.
-  PAYWALL_HIT: "paywall_hit",
-  UPGRADE_INTENT: "upgrade_intent",
-  PLAN_UPGRADED: "plan_upgraded",
-  PLAN_CANCELED: "plan_canceled",
-  SUBSCRIPTION_REACTIVATED: "subscription_reactivated",
-
-  // ── account ──────────────────────────────────────────────────────────────
-  ACCOUNT_DELETED: "account_deleted",
+  TRANSACTION_RECONCILED: "transaction_reconciled",
 } as const;
 
 export type EventName = (typeof EVENTS)[keyof typeof EVENTS];
 
-/**
- * Properties an event is useless without.
- *
- * "Invoice sent" without the amount does not answer "invoice sent with invoice
- * value", which is the question actually being asked of it. The validator in
- * `lib/analytics.ts` enforces these in development, where the person who left
- * one out is still looking at the screen.
- */
-export const REQUIRED_PROPS: Partial<Record<EventName, readonly string[]>> = {
-  [EVENTS.INVOICE_CREATED]: ["amount"],
-  [EVENTS.INVOICE_SENT]: ["amount"],
-  [EVENTS.INVOICE_PAID]: ["amount", "days_to_payment"],
-  [EVENTS.QUOTE_CREATED]: ["amount"],
-  [EVENTS.QUOTE_SENT]: ["amount"],
-  [EVENTS.QUOTE_ACCEPTED]: ["amount"],
-  [EVENTS.CLIENT_REFUND_RECORDED]: ["amount"],
-  [EVENTS.EXPENSE_LOGGED]: ["amount"],
-  [EVENTS.SUPER_CONTRIBUTION_RECORDED]: ["amount"],
-  [EVENTS.ASSET_ADDED]: ["value"],
-  [EVENTS.ASSET_DISPOSED]: ["value"],
-  [EVENTS.LIABILITY_ADDED]: ["amount"],
-  [EVENTS.EQUITY_RECORDED]: ["amount"],
-  [EVENTS.KM_TRIP_LOGGED]: ["distance_km"],
-  [EVENTS.TIME_ENTRY_LOGGED]: ["duration_minutes", "source"],
-  [EVENTS.BUDGET_CREATED]: ["amount"],
-  [EVENTS.GOAL_CREATED]: ["amount"],
-  [EVENTS.TAX_ESTIMATOR_USED]: ["estimated_tax"],
-  [EVENTS.CONTACTS_IMPORTED]: ["count"],
-  [EVENTS.REPORT_VIEWED]: ["report"],
-  [EVENTS.REPORT_EXPORTED]: ["report", "format"],
-  [EVENTS.MIGRATION_STEP_COMPLETED]: ["step", "count"],
-  [EVENTS.MIGRATION_COMPLETED]: ["record_count"],
-  [EVENTS.PLAN_UPGRADED]: ["plan", "amount"],
-  [EVENTS.PAYWALL_HIT]: ["feature"],
-  [EVENTS.PAGE_VIEW]: ["path"],
+export const REQUIRED_PROPS: Partial<Record<string, readonly string[]>> = {
+  [EVENTS.SIGNUP_INITIATED]: ["signup_method"],
+  [EVENTS.SIGNUP_DETAILS_ENTERED]: ["primary_email", "signup_method"],
+  [EVENTS.ONBD_CHOOSE_PLAN_CLICKED]: ["user_id", "primary_business_name"],
+  [EVENTS.ONBD_SUBSCRIPTION_PLAN_SELECTED]: ["plan_name", "plan_duration", "paid_amount", "is_onboarding"],
+  [EVENTS.SIGNUP_COMPLETED]: ["user_id", "primary_email", "plan_name"],
+  [EVENTS.ONBD_INDUSTRY_SELECTED]: ["industry"],
+  [EVENTS.ONBD_BEFORE_SOLE]: ["prior_tool"],
+  [EVENTS.ONBD_FIRST_JOB_OPTION_SELECTED]: ["option"],
+  [EVENTS.BUSINESS_DETAILS_ADDED]: ["business_id", "business_name"],
+  [EVENTS.SUBSCRIPTION_PLAN_SELECTED]: ["plan_name", "plan_duration", "paid_amount", "currency", "is_onboarding"],
+  [EVENTS.CONTACT_CREATION_INITIATED]: ["module_name"],
+  [EVENTS.ASSET_DETAILS_ADDED]: ["asset_type"],
+  [EVENTS.ASSET_PHOTO_UPLOAD_INITIATED]: ["asset_type"],
+  [EVENTS.MODULE_CLICKED]: ["module_name"],
+  [EVENTS.SUB_MODULE_CLICKED]: ["module_name", "sub_module_name"],
+  [EVENTS.MATCHING_RULE_INITIATED]: ["module_name"],
+  [EVENTS.MATCHING_RULE_CREATED]: ["module_name"],
+  [EVENTS.BULK_UPLOAD_INITIATED]: ["module_name", "sub_module_name"],
+  [EVENTS.FILE_UPLOADED]: ["module_name", "sub_module_name"],
+  [EVENTS.DATA_MAPPED]: ["section_name", "sub_module_name"],
+  [EVENTS.DATA_REVIEW_INITIATED]: ["module_name", "sub_module_name"],
+  [EVENTS.DATA_IMPORTED]: ["module_name", "sub_module_name"],
+  [EVENTS.CONTINUE_TO_SOLE_FIELDS_CLICKED]: ["module_name", "sub_module_name"],
+  [EVENTS.INVOICE_CREATED]: ["invoice_id", "amount"],
+  [EVENTS.INVOICE_SENT]: ["invoice_id", "amount"],
+  [EVENTS.CONTACT_CREATED]: ["contact_type"],
+  [EVENTS.QUOTE_CREATED]: ["quote_id", "amount"],
+  [EVENTS.QUOTE_SENT]: ["quote_id", "amount"],
+  [EVENTS.INVENTORY_ADDED]: ["product_name", "product_type"],
+  [EVENTS.CUSTOM_PRODUCT_ADDED]: ["product_name", "product_type"],
 };
 
-/** Every name that has shipped, for the contract test and the smoke test. */
-export const ALL_EVENT_NAMES: readonly EventName[] = Object.values(EVENTS);
+export const ALL_EVENT_NAMES: readonly string[] = Object.values(EVENTS);

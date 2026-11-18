@@ -33,14 +33,15 @@ import {
 
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
 import { newLineItem, type InvoiceLineItem, type InvoiceSeed } from "@/lib/invoices";
 import type { PageInfo } from "@/lib/products";
 import { compactPayload, num, optionalId, str, toFlag } from "@/lib/projects";
 
 export const TIME_TRACKER_ROOT = "/time-tracker";
+
+/** The entry list's element id — the timer scrolls here once a session is saved. */
+export const TIME_ENTRIES_ANCHOR_ID = "time-entries";
 
 type Raw = Record<string, unknown>;
 type ApiEnvelope<T> = {
@@ -250,6 +251,27 @@ export function hoursBetween(start: string, end: string): number {
  * decimal hours ("7.5") or HH:MM ("7:30"). NaN for anything else, so the
  * field can say so rather than silently counting it as zero.
  */
+/**
+ * A weekly cell as it's typed: decimal hours stop at two places ("7.555"
+ * can't be entered past "7.55"). Anything else — HH:MM, or something that
+ * isn't a time at all — is left for `parseHoursInput` to read or flag.
+ */
+export function limitHoursInput(input: string): string {
+  return input.replace(/^(\s*\d*\.\d{2})\d+/, "$1");
+}
+
+/**
+ * A weekly cell once it's left: decimal hours to exactly two places ("7.5"
+ * → "7.50", "8" → "8.00"), matching the 0.00 placeholder. HH:MM, blanks and
+ * anything unreadable are kept as typed so the cell can still say what's wrong.
+ */
+export function formatHoursInput(input: string): string {
+  const value = input.trim();
+  if (!value || value.includes(":")) return value;
+  const hours = parseHoursInput(value);
+  return Number.isNaN(hours) ? value : hours.toFixed(2);
+}
+
 export function parseHoursInput(input: string): number {
   const value = input.trim();
   if (!value) return 0;
@@ -441,15 +463,6 @@ export async function createManualLogApi(draft: ManualLogDraft): Promise<void> {
     buildEncryptedRequestBody(manualLogPayload(draft)),
   );
   assertOk(response.data, "Failed to create manual log");
-  track(EVENTS.TIME_ENTRY_LOGGED, {
-    duration_minutes: Math.round(draftHours(draft) * 60),
-    source: "manual",
-  });
-}
-
-/** A timer session was saved — counted the same way as a manual log. */
-export function trackTimerEntryLogged(seconds: number): void {
-  track(EVENTS.TIME_ENTRY_LOGGED, { duration_minutes: Math.round(seconds / 60), source: "timer" });
 }
 
 /** The task a group of logs belongs to, opened for editing ("Edit log"). */
@@ -924,7 +937,7 @@ export function rowsFromWeeklyLogs(logs: Raw[]): WeeklyRow[] {
       rows.push(row);
       baseKeys.set(row, baseKey);
     }
-    row.times[day] = log.hours_logged == null ? "" : trim(num(log.hours_logged), 2);
+    row.times[day] = log.hours_logged == null ? "" : num(log.hours_logged).toFixed(2);
     row.logIds[day] = str(log.id) || null;
     row.contactIds[day] = optionalId(log.contact_id);
   });

@@ -66,6 +66,7 @@ import {
 } from "@/hooks/use-time-tracker-query";
 import { apiErrorMessage } from "@/lib/api-error";
 import {
+  TIME_ENTRIES_ANCHOR_ID,
   TIME_PAGE_SIZE,
   buildTimeInvoice,
   formatAgo,
@@ -231,12 +232,15 @@ export function TimeEntriesTable({
   return (
     <div className="space-y-4">
       <section
+        id={TIME_ENTRIES_ANCHOR_ID}
         aria-label="All time entries"
-        className={
-          empty
-            ? undefined
-            : "overflow-hidden rounded-lg border border-border bg-card shadow-sm"
-        }
+        data-usertour="time-entries"
+        // scroll-mt keeps the heading clear of the sticky top bar when the
+        // timer scrolls here after a save.
+        className={cn(
+          "scroll-mt-20",
+          !empty && "overflow-hidden rounded-lg border border-border bg-card shadow-sm",
+        )}
       >
         {!empty && (
           <div className="flex min-h-[52px] flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-2.5">
@@ -263,7 +267,11 @@ export function TimeEntriesTable({
                   <X />
                   Clear
                 </Button>
-                <Button size="sm" onClick={() => startInvoice(selected)}>
+                <Button
+                  size="sm"
+                  onClick={() => startInvoice(selected)}
+                  data-usertour="time-create-invoice"
+                >
                   <FileText />
                   Create invoice
                 </Button>
@@ -343,6 +351,8 @@ export function TimeEntriesTable({
                     ))
                   : tasks.map((task) => {
                       const isOpen = open.has(task.taskId);
+                      // Only the first row carries the tour's anchors.
+                      const first = tasks[0]?.taskId === task.taskId;
                       const invoiceable = task.entries.filter(isLogInvoiceable);
                       const picked = invoiceable.filter((log) =>
                         selected.has(log.id),
@@ -351,6 +361,7 @@ export function TimeEntriesTable({
                         <React.Fragment key={task.taskId}>
                           <TableRow
                             className={cn("bg-card", loading && "opacity-60")}
+                            data-usertour={first ? "time-entry-row" : undefined}
                           >
                             <TableCell>
                               <div className="flex min-w-0 items-center gap-2.5">
@@ -367,11 +378,13 @@ export function TimeEntriesTable({
                                     toggleTask(task, checked === true)
                                   }
                                   aria-label={`Select uninvoiced sessions of ${task.name || "this entry"}`}
+                                  data-usertour={first ? "time-entry-select" : undefined}
                                 />
                                 <button
                                   type="button"
                                   className="grid size-[22px] shrink-0 place-items-center rounded text-muted-foreground hover:bg-accent"
                                   aria-expanded={isOpen}
+                                  data-usertour={first ? "time-entry-expand" : undefined}
                                   aria-label={
                                     isOpen ? "Hide sessions" : "Show sessions"
                                   }
@@ -482,6 +495,7 @@ export function TimeEntriesTable({
                                     size="icon"
                                     className="size-8"
                                     aria-label={`Actions for ${task.name || "this entry"}`}
+                                    data-usertour={first ? "time-entry-actions" : undefined}
                                   >
                                     <MoreHorizontal className="size-4 text-muted-foreground" />
                                   </Button>

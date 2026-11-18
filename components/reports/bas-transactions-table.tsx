@@ -23,17 +23,27 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { CELL, HEAD_TINT, RULE } from "@/components/reports/report-table-tokens";
-import { basDate, type BasCode, type BasReport } from "@/lib/bas-report";
+import { basDate, transactionLabelFor, type BasCode, type BasReport } from "@/lib/bas-report";
 import { reportMoney } from "@/lib/report-periods";
 import { cn } from "@/lib/utils";
 
-/** What each code means, for the badge's tooltip. */
-const CODE_TITLE: Record<BasCode, string> = {
+/** What each BAS code means, for the badge's tooltip. */
+const CODE_TITLE: Record<Exclude<BasCode, "Other">, string> = {
   G1: "Sales (G1)",
   G10: "Capital purchase (G10)",
   G11: "Non-capital purchase (G11)",
-  Other: "Not reported on the BAS",
 };
+
+/**
+ * The badge for a row: the BAS code in Australia; the form's own grouping
+ * where the backend sends one ("Purchases (Box 11)" on a GST101A).
+ */
+function codeBadge(report: BasReport, code: BasCode, gst: number): { text: string; title: string; isCode: boolean } {
+  const label = transactionLabelFor(report.transactionLabels, code, gst);
+  if (label) return { text: label, title: label, isCode: false };
+  if (code === "Other") return { text: code, title: `Not reported on the ${report.returnName}`, isCode: true };
+  return { text: code, title: CODE_TITLE[code], isCode: true };
+}
 
 /**
  * Every transaction behind the worksheet, one page at a time.
@@ -64,9 +74,9 @@ export function BasTransactionsTable({
           <Receipt aria-hidden />
         </EmptyMedia>
         <div className="space-y-1">
-          <EmptyTitle>No GST transactions in this period</EmptyTitle>
+          <EmptyTitle>No {report.taxLabel} transactions in this period</EmptyTitle>
           <EmptyDescription>
-            Nothing reconciled between {report.rangeLabel} carries GST yet.
+            Nothing reconciled between {report.rangeLabel} carries {report.taxLabel} yet.
             Reconcile your bank feed and it&apos;ll be counted here.
           </EmptyDescription>
         </div>
@@ -104,10 +114,10 @@ export function BasTransactionsTable({
             <TableHead className={cn(HEAD_TINT, RULE, "px-4")}>Transaction</TableHead>
             <TableHead className={cn(HEAD_TINT, RULE, "px-4")}>Client / Supplier</TableHead>
             <TableHead className={cn(HEAD_TINT, RULE, "px-4")}>Category</TableHead>
-            <TableHead className={cn(HEAD_TINT, RULE, HUG_COLUMN, "px-4")}>BAS</TableHead>
-            <TableHead className={cn(HEAD_TINT, RULE, "px-4 text-right")}>Ex GST</TableHead>
-            <TableHead className={cn(HEAD_TINT, RULE, "px-4 text-right")}>GST</TableHead>
-            <TableHead className={cn(HEAD_TINT, RULE, "px-4 text-right")}>Inc GST</TableHead>
+            <TableHead className={cn(HEAD_TINT, RULE, HUG_COLUMN, "px-4")}>{report.returnName}</TableHead>
+            <TableHead className={cn(HEAD_TINT, RULE, "px-4 text-right")}>Ex {report.taxLabel}</TableHead>
+            <TableHead className={cn(HEAD_TINT, RULE, "px-4 text-right")}>{report.taxLabel}</TableHead>
+            <TableHead className={cn(HEAD_TINT, RULE, "px-4 text-right")}>Inc {report.taxLabel}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -126,13 +136,18 @@ export function BasTransactionsTable({
               <TableCell className={cn(CELL, RULE)}>{row.party || "—"}</TableCell>
               <TableCell className={cn(CELL, RULE)}>{row.category || "—"}</TableCell>
               <TableCell className={cn(CELL, RULE, HUG_COLUMN)}>
-                <Badge
-                  variant={row.basCode === "Other" ? "secondary" : "outline"}
-                  className="font-mono"
-                  title={CODE_TITLE[row.basCode]}
-                >
-                  {row.basCode}
-                </Badge>
+                {(() => {
+                  const badge = codeBadge(report, row.basCode, row.gst);
+                  return (
+                    <Badge
+                      variant={row.basCode === "Other" ? "secondary" : "outline"}
+                      className={cn(badge.isCode && "font-mono", "whitespace-nowrap")}
+                      title={badge.title}
+                    >
+                      {badge.text}
+                    </Badge>
+                  );
+                })()}
               </TableCell>
               <TableCell className={cn(CELL, RULE, "text-right tabular")}>
                 {reportMoney(row.exGst)}
@@ -155,7 +170,7 @@ export function BasTransactionsTable({
           onPageChange={onPageChange}
           onPageSizeChange={onPageSizeChange}
           itemLabel="transaction"
-          navLabel="BAS transactions pages"
+          navLabel={`${report.returnName} transactions pages`}
           disabled={fetching}
         />
       </div>

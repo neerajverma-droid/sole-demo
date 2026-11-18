@@ -29,8 +29,6 @@ import { format } from "date-fns";
 
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
-import { track } from "@/lib/analytics";
-import { EVENTS } from "@/lib/analytics-events";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
 import { AU_FISCAL_YEAR_START, type FiscalYearStart } from "@/lib/fiscal-year";
 import {
@@ -40,7 +38,7 @@ import {
   type ReportRange,
   type Span,
 } from "@/lib/report-periods";
-import { activeAmountDigits, activeCurrencySymbol } from "@/lib/country-context";
+import { activeAmountDigits, activeCurrencySymbol, type CountryContext } from "@/lib/country-context";
 
 /* ------------------------------------------------------------------ *
  * Column specs
@@ -57,11 +55,21 @@ export type ReportCellFormat = "text" | "money" | "number" | "date" | "badge";
 /** What a `badge` cell is tinted with. Mirrors the Badge component's variants. */
 export type BadgeTone = "success" | "warning" | "secondary" | "outline";
 
+/** The heading a column shows for this business's country. */
+export function columnLabel(spec: ReportColumnSpec, country: CountryContext): string {
+  return spec.countryLabel?.(country) || spec.label || spec.key;
+}
+
 export type ReportColumnSpec = {
   /** The backend's own key, exactly — `"Account Code"`, not `"account_code"`. */
   key: string;
   /** The heading shown. Defaults to `key` when the backend's wording already reads well. */
   label?: string;
+  /**
+   * The heading where it's a jurisdiction noun — the business number is "ABN"
+   * in Australia and "NZBN" in New Zealand. Wins over `label` when set.
+   */
+  countryLabel?: (country: CountryContext) => string;
   format?: ReportCellFormat;
   /** Overrides the alignment the format implies. */
   align?: "left" | "right" | "center";
@@ -460,14 +468,4 @@ export async function downloadTabularReport(
   document.body.removeChild(link);
   window.URL.revokeObjectURL(url);
 
-  /*
-   * One place, covering all six report screens that download — they each call
-   * this, so instrumenting the screens instead would have been six edits and
-   * six chances to miss the seventh.
-   *
-   * `report` is the human title rather than the numeric type id, so a chart
-   * reads "Balance Sheet" instead of "14" and nobody has to keep a lookup
-   * table alongside the dashboard.
-   */
-  track(EVENTS.REPORT_EXPORTED, { report: title, format: fileFormat });
 }

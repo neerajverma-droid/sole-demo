@@ -1,5 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
+const trackMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/analytics", () => ({ track: trackMock }));
+
 import apiRoutes from "@/config/api-routes";
 
 const apiMock = {
@@ -262,5 +265,21 @@ describe("createBusinessContactApi", () => {
     await expect(
       createBusinessContactApi("Client", { name: "Acme" }),
     ).rejects.toThrow("The client saved but the server returned no id.");
+  });
+});
+
+describe("createBusinessContactApi fires its Mixpanel event", () => {
+  it("fires after the server confirms", async () => {
+    trackMock.mockClear();
+    apiMock.post.mockResolvedValue({ data: { success: true, data: { client_id: 5 } } });
+    await createBusinessContactApi("Client", { name: "Acme", email: "a@acme.test" });
+    expect(trackMock).toHaveBeenCalledWith("contact_created", { contact_type: "Client", business_type: null, contact_name: "Acme", contact_email: "a@acme.test" });
+  });
+
+  it("stays silent when the server refuses", async () => {
+    trackMock.mockClear();
+    apiMock.post.mockResolvedValue({ data: { success: false, message: "no" } });
+    await expect(createBusinessContactApi("Client", { name: "Acme", email: "a@acme.test" })).rejects.toThrow();
+    expect(trackMock).not.toHaveBeenCalled();
   });
 });

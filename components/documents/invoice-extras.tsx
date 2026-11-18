@@ -1,16 +1,25 @@
 "use client";
 
 import * as React from "react";
+import Image from "next/image";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
+  ArrowRight,
   Banknote,
+  Check,
   CreditCard,
   FileText,
+  HandCoins,
   Landmark,
+  Loader2,
+  Pencil,
   Paperclip,
   PiggyBank,
+  RefreshCw,
   Upload,
   X,
+  Zap,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -26,6 +35,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { PrefixInput } from "@/components/ui/prefix-input";
 import {
   Select,
   SelectContent,
@@ -34,11 +44,18 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { InfoTip } from "@/components/ui/info-tip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { GATEWAYS, SOLE_PAY_LOGO_SRC } from "@/lib/payments";
 import { DatePicker } from "@/components/documents/date-picker";
 import { Field } from "@/components/documents/field";
 import {
@@ -109,6 +126,25 @@ export function ToggleRow({
   );
 }
 
+/**
+ * Reminders and repeating invoices. Always expanded — it used to fold behind a
+ * toggle, but these are settings people go looking for, so they stay in view
+ * under a plain heading.
+ */
+export function AdvancedOptions({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="space-y-[15px]">
+      <div className="flex flex-col px-1 text-sm font-semibold text-primary-heading">
+        Advanced options
+        <span className="text-xs font-normal text-muted-foreground">
+          Reminders and repeating invoices
+        </span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
 /** A titled panel for the payment and attachment cards. */
 function ExtrasCard({
   icon,
@@ -159,17 +195,24 @@ export type InvoiceBankDetails = {
  *
  * These come from the business profile on the server — the same record the
  * PDF renderer reads — so what's shown here is what the client will actually
- * see. Editing them is therefore a trip to Business details rather than a
- * dialog here: an invoice can't carry its own one-off account.
+ * see. Edit opens the same country-aware dialog as the first-invoice gate,
+ * which saves to the business profile: an invoice can't carry its own
+ * one-off account.
  */
 export function PaymentDetailsCard({
   bank,
   showOnInvoice,
   onShowOnInvoiceChange,
+  onEdit,
+  saving = false,
 }: {
   bank: InvoiceBankDetails;
   showOnInvoice: boolean;
   onShowOnInvoiceChange: (value: boolean) => void;
+  /** Opens the in-place bank details dialog, so editing never leaves the invoice. */
+  onEdit: () => void;
+  /** The switch is being saved: shows a spinner and blocks another toggle. */
+  saving?: boolean;
 }) {
   const { country } = useCountryContext();
   /*
@@ -193,54 +236,180 @@ export function PaymentDetailsCard({
     ...(branch ? { [branch.key]: bank.bsb } : {}),
   });
 
+  // With details on file the card is its header alone: the switch and an Edit
+  // button. The account itself is not repeated here — Edit opens it.
+  const collapsed = hasBankDetails;
+
   return (
     <ExtrasCard
       icon={Banknote}
-      title="Payment Details"
+      title="Show payment details in invoice"
+      tip="The bank account your client pays into. It prints on the invoice. Use Edit to change it for your business."
+      bare={collapsed}
       action={
         hasBankDetails ? (
-          <Switch
-            checked={showOnInvoice}
-            onCheckedChange={onShowOnInvoiceChange}
-            aria-label="Show bank details on this invoice"
-          />
+          <div className="flex items-center gap-2">
+            {/* Nothing to edit while the details are hidden from the invoice. */}
+            {showOnInvoice && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-7"
+                    onClick={onEdit}
+                    aria-label="Edit your bank details"
+                  >
+                    <Pencil />
+                    Edit
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Edit your bank details</TooltipContent>
+              </Tooltip>
+            )}
+            {saving && (
+              <Loader2
+                className="size-4 animate-spin text-muted-foreground"
+                aria-hidden
+              />
+            )}
+            <Switch
+              checked={showOnInvoice}
+              onCheckedChange={onShowOnInvoiceChange}
+              disabled={saving}
+              aria-busy={saving}
+              aria-label="Show bank details on this invoice"
+            />
+          </div>
         ) : undefined
       }
     >
-      <p className="text-xs text-muted-foreground">
-        {hasBankDetails
-          ? showOnInvoice
-            ? "Your client needs these to pay by bank transfer, so they print on the invoice."
-            : "Hidden on this invoice — the client will need another way to pay."
-          : "Add these and your clients can pay by bank transfer. They're required before an invoice can be raised."}
-      </p>
+      {/* A bare card renders its children unpadded, so collapsed means none. */}
+      {!collapsed && (
+        <>
+          <p className="text-xs text-muted-foreground">
+            Add these and your clients can pay by bank transfer. They're
+            required before an invoice can be raised.
+          </p>
 
-      <Button variant="outline" size="sm" asChild>
-        <Link href="/settings?section=business">
-          <Landmark />
-          {hasBankDetails ? "Edit bank details" : "Add bank details"}
-        </Link>
-      </Button>
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/settings?section=business">
+              <Landmark />
+              Add bank details
+            </Link>
+          </Button>
 
-      <dl className="space-y-1.5">
-        {rows.map((row) => (
-          <div
-            key={row.label}
-            className="flex items-baseline justify-between gap-3"
-          >
-            <dt className="text-xs text-muted-foreground">{row.label}</dt>
-            <dd
-              className={cn(
-                "text-sm tabular",
-                row.value ? "font-medium" : "text-muted-foreground",
-              )}
-            >
-              {row.value || "Not provided"}
-            </dd>
-          </div>
-        ))}
-      </dl>
+          <dl className="space-y-1.5">
+            {rows.map((row) => (
+              <div
+                key={row.label}
+                className="flex items-baseline justify-between gap-3"
+              >
+                <dt className="text-xs text-muted-foreground">{row.label}</dt>
+                <dd
+                  className={cn(
+                    "text-sm tabular",
+                    row.value ? "font-medium" : "text-muted-foreground",
+                  )}
+                >
+                  {row.value || "Not provided"}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </>
+      )}
     </ExtrasCard>
+  );
+}
+
+/** One icon per SolePay payment method, keyed by the method's value. */
+const PAYMENT_TYPE_ICONS: Record<
+  (typeof SOLEPAY_PAYMENT_TYPES)[number]["value"],
+  LucideIcon
+> = {
+  credit_card: CreditCard,
+  payto: Zap,
+  bank_transfer: Landmark,
+  direct_payment: HandCoins,
+};
+
+/**
+ * One way to get paid, as a card in the connect dialog. The summary and key
+ * features come from the gateway's own entry, so they read the same as on the
+ * Payments page.
+ */
+function ConnectOption({
+  gatewayId,
+  name,
+  tag,
+  recommended = false,
+  logo,
+  onSelect,
+}: {
+  gatewayId: string;
+  name: string;
+  tag?: string;
+  recommended?: boolean;
+  logo: React.ReactNode;
+  onSelect: () => void;
+}) {
+  const gateway = GATEWAYS.find((entry) => entry.id === gatewayId);
+
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-4 rounded-xl border bg-card p-4 shadow-sm",
+        recommended ? "border-primary/50 ring-1 ring-primary/15" : "border-border",
+      )}
+    >
+      <div className="grid h-20 place-items-center rounded-lg bg-muted/40">
+        {logo}
+      </div>
+
+      <div className="flex-1 space-y-3">
+        <div className="space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h4 className="text-sm font-medium">{name}</h4>
+            {tag && (
+              <Badge className="text-[10px] uppercase tracking-wide">
+                {tag}
+              </Badge>
+            )}
+          </div>
+          {gateway && (
+            <p className="text-xs text-muted-foreground">{gateway.summary}</p>
+          )}
+        </div>
+
+        {gateway && (
+          <ul className="space-y-1.5">
+            {gateway.features.slice(0, 3).map((feature) => (
+              <li
+                key={feature}
+                className="flex items-start gap-2 text-xs text-foreground/80"
+              >
+                <Check
+                  className="mt-0.5 size-3.5 shrink-0 text-primary"
+                  aria-hidden
+                />
+                {feature}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <Button
+        variant={recommended ? "default" : "outline"}
+        className="w-full"
+        onClick={onSelect}
+      >
+        Connect {name}
+        <ArrowRight />
+      </Button>
+    </div>
   );
 }
 
@@ -266,6 +435,8 @@ export function PaymentMethodCard({
   paymentType,
   onPaymentTypeChange,
   savingPaymentType = false,
+  loading = false,
+  onConnect,
 }: {
   rails: InvoicePaymentRails;
   stripeEnabled: boolean;
@@ -276,9 +447,137 @@ export function PaymentMethodCard({
   paymentType: string;
   onPaymentTypeChange: (value: string) => void;
   savingPaymentType?: boolean;
+  /** The connection lookup hasn't answered yet — holds the card rather than flashing "not connected". */
+  loading?: boolean;
+  /**
+   * Where a connect choice goes. The editor passes its unsaved-changes guard,
+   * so a half-filled invoice is asked about instead of silently dropped;
+   * without it the choice just navigates.
+   */
+  onConnect?: (href: string) => void;
 }) {
+  const router = useRouter();
+  const [connectOpen, setConnectOpen] = React.useState(false);
   const solePayLinks = solePayEnabled && paymentType !== "direct_payment";
   const bothOn = solePayLinks && rails.stripeConnected && stripeEnabled;
+  const noneConnected = !rails.payrixConnected && !rails.stripeConnected;
+
+  const goConnect = (href: string) => {
+    setConnectOpen(false);
+    if (onConnect) onConnect(href);
+    else router.push(href);
+  };
+
+  if (loading) {
+    return (
+      <ExtrasCard
+        icon={CreditCard}
+        title="Payment Method"
+        tip="Let clients pay online. Funds settle to your nominated account and fees may apply."
+      >
+        <Skeleton className="h-[72px] w-full rounded-lg" aria-hidden />
+      </ExtrasCard>
+    );
+  }
+
+  /*
+   * Neither rail is connected, so two "Not connected" cards would only be two
+   * dead ends. One roomy prompt does the job; the choice between them is made
+   * in the dialog its button opens. As soon as either rail is connected the full card below
+   * takes over, with its switches.
+   */
+  if (noneConnected) {
+    return (
+      <ExtrasCard
+        icon={CreditCard}
+        title="Payment Method"
+        tip="Let clients pay online. Funds settle to your nominated account and fees may apply."
+      >
+        {/*
+         * The border is a 1px frame with a slow highlight sweeping round it —
+         * a conic gradient turning behind a solid inner panel, so only the edge
+         * ever shows it. Still for anyone who prefers reduced motion.
+         */}
+        <div className="relative overflow-hidden rounded-lg bg-primary/20 p-px">
+          <span
+            aria-hidden
+            className="pointer-events-none absolute -inset-[200%] animate-[spin_7s_linear_infinite] bg-[conic-gradient(from_0deg,transparent_0deg,hsl(var(--primary))_90deg,transparent_180deg)] motion-reduce:animate-none"
+          />
+          <div className="relative flex flex-col items-center gap-3 rounded-[calc(var(--radius)-1px)] bg-card px-5 py-5 text-center">
+            <span
+              className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary"
+              aria-hidden
+            >
+              <HandCoins className="size-5" />
+            </span>
+
+            <div className="max-w-sm space-y-1">
+              <h4 className="text-sm font-semibold text-primary-heading">
+                Get paid faster with online payments
+              </h4>
+              <p className="text-[13px] font-medium text-muted-foreground">
+                Connect a payment method and Sole will match each payment to
+                your invoice automatically.
+              </p>
+            </div>
+
+            <Button onClick={() => setConnectOpen(true)}>
+              Connect payment method
+              <ArrowRight />
+            </Button>
+          </div>
+        </div>
+
+        <Dialog open={connectOpen} onOpenChange={setConnectOpen}>
+          <DialogContent className="sm:max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Add your payment details</DialogTitle>
+              <DialogDescription>
+                Choose how you want to get paid. We&apos;ll take you to Payments
+                to finish connecting.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <ConnectOption
+                gatewayId="sole-pay"
+                name="SolePay"
+                tag="Recommended"
+                recommended
+                logo={
+                  <Image
+                    src={SOLE_PAY_LOGO_SRC}
+                    alt=""
+                    width={203}
+                    height={66}
+                    unoptimized
+                    aria-hidden
+                    className="h-10 w-auto object-contain"
+                  />
+                }
+                onSelect={() => goConnect("/transactions/payments")}
+              />
+              <ConnectOption
+                gatewayId="stripe"
+                name="Stripe"
+                logo={
+                  // No Stripe mark in the repo, so a plain wordmark in their
+                  // purple stands in — swap in the official asset if one's added.
+                  <span
+                    className="text-[26px] font-semibold leading-none tracking-[-0.03em] text-[#635BFF]"
+                    aria-hidden
+                  >
+                    stripe
+                  </span>
+                }
+                onSelect={() => goConnect("/payments")}
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
+      </ExtrasCard>
+    );
+  }
 
   return (
     <ExtrasCard
@@ -287,10 +586,17 @@ export function PaymentMethodCard({
       tip="Let clients pay online. Funds settle to your nominated account and fees may apply."
     >
       {/* SolePay (Payrix / Worldpay) */}
-      <div className="space-y-2 rounded-md border border-border p-3">
+      <div className="space-y-3 rounded-lg border border-border p-3">
         <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-sm font-medium">SolePay</p>
+          <div className="min-w-0 space-y-1">
+            <Image
+              src={SOLE_PAY_LOGO_SRC}
+              alt="SolePay"
+              width={203}
+              height={66}
+              unoptimized
+              className="h-7 w-auto object-contain object-left"
+            />
             <p className="text-xs text-muted-foreground">
               Card, PayTo and bank transfer via Worldpay
             </p>
@@ -310,28 +616,76 @@ export function PaymentMethodCard({
 
         {rails.payrixConnected ? (
           solePayEnabled ? (
-            <RadioGroup
-              value={paymentType}
-              onValueChange={onPaymentTypeChange}
-              disabled={savingPaymentType}
-              aria-label="SolePay payment method"
-              className="gap-1.5"
-            >
-              {SOLEPAY_PAYMENT_TYPES.map((option) => (
-                <label
-                  key={option.value}
-                  className="flex cursor-pointer items-start gap-2 text-sm"
-                >
-                  <RadioGroupItem value={option.value} className="mt-0.5" />
-                  <span>
-                    {option.label}
-                    <span className="block text-xs text-muted-foreground">
-                      {option.hint}
-                    </span>
-                  </span>
-                </label>
-              ))}
-            </RadioGroup>
+            <div className="space-y-2">
+              {/* Tiles rather than a list of radios: the icon and name are
+                  enough to choose by, and the selected one explains itself
+                  below, so four hints don't all compete for attention. */}
+              <RadioGroup
+                value={paymentType}
+                onValueChange={onPaymentTypeChange}
+                disabled={savingPaymentType}
+                aria-label="SolePay payment method"
+                className={cn(
+                  "grid-cols-2 gap-2 transition-opacity",
+                  savingPaymentType && "opacity-60",
+                )}
+              >
+                {SOLEPAY_PAYMENT_TYPES.map((option) => {
+                  const Icon = PAYMENT_TYPE_ICONS[option.value];
+                  const selected = paymentType === option.value;
+                  return (
+                    <label
+                      key={option.value}
+                      className={cn(
+                        "relative flex cursor-pointer items-center gap-2.5 rounded-lg border p-2.5 text-sm font-medium transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring",
+                        selected
+                          ? "border-primary bg-primary/5 text-primary-heading"
+                          : "border-border hover:bg-muted/40",
+                        savingPaymentType && "cursor-not-allowed",
+                      )}
+                    >
+                      <RadioGroupItem
+                        value={option.value}
+                        className="absolute left-0 top-0 size-px border-0 opacity-0 shadow-none"
+                      />
+                      <span
+                        className={cn(
+                          "grid size-8 shrink-0 place-items-center rounded-md [&_svg]:size-4",
+                          selected
+                            ? "bg-primary/10 text-primary"
+                            : "bg-muted text-muted-foreground",
+                        )}
+                        aria-hidden
+                      >
+                        <Icon />
+                      </span>
+                      <span className="min-w-0 flex-1 leading-tight">
+                        {option.label}
+                      </span>
+                      {selected && (
+                        <Check
+                          className="size-4 shrink-0 text-primary"
+                          aria-hidden
+                        />
+                      )}
+                    </label>
+                  );
+                })}
+              </RadioGroup>
+              <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                {savingPaymentType && (
+                  <Loader2
+                    className="size-3 shrink-0 animate-spin"
+                    aria-hidden
+                  />
+                )}
+                {
+                  SOLEPAY_PAYMENT_TYPES.find(
+                    (option) => option.value === paymentType,
+                  )?.hint
+                }
+              </p>
+            </div>
           ) : (
             <p className="text-xs text-muted-foreground">
               Switch this on to automate payments on this invoice through
@@ -348,42 +702,29 @@ export function PaymentMethodCard({
         )}
       </div>
 
-      {/* Stripe */}
-      <div className="space-y-2 rounded-md border border-border p-3">
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-sm font-medium">Stripe</p>
-            <p className="text-xs text-muted-foreground">
-              Card payments through your Stripe account
-            </p>
-          </div>
-          {rails.stripeConnected ? (
+      {/* Stripe — only once it's connected; there's nothing to choose before. */}
+      {rails.stripeConnected && (
+        <div className="space-y-2 rounded-lg border border-border p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium">Stripe</p>
+              <p className="text-xs text-muted-foreground">
+                Card payments through your Stripe account
+              </p>
+            </div>
             <Switch
               checked={stripeEnabled}
               onCheckedChange={onStripeChange}
               aria-label="Enable Stripe on this invoice"
             />
-          ) : (
-            <Badge variant="outline" className="shrink-0 text-[10px]">
-              Not connected
-            </Badge>
-          )}
-        </div>
-        {rails.stripeConnected ? (
+          </div>
           <p className="text-xs text-muted-foreground">
             {stripeEnabled
               ? "Clients can pay this invoice online by card using Stripe."
               : "Stripe is connected. Switch it on to enable Stripe for this invoice."}
           </p>
-        ) : (
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/payments">
-              <CreditCard />
-              Connect Stripe
-            </Link>
-          </Button>
-        )}
-      </div>
+        </div>
+      )}
 
       {bothOn && (
         <p className="text-xs text-muted-foreground">
@@ -395,10 +736,106 @@ export function PaymentMethodCard({
 }
 
 /**
+ * A switch row whose settings are asked for in a dialog rather than unfolded
+ * under it. Turning it on opens the dialog and nothing is switched on until
+ * Save — so Cancel leaves the row exactly as it was. Once on, the row shows a
+ * one-line summary and Edit reopens the dialog; turning it off needs no dialog.
+ */
+function ToggleRowDialog({
+  label,
+  description,
+  tip,
+  enabled,
+  onTurnOff,
+  summary,
+  title,
+  dialogDescription,
+  canSave,
+  onOpen,
+  onSave,
+  children,
+}: {
+  label: string;
+  description: string;
+  tip: string;
+  enabled: boolean;
+  onTurnOff: () => void;
+  /** What's currently set, in a line, shown while the row is on. */
+  summary: string;
+  title: string;
+  dialogDescription: string;
+  canSave: boolean;
+  /** Called as the dialog opens, to start its fields from what's saved. */
+  onOpen: () => void;
+  onSave: () => void;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const openDialog = () => {
+    onOpen();
+    setOpen(true);
+  };
+
+  return (
+    <>
+      <ToggleRow
+        label={label}
+        description={description}
+        tip={tip}
+        checked={enabled}
+        onChange={(next) => (next ? openDialog() : onTurnOff())}
+      >
+        <div className="flex items-center justify-between gap-3 border-t border-border pt-3">
+          <p className="min-w-0 text-xs text-muted-foreground">{summary}</p>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 shrink-0"
+            onClick={openDialog}
+          >
+            Edit
+          </Button>
+        </div>
+      </ToggleRow>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{title}</DialogTitle>
+            <DialogDescription>{dialogDescription}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">{children}</div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={!canSave}
+              onClick={() => {
+                onSave();
+                setOpen(false);
+              }}
+            >
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+/**
  * The follow-up reminder, with the two things the schedule actually needs:
  * when it fires and what it says. The toggle alone would save a reminder with
- * no date and no message, which is why these live inside it rather than being
- * inferred.
+ * no date and no message, which is why they're asked for in a dialog the moment
+ * it's switched on.
  */
 export function FollowUpReminderRow({
   enabled,
@@ -422,69 +859,99 @@ export function FollowUpReminderRow({
   onNotifyClientChange: (value: boolean) => void;
   dueDate: string;
 }) {
-  const parsed = Number(days);
+  // What's typed in the dialog, held apart so Cancel has nothing to undo.
+  const [draftDays, setDraftDays] = React.useState(days);
+  const [draftNote, setDraftNote] = React.useState(note);
+  const [draftNotify, setDraftNotify] = React.useState(notifyClient);
+
+  const parsed = Number(draftDays);
   const daysIssue =
-    days.trim() && (!Number.isInteger(parsed) || parsed < 1)
+    draftDays.trim() && (!Number.isInteger(parsed) || parsed < 1)
       ? "Enter a whole number of days, 1 or more."
       : undefined;
-
   const fires =
     !daysIssue && parsed >= 1 && dueDate
       ? formatDateLabel(addDays(dueDate, -parsed))
       : null;
 
+  const savedDays = Number(days);
+  const summary = [
+    savedDays >= 1
+      ? `${savedDays} ${savedDays === 1 ? "day" : "days"} before the due date`
+      : "Reminder on",
+    savedDays >= 1 && dueDate
+      ? `fires ${formatDateLabel(addDays(dueDate, -savedDays))}`
+      : null,
+    notifyClient ? "client emailed too" : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
-    <ToggleRow
+    <ToggleRowDialog
       label="Follow up work reminder"
       description="Useful for jobs that may need a check-in later."
       tip="Be notified and/or send your client a follow up email for follow up work (e.g. if maintenance may be required)."
-      checked={enabled}
-      onChange={onEnabledChange}
+      enabled={enabled}
+      onTurnOff={() => onEnabledChange(false)}
+      summary={summary}
+      title="Follow up work reminder"
+      dialogDescription="Choose when to be reminded, and what about."
+      canSave={draftDays.trim() !== "" && !daysIssue}
+      onOpen={() => {
+        setDraftDays(days);
+        setDraftNote(note);
+        setDraftNotify(notifyClient);
+      }}
+      onSave={() => {
+        onDaysChange(draftDays.trim());
+        onNoteChange(draftNote);
+        onNotifyClientChange(draftNotify);
+        onEnabledChange(true);
+      }}
     >
-      <div className="space-y-3 border-t border-border pt-3">
-        <Field
-          label="Days before due date"
-          required
-          error={daysIssue}
-          hint={fires ? `Fires on ${fires}.` : undefined}
-        >
-          <Input
-            className={cn(
-              "tabular",
-              daysIssue && "border-destructive focus-visible:ring-destructive",
-            )}
-            inputMode="numeric"
-            value={days}
-            onChange={(event) => onDaysChange(event.target.value)}
-            placeholder="7"
-            aria-invalid={!!daysIssue}
-          />
-        </Field>
+      <Field
+        label="Days before due date"
+        required
+        error={daysIssue}
+        hint={fires ? `Fires on ${fires}.` : undefined}
+      >
+        <Input
+          className={cn(
+            "tabular",
+            daysIssue && "border-destructive focus-visible:ring-destructive",
+          )}
+          inputMode="numeric"
+          value={draftDays}
+          onChange={(event) => setDraftDays(event.target.value)}
+          placeholder="7"
+          aria-invalid={!!daysIssue}
+        />
+      </Field>
 
-        <Field label="What needs following up">
-          <Textarea
-            rows={2}
-            value={note}
-            onChange={(event) => onNoteChange(event.target.value)}
-            placeholder="e.g. Check whether the filter needs replacing"
-          />
-        </Field>
+      <Field label="What needs following up">
+        <Textarea
+          rows={2}
+          value={draftNote}
+          onChange={(event) => setDraftNote(event.target.value)}
+          placeholder="e.g. Check whether the filter needs replacing"
+        />
+      </Field>
 
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0 space-y-0.5">
-            <p className="text-sm font-medium">Email the client too</p>
-            <p className="text-xs text-muted-foreground">
-              Off means only you are reminded.
-            </p>
-          </div>
-          <Switch
-            checked={notifyClient}
-            onCheckedChange={onNotifyClientChange}
-            aria-label="Email the client too"
-          />
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 space-y-0.5">
+          <p className="text-sm font-medium">Email the client too</p>
+          <p className="text-xs text-muted-foreground">
+            Off means only you are reminded.
+          </p>
         </div>
+        <Switch
+          checked={draftNotify}
+          onCheckedChange={setDraftNotify}
+          aria-label="Email the client too"
+        />
       </div>
-    </ToggleRow>
+    </ToggleRowDialog>
   );
 }
 
@@ -515,103 +982,143 @@ export function RepeatingInvoiceRow({
   tagLine: string;
   onTagLineChange: (value: string) => void;
 }) {
-  const parsed = Number(occurrences);
+  // What's chosen in the dialog, held apart so Cancel has nothing to undo.
+  const [draftFrequency, setDraftFrequency] = React.useState(frequency);
+  const [draftStart, setDraftStart] = React.useState(startDate);
+  const [draftOccurrences, setDraftOccurrences] = React.useState(occurrences);
+  const [draftTagLine, setDraftTagLine] = React.useState(tagLine);
+  const [draftReview, setDraftReview] = React.useState(reviewBeforeSending);
+
+  const parsed = Number(draftOccurrences);
   const occurrencesIssue =
-    occurrences.trim() && (!Number.isInteger(parsed) || parsed < 1)
+    draftOccurrences.trim() && (!Number.isInteger(parsed) || parsed < 1)
       ? "Enter a whole number of copies, 1 or more."
       : undefined;
 
   // "Once off" raises exactly one copy on the start date, so asking how many
   // times to repeat it would be a contradiction.
-  const onceOff = frequency === "Once off";
+  const onceOff = draftFrequency === "Once off";
+
+  const summary = [
+    frequency,
+    startDate
+      ? `${frequency === "Once off" ? "raised" : "first copy"} ${formatDateLabel(startDate)}`
+      : null,
+    frequency !== "Once off" && occurrences.trim()
+      ? `${occurrences.trim()} copies`
+      : null,
+    reviewBeforeSending ? "held for review" : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
-    <ToggleRow
+    <ToggleRowDialog
       label="Repeating invoice"
       description="Set it once and Sole raises it again on schedule."
       tip="This invoice will repeat automatically (automatically or review prior to sending)."
-      checked={enabled}
-      onChange={onEnabledChange}
+      enabled={enabled}
+      onTurnOff={() => onEnabledChange(false)}
+      summary={summary}
+      title="Repeating invoice"
+      dialogDescription="Choose how often this invoice is raised again."
+      canSave={!occurrencesIssue}
+      onOpen={() => {
+        setDraftFrequency(frequency);
+        setDraftStart(startDate);
+        setDraftOccurrences(occurrences);
+        setDraftTagLine(tagLine);
+        setDraftReview(reviewBeforeSending);
+      }}
+      onSave={() => {
+        onFrequencyChange(draftFrequency);
+        onStartDateChange(draftStart);
+        onOccurrencesChange(draftFrequency === "Once off" ? "" : draftOccurrences.trim());
+        onTagLineChange(draftTagLine);
+        onReviewChange(draftReview);
+        onEnabledChange(true);
+      }}
     >
-      <div className="space-y-3 border-t border-border pt-3">
-        <Field label="Frequency">
-          <Select
-            value={frequency}
-            onValueChange={(next) => onFrequencyChange(next as RepeatFrequency)}
-          >
-            {/* No bg override: the control takes the shared surface, so it
-                matches the fields around it on whatever it's sitting on. */}
-            <SelectTrigger aria-label="Repeat frequency">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {REPEAT_FREQUENCIES.map((option) => (
-                <SelectItem key={option} value={option}>
-                  {option}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-
-        <Field
-          label={onceOff ? "Raise it on" : "First copy on"}
-          hint="The invoice you're writing now goes out today either way."
+      <Field label="Frequency">
+        <Select
+          value={draftFrequency}
+          onValueChange={(next) => setDraftFrequency(next as RepeatFrequency)}
         >
-          <DatePicker
-            label={onceOff ? "Raise it on" : "First copy on"}
-            value={startDate}
-            onChange={onStartDateChange}
-          />
-        </Field>
+          {/* No bg override: the control takes the shared surface, so it
+              matches the fields around it on whatever it's sitting on. */}
+          <SelectTrigger aria-label="Repeat frequency">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {REPEAT_FREQUENCIES.map((option) => (
+              <SelectItem key={option} value={option}>
+                {option}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
 
-        {!onceOff && (
-          <Field
-            label="Number of copies"
-            error={occurrencesIssue}
-            hint="Leave blank to keep repeating until you stop it."
-          >
-            <Input
-              className={cn(
-                "tabular",
-                occurrencesIssue &&
-                  "border-destructive focus-visible:ring-destructive",
-              )}
-              inputMode="numeric"
-              value={occurrences}
-              onChange={(event) => onOccurrencesChange(event.target.value)}
-              placeholder="e.g. 12"
-              aria-invalid={!!occurrencesIssue}
-            />
-          </Field>
-        )}
+      <Field
+        label={onceOff ? "Raise it on" : "First copy on"}
+        hint="The invoice you're writing now goes out today either way."
+      >
+        <DatePicker
+          label={onceOff ? "Raise it on" : "First copy on"}
+          value={draftStart}
+          onChange={setDraftStart}
+        />
+      </Field>
 
+      {!onceOff && (
         <Field
-          label="Label"
-          hint="Carried onto each copy, so the series is recognisable in your list."
+          label="Number of copies"
+          error={occurrencesIssue}
+          hint="Leave blank to keep repeating until you stop it."
         >
           <Input
-            value={tagLine}
-            onChange={(event) => onTagLineChange(event.target.value)}
-            placeholder="e.g. Monthly retainer"
+            className={cn(
+              "tabular",
+              occurrencesIssue &&
+                "border-destructive focus-visible:ring-destructive",
+            )}
+            inputMode="numeric"
+            value={draftOccurrences}
+            onChange={(event) => setDraftOccurrences(event.target.value)}
+            placeholder="e.g. 12"
+            aria-invalid={!!occurrencesIssue}
           />
         </Field>
+      )}
 
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0 space-y-0.5">
-            <p className="text-sm font-medium">Review before sending</p>
-            <p className="text-xs text-muted-foreground">
-              Hold each copy as a draft instead of sending it straight out.
-            </p>
-          </div>
-          <Switch
-            checked={reviewBeforeSending}
-            onCheckedChange={onReviewChange}
-            aria-label="Review before sending"
-          />
+      {/* Label — hidden for now. State and save wiring stay, so putting it back
+          is just uncommenting this.
+      <Field
+        label="Label"
+        hint="Carried onto each copy, so the series is recognisable in your list."
+      >
+        <Input
+          value={draftTagLine}
+          onChange={(event) => setDraftTagLine(event.target.value)}
+          placeholder="e.g. Monthly retainer"
+        />
+      </Field>
+      */}
+
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 space-y-0.5">
+          <p className="text-sm font-medium">Review before sending</p>
+          <p className="text-xs text-muted-foreground">
+            Hold each copy as a draft instead of sending it straight out.
+          </p>
         </div>
+        <Switch
+          checked={draftReview}
+          onCheckedChange={setDraftReview}
+          aria-label="Review before sending"
+        />
       </div>
-    </ToggleRow>
+    </ToggleRowDialog>
   );
 }
 
@@ -678,14 +1185,28 @@ export function DepositCard({
   const draftAmount = depositAmount(draft, total, items, gstPercent) ?? 0;
 
   const numeric = Number(value) || 0;
+  // A "deposit" for the whole invoice is just the invoice, so every mode stops
+  // short of it: 99% at most, an amount below the total, and at least one line
+  // left out. None of them can be nothing either.
+  const MAX_PERCENT = 99;
+  // Ticking every line is the whole invoice; one line alone can never qualify.
+  const coversEveryLine =
+    selectable.length > 0 && selected.length >= selectable.length;
+  const itemsDepositOk =
+    selected.length > 0 &&
+    !coversEveryLine &&
+    !(total > 0 && draftAmount >= total);
   const invalid =
     mode === "items"
-      ? selected.length === 0
+      ? !itemsDepositOk
       : !value.trim() ||
         numeric <= 0 ||
-        (mode === "percent" && numeric > 100) ||
-        // A "deposit" for the whole invoice is just the invoice.
+        (mode === "percent" && numeric > MAX_PERCENT) ||
         (mode === "amount" && numeric >= total);
+  // With a single line, picking it would be the whole invoice.
+  const itemsUnavailable = selectable.length < 2;
+  // One tick away from covering every line: the last box is locked.
+  const lastLineLocked = selectable.length > 0 && selected.length >= selectable.length - 1;
 
   const requested = depositAmount(deposit, total, items, gstPercent);
 
@@ -758,7 +1279,14 @@ export function DepositCard({
           </DialogHeader>
 
           <div className="space-y-4">
-            <Field label="Ask for">
+            <Field
+              label="Ask for"
+              hint={
+                itemsUnavailable
+                  ? "Line items needs at least two lines on the document."
+                  : undefined
+              }
+            >
               <Select
                 value={mode}
                 onValueChange={(next) =>
@@ -769,9 +1297,14 @@ export function DepositCard({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="percent">A percentage</SelectItem>
-                  <SelectItem value="amount">A fixed amount</SelectItem>
-                  <SelectItem value="items">Chosen line items</SelectItem>
+                  <SelectItem value="percent">Percentage</SelectItem>
+                  <SelectItem value="amount">Fixed amount</SelectItem>
+                  <SelectItem
+                    value="items"
+                    disabled={itemsUnavailable && mode !== "items"}
+                  >
+                    Line items
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </Field>
@@ -782,7 +1315,9 @@ export function DepositCard({
                 required
                 error={
                   invalid && selectable.length > 0
-                    ? "Choose at least one line."
+                    ? selected.length === 0
+                      ? "Choose at least one line."
+                      : "Leave at least one line out — a deposit can't cover the whole invoice."
                     : undefined
                 }
               >
@@ -797,6 +1332,9 @@ export function DepositCard({
                         <label className="flex cursor-pointer items-center gap-2.5 rounded-md p-2 transition-colors hover:bg-accent">
                           <Checkbox
                             checked={selected.includes(entry.index)}
+                            disabled={
+                              lastLineLocked && !selected.includes(entry.index)
+                            }
                             onCheckedChange={(checked) =>
                               setSelected((current) =>
                                 checked
@@ -829,23 +1367,19 @@ export function DepositCard({
                 error={
                   invalid && value.trim()
                     ? mode === "percent"
-                      ? "Enter a percentage between 1 and 100."
+                      ? `Enter a percentage above 0 and up to ${MAX_PERCENT}.`
                       : `Enter an amount below ${money(total)}.`
                     : undefined
                 }
               >
-                <div className="relative">
-                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-                    {mode === "percent" ? "%" : currencySymbol(documentCurrency)}
-                  </span>
-                  <Input
-                    value={value}
-                    inputMode="decimal"
-                    onChange={(event) => setValue(event.target.value)}
-                    className="pl-7 tabular"
-                    aria-label={mode === "percent" ? "Percentage" : "Amount"}
-                  />
-                </div>
+                <PrefixInput
+                  prefix={mode === "percent" ? "%" : currencySymbol(documentCurrency)}
+                  value={value}
+                  inputMode="decimal"
+                  onChange={(event) => setValue(event.target.value)}
+                  className="tabular"
+                  aria-label={mode === "percent" ? "Percentage" : "Amount"}
+                />
               </Field>
             )}
 
@@ -907,12 +1441,15 @@ export function DepositCard({
 export function InvoiceNotesCard({
   notes,
   onNotesChange,
+  tip,
 }: {
   notes: string;
   onNotesChange: (value: string) => void;
+  /** Explains the card from an info icon beside its title. */
+  tip?: string;
 }) {
   return (
-    <ExtrasCard icon={FileText} title="Notes">
+    <ExtrasCard icon={FileText} title="Notes" tip={tip}>
       <Field label="Invoice notes">
         <Textarea
           rows={4}
@@ -926,19 +1463,24 @@ export function InvoiceNotesCard({
 }
 
 /**
- * Matches the 10 MB per-file cap multer enforces on the invoice and quote
- * routes. It was 20 MB, so a file between the two passed this check and was
- * then rejected by the server — failing the whole save with a message about
- * the request rather than about the file.
+ * Matches the per-file cap multer enforces on the invoice and quote save
+ * routes (sole-ocr `upload2` in routes/invoice.js, `upload` in
+ * routes/v2/quote.js). Keep them in step: a file between the two would pass
+ * this check and then be rejected by the server — failing the whole save with
+ * a message about the request rather than about the file.
  */
-const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const MAX_ATTACHMENTS = 5;
 
 export function AttachmentsCard({
   files,
   onChange,
   onFilesSelected,
   onRemoveFile,
+  onReplaceFile,
+  pickedFiles,
   disabled,
+  tip,
 }: {
   files: InvoiceAttachment[];
   onChange: (files: InvoiceAttachment[]) => void;
@@ -951,30 +1493,80 @@ export function AttachmentsCard({
   onFilesSelected?: (files: { id: string; file: File }[]) => void;
   /** Fired instead of `onChange` doing the filtering, for a caller that needs to delete the file server-side too. */
   onRemoveFile?: (file: InvoiceAttachment) => void;
+  /**
+   * Swaps one attachment for a newly picked file. Offering it adds a Replace
+   * button to every row; the caller decides what replacing means (the listing's
+   * dialog deletes the stored file, then uploads the new one).
+   */
+  onReplaceFile?: (file: InvoiceAttachment, replacement: File) => void;
+  /**
+   * Browser files the caller already holds for rows with no `url` — a file
+   * the form was seeded with, say, which never passed through this card.
+   * Files picked here are remembered by the card itself.
+   */
+  pickedFiles?: { id: string; file: File }[];
   /** Disables adding/removing while an upload or delete is in flight. */
   disabled?: boolean;
+  /** Explains the card from an info icon beside its title. */
+  tip?: string;
 }) {
   const inputRef = React.useRef<HTMLInputElement>(null);
+  const replaceInputRef = React.useRef<HTMLInputElement>(null);
+  /** The row whose Replace button opened the file picker. */
+  const replacingRef = React.useRef<InvoiceAttachment | null>(null);
   const [dragging, setDragging] = React.useState(false);
+  /** Files picked in this card, by attachment id — what a not-yet-uploaded row opens. */
+  const localFilesRef = React.useRef(new Map<string, File>());
+  /** One object URL per previewed file, released when the card goes away. */
+  const previewUrlsRef = React.useRef(new Map<string, string>());
+  React.useEffect(() => {
+    const urls = previewUrlsRef.current;
+    return () => urls.forEach((url) => URL.revokeObjectURL(url));
+  }, []);
+
+  const localFileFor = (id: string): File | undefined =>
+    localFilesRef.current.get(id) ??
+    pickedFiles?.find((entry) => entry.id === id)?.file;
+
+  /** Opens a not-yet-uploaded file in a new tab, where the browser previews PDFs and images. */
+  const previewLocal = (id: string) => {
+    const file = localFileFor(id);
+    if (!file) return;
+    let url = previewUrlsRef.current.get(id);
+    if (!url) {
+      url = URL.createObjectURL(file);
+      previewUrlsRef.current.set(id, url);
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
 
   const accept = (incoming: FileList) => {
     const next: InvoiceAttachment[] = [];
     const accepted: { id: string; file: File }[] = [];
+    let overLimit = false;
     for (const file of Array.from(incoming)) {
       if (file.size > MAX_ATTACHMENT_BYTES) {
-        toast.error(`${file.name} is over 10 MB`);
+        toast.error(`${file.name} is over 20 MB`);
+        continue;
+      }
+      if (files.length + next.length >= MAX_ATTACHMENTS) {
+        overLimit = true;
         continue;
       }
       const id = newAttachmentId();
       next.push({ id, name: file.name, size: file.size });
       accepted.push({ id, file });
+      localFilesRef.current.set(id, file);
+    }
+    if (overLimit) {
+      toast.error(`You can attach up to ${MAX_ATTACHMENTS} files`);
     }
     if (next.length) onChange([...files, ...next]);
     if (accepted.length) onFilesSelected?.(accepted);
   };
 
   return (
-    <ExtrasCard icon={Paperclip} title="Attachments">
+    <ExtrasCard icon={Paperclip} title="Attachments" tip={tip}>
       <div
         onDragOver={(event) => {
           event.preventDefault();
@@ -1012,7 +1604,7 @@ export function AttachmentsCard({
           or drag &amp; drop files
         </p>
         <p className="text-xs text-muted-foreground">
-          Max size: 20MB · Allowed: Images, PDF
+          Max {MAX_ATTACHMENTS} files · 20MB each · Allowed: Images, PDF
         </p>
         <input
           ref={inputRef}
@@ -1040,8 +1632,8 @@ export function AttachmentsCard({
                 aria-hidden
               />
               <div className="min-w-0 flex-1">
-                {/* A file already on the server can be opened; one picked a
-                    moment ago has no address yet. */}
+                {/* A file already on the server opens from its address; one
+                    picked a moment ago opens from the browser's own copy. */}
                 {file.url ? (
                   <a
                     href={file.url}
@@ -1051,6 +1643,14 @@ export function AttachmentsCard({
                   >
                     {file.name}
                   </a>
+                ) : localFileFor(file.id) ? (
+                  <button
+                    type="button"
+                    onClick={() => previewLocal(file.id)}
+                    className="block max-w-full truncate text-left text-sm font-medium underline-offset-4 hover:underline"
+                  >
+                    {file.name}
+                  </button>
                 ) : (
                   <p className="truncate text-sm font-medium">{file.name}</p>
                 )}
@@ -1062,6 +1662,22 @@ export function AttachmentsCard({
                   </p>
                 )}
               </div>
+              {onReplaceFile && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 shrink-0 gap-1.5 px-2 text-muted-foreground"
+                  disabled={disabled}
+                  onClick={() => {
+                    replacingRef.current = file;
+                    replaceInputRef.current?.click();
+                  }}
+                  aria-label={`Replace ${file.name}`}
+                >
+                  <RefreshCw className="size-3.5" aria-hidden />
+                  Replace
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="icon"
@@ -1079,6 +1695,28 @@ export function AttachmentsCard({
             </li>
           ))}
         </ul>
+      )}
+
+      {onReplaceFile && (
+        <input
+          ref={replaceInputRef}
+          type="file"
+          accept="image/png,image/jpeg,application/pdf"
+          className="sr-only"
+          disabled={disabled}
+          onChange={(event) => {
+            const replacement = event.target.files?.[0];
+            const target = replacingRef.current;
+            event.target.value = "";
+            replacingRef.current = null;
+            if (!replacement || !target) return;
+            if (replacement.size > MAX_ATTACHMENT_BYTES) {
+              toast.error(`${replacement.name} is over 20 MB`);
+              return;
+            }
+            onReplaceFile(target, replacement);
+          }}
+        />
       )}
     </ExtrasCard>
   );

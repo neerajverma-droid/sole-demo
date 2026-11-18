@@ -42,11 +42,7 @@ export type MigrationStepId =
  * There is no longer a `placeholder` kind: every step now opens a real
  * importer, so a row that couldn't do anything has nothing left to say.
  */
-export type MigrationDialogId =
-  | "contacts"
-  | "invoices"
-  | "expenses"
-  | "assets";
+export type MigrationDialogId = "bank";
 
 export type MigrationTarget =
   | { kind: "route"; href: string }
@@ -73,8 +69,10 @@ export const MIGRATION_STEPS: MigrationStep[] = [
     description: "Import your bank transaction history",
     icon: Landmark,
     noun: "transactions",
-    // The CSV wizard at /transactions/bulk — a real importer, reused whole.
-    target: { kind: "route", href: "/transactions/bulk" },
+    // Asks first, as the old page did: connect a bank feed, or upload a file
+    // (the CSV wizard at /transactions/bulk?from=migrations). See
+    // `BankOptionsDialog`.
+    target: { kind: "dialog", dialog: "bank" },
   },
   {
     id: "contacts",
@@ -83,9 +81,8 @@ export const MIGRATION_STEPS: MigrationStep[] = [
     description: "Import your client and supplier contacts",
     icon: Building2,
     noun: "contacts",
-    // `BulkUploadDialog`, which reads `bulkUploadOpenAtom` and so can be
-    // mounted anywhere that wants it.
-    target: { kind: "dialog", dialog: "contacts" },
+    // The shared bulk importer, rendered as a page (`BulkUploadDialog page`).
+    target: { kind: "route", href: "/contacts/bulk?from=migrations" },
   },
   {
     id: "invoices",
@@ -94,9 +91,8 @@ export const MIGRATION_STEPS: MigrationStep[] = [
     description: "Import your client invoices and billing history",
     icon: FileText,
     noun: "invoices",
-    // `InvoiceBulkUploadDialog` — the same importer Contacts uses, driven by
-    // `invoiceBulkOpenAtom`.
-    target: { kind: "dialog", dialog: "invoices" },
+    // The same importer, as a page.
+    target: { kind: "route", href: "/invoices/bulk?from=migrations" },
   },
   {
     id: "expenses",
@@ -105,8 +101,8 @@ export const MIGRATION_STEPS: MigrationStep[] = [
     description: "Import your business expenses and receipts",
     icon: Receipt,
     noun: "expenses",
-    // `ExpenseBulkUploadDialog`, driven by `expenseBulkOpenAtom`.
-    target: { kind: "dialog", dialog: "expenses" },
+    // The same importer, as a page.
+    target: { kind: "route", href: "/expenses/bulk?from=migrations" },
   },
   {
     id: "assets",
@@ -115,10 +111,10 @@ export const MIGRATION_STEPS: MigrationStep[] = [
     description: "Import your company assets and equipment",
     icon: Package,
     noun: "assets",
-    // `AssetBulkUploadDialog`, driven by `assetBulkOpenAtom`. This used to
-    // send people to /assets/new/upload, which captures one asset from one
-    // document — a different job from bringing a register across.
-    target: { kind: "dialog", dialog: "assets" },
+    // The same importer, as a page. This used to send people to
+    // /assets/new/upload, which captures one asset from one document — a
+    // different job from bringing a register across.
+    target: { kind: "route", href: "/assets/bulk?from=migrations" },
   },
 ];
 

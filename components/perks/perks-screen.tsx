@@ -32,6 +32,7 @@ export function PerksScreen() {
       <PageHeader
         icon={Megaphone}
         title="Sole Perks"
+        tourId="perks-header"
         description="Exclusive offers from partners we've lined up to help your business succeed."
       />
 

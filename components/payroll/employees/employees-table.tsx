@@ -232,13 +232,11 @@ export function EmployeesTable({
   if (pageInfo.total === 0 || failed) {
     // A failed fetch also leaves the total at 0 — a different problem from an
     // honestly empty list, and it says so rather than offering "New employee"
-    // over a request that never landed. Only an honestly empty list drops the
-    // toolbar: there's nothing yet to search or filter, and the screen hides
-    // the stat cards on the same terms.
+    // over a request that never landed.
     return (
       <div className="space-y-4">
-        {(failed || filtered) && toolbar}
-        <Empty>
+        {toolbar}
+        <Empty data-usertour={!failed && !filtered ? "payroll-employees-empty" : undefined}>
           <EmptyMedia>
             {failed ? (
               <TriangleAlert aria-hidden />

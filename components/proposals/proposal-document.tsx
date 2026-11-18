@@ -7,12 +7,8 @@ import {
   ChevronRight,
   Loader2,
   PenLine,
-  CornerUpRight,
   CreditCard,
   FileText,
-  MoreHorizontal,
-  Reply,
-  Search,
 } from "lucide-react";
 
 import {
@@ -21,6 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ProposalEmailPreview } from "@/components/proposals/proposal-email-preview";
 import {
   formatProposalDate,
   formatProposalMoney,
@@ -66,18 +63,72 @@ export type PortalActions = {
   signedAt?: string | null;
   onPayStripe?: () => void;
   payingStripe?: boolean;
+  /** SolePay opens once the proposal is accepted (its invoice is raised then). */
+  onPaySolePay?: () => void;
+  payingSolePay?: boolean;
 };
 
 export const PREVIEW_TABS = [
   "Cover",
   "Introduction",
   "Services",
+  "Documents",
   "Pricing",
   "Terms",
   "Thank You",
 ] as const;
 
 export type PreviewTab = (typeof PREVIEW_TABS)[number] | "Email";
+
+/**
+ * The numbered section steps (1 Cover › 2 Introduction › …). Scrolls
+ * sideways when it doesn't fit, keeping the current section in view.
+ */
+export function PreviewSectionNav({
+  index,
+  onSelect,
+  className,
+}: {
+  index: number;
+  onSelect: (index: number) => void;
+  className?: string;
+}) {
+  const current = React.useRef<HTMLButtonElement>(null);
+  React.useEffect(() => {
+    current.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [index]);
+
+  return (
+    <nav className={cn("flex items-center overflow-x-auto", className)} aria-label="Proposal sections">
+      {PREVIEW_TABS.map((tab, at) => (
+        <button
+          key={tab}
+          ref={at === index ? current : undefined}
+          type="button"
+          onClick={() => onSelect(at)}
+          aria-current={at === index ? "step" : undefined}
+          className={cn(
+            "flex shrink-0 items-center py-1 text-sm",
+            at === index ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <span className="flex items-center gap-2">
+            <span
+              className={cn(
+                "grid size-5 place-items-center rounded-full border text-[10px]",
+                at === index ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background",
+              )}
+            >
+              {at + 1}
+            </span>
+            {tab}
+          </span>
+          {at !== PREVIEW_TABS.length - 1 && <ChevronRight className="mx-3 size-3.5 text-muted-foreground" />}
+        </button>
+      ))}
+    </nav>
+  );
+}
 
 export const SIGNATURE_SIZES: Record<SignatureSize, string> = {
   small: "text-[26px]",
@@ -87,7 +138,7 @@ export const SIGNATURE_SIZES: Record<SignatureSize, string> = {
 
 /** The paper sheet every section (but the introduction and email) sits on. */
 export const PAPER_PAGE =
-  "proposal-document-page mx-auto w-full max-w-[760px] rounded-3xl bg-card px-6 py-10 text-center text-foreground shadow-lg sm:px-14 sm:py-14";
+  "proposal-document-page mx-auto w-full max-w-[760px] rounded-3xl bg-card px-5 py-8 text-center text-foreground shadow-lg sm:px-14 sm:py-14";
 
 function DotDivider() {
   return (
@@ -361,7 +412,7 @@ export function ProposalSection({
         <p className="text-lg text-primary">
           Services prepared for {clientName}
         </p>
-        <h1 className="mt-3 text-4xl font-semibold text-foreground">Services</h1>
+        <h1 className="mt-3 break-words text-3xl font-semibold text-foreground sm:text-4xl">Services</h1>
         <DotDivider />
         <p className="text-[13px] text-muted-foreground">
           What&apos;s included in this proposal.
@@ -431,7 +482,7 @@ export function ProposalSection({
     return (
       <div className="mx-auto max-w-lg text-left">
         <p className="text-lg text-primary">Pricing summary</p>
-        <h1 className="mt-3 text-4xl font-semibold text-foreground">
+        <h1 className="mt-3 break-words text-3xl font-semibold text-foreground sm:text-4xl">
           {formatProposalMoney(total, currency)}
         </h1>
         {showAud && audTotal != null && (
@@ -523,36 +574,55 @@ export function ProposalSection({
             )}
           </div>
         )}
+
+        {payment.payment_required && payment.pay_method === "solepay" && (
+          <div className="mt-4 rounded-xl border border-border bg-card p-4 text-center">
+            {payment.is_paid ? (
+              <div className="flex flex-col items-center gap-2">
+                <PaidStamp />
+                <p className="text-[12px] text-muted-foreground">
+                  Paid via SolePay
+                  {payment.paid_at && ` on ${formatProposalDate(payment.paid_at)}`}
+                </p>
+              </div>
+            ) : portal?.signed ? (
+              <>
+                <p className="text-[13px] text-muted-foreground">
+                  Pay securely with SolePay by card, bank transfer or PayTo.
+                </p>
+                <button
+                  type="button"
+                  onClick={portal.onPaySolePay}
+                  disabled={!portal.onPaySolePay || portal.payingSolePay}
+                  className="mx-auto mt-3 flex h-11 w-fit items-center justify-center gap-2 rounded-full bg-primary px-8 text-[13px] font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {portal.payingSolePay ? <Loader2 className="size-4 animate-spin" /> : <CreditCard className="size-4" />}
+                  {portal.payingSolePay ? "Opening SolePay…" : "Pay with SolePay"}
+                </button>
+              </>
+            ) : (
+              <p className="text-[13px] text-muted-foreground">
+                Payment is by SolePay. Once you accept the proposal, a <strong>Pay with SolePay</strong> button
+                appears here.
+              </p>
+            )}
+          </div>
+        )}
       </div>
     );
   }
 
-  if (section === "Terms") {
+  // The Add. Docs. step's files, each viewable — their own page, between Services and Pricing.
+  if (section === "Documents") {
     return (
       <div className="mx-auto max-w-xl text-left">
-        <p className="text-lg text-primary">Terms &amp; conditions</p>
-        <h1 className="mt-3 text-4xl font-semibold text-foreground">
-          {terms.title || "Terms & Conditions"}
-        </h1>
+        <p className="text-lg text-primary">Documents</p>
+        <h1 className="mt-3 break-words text-3xl font-semibold text-foreground sm:text-4xl">Additional documents</h1>
         <DotDivider />
-        <p className="text-[13px] text-muted-foreground">
-          Please read the following terms carefully before signing.
-        </p>
-        {!isBlankHtml(terms.body) ? (
-          <RichHtml
-            html={terms.body}
-            className="mt-7 text-[14px] leading-relaxed text-foreground"
-          />
-        ) : (
-          <p className="mt-7 text-[14px] leading-relaxed text-foreground">
-            Terms and signature content will appear here once it is added.
-          </p>
-        )}
-
-        {documents.length > 0 && (
-          <div className="mt-10 rounded-2xl border border-border bg-primary/5 p-5">
-            <h2 className="text-base font-semibold text-foreground">Additional documents</h2>
-            <div className="mt-4 space-y-3">
+        {documents.length > 0 ? (
+          <>
+            <p className="text-[13px] text-muted-foreground">Please review these documents alongside the proposal.</p>
+            <div className="mt-7 space-y-3 rounded-2xl border border-border bg-primary/5 p-5">
               {documents.map((document, index) => (
                 <div
                   key={`${document.name}-${index}`}
@@ -576,17 +646,45 @@ export function ProposalSection({
                 </div>
               ))}
             </div>
-          </div>
+          </>
+        ) : (
+          <p className="text-[14px] text-muted-foreground">No additional documents are attached to this proposal.</p>
+        )}
+        <DocumentPreviewDialog document={viewing} onClose={() => setViewing(null)} />
+      </div>
+    );
+  }
+
+  if (section === "Terms") {
+    return (
+      <div className="mx-auto max-w-xl text-left">
+        <p className="text-lg text-primary">Terms &amp; conditions</p>
+        <h1 className="mt-3 break-words text-3xl font-semibold text-foreground sm:text-4xl">
+          {terms.title || "Terms & Conditions"}
+        </h1>
+        <DotDivider />
+        <p className="text-[13px] text-muted-foreground">
+          Please read the following terms carefully before signing.
+        </p>
+        {!isBlankHtml(terms.body) ? (
+          <RichHtml
+            html={terms.body}
+            className="mt-7 text-[14px] leading-relaxed text-foreground"
+          />
+        ) : (
+          <p className="mt-7 text-[14px] leading-relaxed text-foreground">
+            Terms and signature content will appear here once it is added.
+          </p>
         )}
 
         {terms.require_signature && (
-          <div className="mt-12 flex items-center justify-between gap-4 rounded-xl border border-dashed border-border px-6 py-5 text-left">
+          <div className="mt-12 flex flex-col items-start gap-4 rounded-xl border border-dashed border-border px-4 py-5 text-left sm:flex-row sm:items-center sm:justify-between sm:px-6">
             <div className="min-w-0 flex-1">
               <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
                 Signed by
               </p>
               {portal?.signed && portal.signatureName ? (
-                <p className={cn(SIGNATURE_FONT_CLASS, "mb-1 text-[32px] leading-none text-foreground")}>
+                <p className={cn(SIGNATURE_FONT_CLASS, "mb-1 break-words text-[32px] leading-none text-foreground")}>
                   {portal.signatureName}
                 </p>
               ) : (
@@ -617,8 +715,6 @@ export function ProposalSection({
             )}
           </div>
         )}
-
-        <DocumentPreviewDialog document={viewing} onClose={() => setViewing(null)} />
       </div>
     );
   }
@@ -639,7 +735,7 @@ export function ProposalSection({
             <Check className="size-[22px] text-primary" strokeWidth={2.5} />
           </div>
         </div>
-        <h1 className="mt-4 text-5xl font-semibold text-foreground">
+        <h1 className="mt-4 break-words text-4xl font-semibold text-foreground sm:text-5xl">
           {thankYou.title || "Thank you"}
         </h1>
         <p className="mx-auto mt-5 max-w-[420px] whitespace-pre-line text-[15px] leading-relaxed text-muted-foreground">
@@ -662,17 +758,9 @@ export function ProposalSection({
     );
   }
 
-  // Email — internal-only: what goes out when Send is clicked.
-  const enabled = notification.send_notification !== false;
-  const cc = notification.cc_emails ?? [];
-  const recipient = client?.email
-    ? cc.length
-      ? `${client.email} and ${cc.length} other${cc.length > 1 ? "s" : ""}`
-      : client.email
-    : null;
-  const initial = businessName.charAt(0).toUpperCase();
-
-  if (!enabled) {
+  // Email — internal-only: what goes out when Send is clicked, drawn as the
+  // email the client receives (the same design the backend sends).
+  if (notification.send_notification === false) {
     return (
       <p className="rounded-2xl border border-dashed border-border bg-card p-6 text-center text-muted-foreground">
         Email notification is disabled for this proposal — nothing will be sent
@@ -681,84 +769,7 @@ export function ProposalSection({
     );
   }
 
-  return (
-    <div className="overflow-hidden rounded-2xl border border-border bg-card text-left text-foreground shadow-sm">
-      <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        <div className="flex items-center gap-2">
-          <span className="size-3 rounded-full bg-[#ff5f57]" />
-          <span className="size-3 rounded-full bg-[#febc2e]" />
-          <span className="size-3 rounded-full bg-[#28c840]" />
-          <span className="ml-2 text-[12px] text-muted-foreground">Inbox</span>
-        </div>
-        <Search className="size-3.5 text-muted-foreground" aria-hidden />
-      </div>
-      <div className="px-6 pb-6 pt-5">
-        <h2 className="mb-3 text-[20px] font-bold leading-tight text-foreground">
-          Proposal from {notification.message_from || businessName}
-        </h2>
-        <div className="mb-4 flex items-center gap-2">
-          <span className="rounded bg-primary/10 px-2 py-[3px] text-[10px] font-semibold uppercase tracking-[0.1em] text-primary">
-            Inbox
-          </span>
-          <span className="rounded bg-warning/10 px-2 py-[3px] text-[10px] font-semibold uppercase tracking-[0.1em] text-warning">
-            Proposal
-          </span>
-        </div>
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-start gap-3">
-            <div className="grid size-9 shrink-0 place-items-center rounded-full bg-primary text-[13px] font-semibold text-primary-foreground">
-              {initial}
-            </div>
-            <div>
-              <span className="text-[13px] font-semibold text-foreground">{businessName}</span>
-              <p className="mt-[2px] text-[12px] text-muted-foreground">
-                to{" "}
-                {recipient ? (
-                  <span className="text-foreground">{recipient}</span>
-                ) : (
-                  <span className="text-warning">No client email on file</span>
-                )}
-              </p>
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-3 text-muted-foreground">
-            <span className="text-[11px] text-muted-foreground">
-              {formatProposalDate(new Date().toISOString(), true)}
-            </span>
-            <Reply className="size-3.5" aria-hidden />
-            <MoreHorizontal className="size-3.5" aria-hidden />
-          </div>
-        </div>
-        <div className="my-4 h-px bg-muted" />
-        {!isBlankHtml(notification.email_body) ? (
-          <RichHtml
-            html={notification.email_body}
-            className="mb-5 text-[13px] leading-relaxed text-foreground"
-          />
-        ) : (
-          <p className="mb-5 text-[13px] text-muted-foreground">
-            No custom message added — the client will just receive the standard
-            proposal email with a link to view and respond.
-          </p>
-        )}
-        <div className="mb-4 h-px bg-muted" />
-        <div className="mb-4 flex items-center gap-3 rounded-[10px] border border-border p-3">
-          <div className="grid size-9 shrink-0 place-items-center rounded-full border-2 border-border text-[13px] font-semibold text-muted-foreground">
-            {initial}
-          </div>
-          <p className="text-[13px] font-semibold text-foreground">{businessName}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-[12px] font-medium">
-            <Reply className="size-3.5" aria-hidden /> Reply
-          </span>
-          <span className="flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-[12px] font-medium">
-            <CornerUpRight className="size-3.5" aria-hidden /> Forward
-          </span>
-        </div>
-      </div>
-    </div>
-  );
+  return <ProposalEmailPreview preview={preview} />;
 }
 
 function PriceRow({

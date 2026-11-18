@@ -122,11 +122,21 @@ const MAX_AMOUNT = 99_999_999.99;
  */
 const ROW_ISSUES: {
   message: string;
+  /** The cell at fault, so Review can mark it. */
+  field: keyof ParsedTxnValues;
+  /**
+   * What the cell itself says — short, since it sits under a value in a narrow
+   * column. A function where one rule covers a blank and a wrong value, which
+   * deserve different words.
+   */
+  hint: string | ((row: ParsedTxnValues) => string);
   summary: string;
   test: (row: ParsedTxnValues) => boolean;
 }[] = [
   {
     message: "Type must be Credit or Debit",
+    field: "type",
+    hint: "Choose Credit or Debit",
     summary: "missing a valid Type",
     // Via `canonicalTxnType`, so the "CR"/"DR" and "Money in"/"Money out"
     // spellings a bank export uses pass rather than reading as missing.
@@ -134,6 +144,8 @@ const ROW_ISSUES: {
   },
   {
     message: "Invalid amount",
+    field: "amount",
+    hint: (row) => (row.amount.trim() === "" ? "Required" : "Enter an amount, e.g. 250.00"),
     summary: "missing a valid Amount",
     test: (row) => {
       const cleaned = row.amount.replace(/[$,\s]/g, "");
@@ -144,6 +156,8 @@ const ROW_ISSUES: {
   },
   {
     message: "Date must be DD/MM/YYYY",
+    field: "date",
+    hint: (row) => (row.date.trim() === "" ? "Required" : "Use DD/MM/YYYY"),
     summary: "missing a valid Date",
     test: (row) => !parseImportDate(row.date),
   },
@@ -151,6 +165,8 @@ const ROW_ISSUES: {
     // The backend refuses a transaction dated after today, and refuses the
     // batch with it — so it's caught here, where one row can be fixed.
     message: "Date is in the future",
+    field: "date",
+    hint: "Can't be in the future",
     summary: "dated in the future",
     test: (row) => {
       const iso = parseImportDate(row.date);
@@ -161,6 +177,8 @@ const ROW_ISSUES: {
     // Three, not two: `validateBulkTransactionRowBasic` requires
     // `description.length >= 3`.
     message: "Description must be at least 3 characters",
+    field: "description",
+    hint: (row) => (row.description.trim() === "" ? "Required" : "At least 3 characters"),
     summary: "missing a description",
     test: (row) => row.description.trim().length < 3,
   },
@@ -214,6 +232,32 @@ function isRealDate(year: number, month: number, day: number): boolean {
 
 export function txnRowIssues(row: ParsedTxnValues): string[] {
   return ROW_ISSUES.filter((issue) => issue.test(row)).map((i) => i.message);
+}
+
+/** The cells a row's current issues point at. */
+export function txnIssueFields(row: ParsedTxnRow): Set<keyof ParsedTxnValues> {
+  const fields = new Set<keyof ParsedTxnValues>();
+  for (const issue of ROW_ISSUES) {
+    if (row.issues.includes(issue.message)) fields.add(issue.field);
+  }
+  return fields;
+}
+
+/**
+ * What each cell of a row is wrong with, as the short text it shows — only
+ * the cells that are wrong, the first problem for a cell with several.
+ */
+export function txnFieldErrors(
+  row: ParsedTxnValues,
+): Partial<Record<keyof ParsedTxnValues, string>> {
+  const errors: Partial<Record<keyof ParsedTxnValues, string>> = {};
+  for (const issue of ROW_ISSUES) {
+    if (!errors[issue.field] && issue.test(row)) {
+      errors[issue.field] =
+        typeof issue.hint === "function" ? issue.hint(row) : issue.hint;
+    }
+  }
+  return errors;
 }
 
 /** Re-runs validation after an inline edit, so counts update live. */

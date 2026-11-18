@@ -493,6 +493,27 @@
     background-color: hsl(var(--muted-foreground) / 0.5);
   }
 
+  /* A slim bar that can still be seen and grabbed — for a wide table's
+     sideways scroll, where `scrollbar-thin`'s pale 4px thumb disappears. */
+  .scrollbar-visible {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.4) transparent;
+  }
+  .scrollbar-visible::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-visible::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-visible::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted-foreground) / 0.4);
+    border-radius: 9999px;
+  }
+  .scrollbar-visible::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground) / 0.6);
+  }
+
   /* Staggered entrance for the lifecycle nodes — a per-child delay, which
      Tailwind's animation utilities can't express on their own. */
   .stagger > * {
@@ -608,6 +629,18 @@
 }
 
 /*
+ * The same for the curtains that dim the page around a tour step and stop
+ * clicks reaching it, and the spotlight that does the same over the target of a
+ * step that blocks it. Over a modal dialog they inherited `pointer-events: none`
+ * too, so the fields could still be typed into while the tour was describing
+ * them. Anything the SDK hides or leaves clickable keeps its inline `none`.
+ */
+.usertour-widget-curtain,
+.usertour-widget-spotlight {
+  pointer-events: auto;
+}
+
+/*
  * The theme's 320px tooltip, held to the screen on a phone narrower than
  * about 344px. The theme has no responsive sizes, but the card's content is
  * an iframe that reflows to whatever width this leaves it.
@@ -644,12 +677,17 @@ html[data-sole-tour-spotlight] .usertour-widget-spotlight {
  * opacity rules: the SDK writes its opacity inline, and an animation is the
  * only thing that outranks that without !important. `scale` on its own, not
  * `transform`, which the SDK uses for the card's position.
+ *
+ * Qualified with the surface class to outrank the SDK's own
+ * `.usertour-widget-stage > *` reveal, which is injected after this sheet.
+ * At equal weight that won, so a parked card faded in 20px off its target
+ * and then slid home: the jitter on every Next.
  */
-[data-sole-tour-card="hold"] {
+.usertour-widget-surface[data-sole-tour-card="hold"] {
   animation: sole-tour-card-hold 1s linear infinite;
 }
 
-[data-sole-tour-card="in"] {
+.usertour-widget-surface[data-sole-tour-card="in"] {
   animation: sole-tour-card-in 420ms cubic-bezier(0.25, 0.8, 0.5, 1) backwards;
 }
 
@@ -874,4 +912,25 @@ html[data-sole-tour-spotlight] .usertour-widget-spotlight {
 .proposal-rich-html mark {
   background-color: transparent;
   color: inherit;
+}
+
+/*
+ * The invoice list tour's stand-in "Recurring" badge. It is rendered (hidden)
+ * beside the invoice number on rows that aren't recurring, and the tour turns
+ * it on for the first row only while it explains the badge.
+ */
+html[data-tour-demo="recurring"] tbody tr:first-child .tour-demo-recurring {
+  display: inline-flex;
+}
+
+/*
+ * Comments on a proposal's public link (client-portal/portal-comments.tsx):
+ * the quoted text highlighted with the CSS Custom Highlight API, so the page's
+ * markup is never touched. The selected thread's text is stronger.
+ */
+::highlight(proposal-comment) {
+  background-color: hsl(var(--warning) / 0.25);
+}
+::highlight(proposal-comment-active) {
+  background-color: hsl(var(--warning) / 0.55);
 }

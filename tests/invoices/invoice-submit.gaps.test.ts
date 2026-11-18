@@ -433,6 +433,19 @@ describe("fetchInvoiceRuntimePreviewBlob", () => {
     expect(fields).toMatchObject({ invoiceId: "8801", id: "8801" });
   });
 
+  it("sends attachments under `files`, the one field the preview route's multer accepts", async () => {
+    apiMock.post.mockResolvedValue({ data: new Uint8Array() });
+    const file = new File(["x"], "a.pdf", { type: "application/pdf" });
+
+    await fetchInvoiceRuntimePreviewBlob(draft(), { ...CONTEXT, files: [file, file] });
+
+    const body = apiMock.post.mock.calls[0][1] as FormData;
+    expect(body).toBeInstanceOf(FormData);
+    expect(typeof body.get("data")).toBe("string");
+    expect(body.getAll("files")).toHaveLength(2);
+    expect(body.has("files[]")).toBe(false);
+  });
+
   it("reads the pay button from the gated rail flags", async () => {
     apiMock.post.mockResolvedValue({ data: new Uint8Array() });
 
