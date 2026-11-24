@@ -51,6 +51,7 @@ import {
   type NavPin,
 } from "@/components/layout/nav-row";
 import { SoleLogo } from "@/components/layout/sole-logo";
+import { StartAccountButton } from "@/components/layout/start-account-button";
 import { CommunityDialog } from "@/components/layout/community-dialog";
 import { EducationDialog } from "@/components/layout/education-dialog";
 import { LogoutDialog } from "@/components/layout/logout-dialog";
@@ -470,6 +471,7 @@ export function AppSidebar() {
         </nav>
       </SidebarContent>
       <SidebarFooter className="gap-0">
+        <StartAccountButton variant="sidebar" />
         <button
           type="button"
           onClick={() => {

@@ -8,6 +8,7 @@ import { FirstSubscriptionGate } from "@/components/layout/first-subscription-ga
 import { PlanRouteGate } from "@/components/layout/plan-route-gate";
 import { SupportChat } from "@/components/layout/support-chat";
 import { TopBar } from "@/components/layout/top-bar";
+import { DemoBanner } from "@/components/layout/demo-banner";
 import { TrialBanner } from "@/components/layout/trial-banner";
 import { VerifyEmailBanner } from "@/components/layout/verify-email-banner";
 import { OnboardingSurveyPopup } from "@/components/onboarding/survey/onboarding-survey-popup";
@@ -31,6 +32,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <SidebarProvider>
         <AppSidebar />
         <div className="flex min-w-0 flex-1 flex-col">
+          <DemoBanner />
           <VerifyEmailBanner />
           <TrialBanner />
           <TopBar />

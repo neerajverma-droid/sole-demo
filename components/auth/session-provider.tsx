@@ -12,6 +12,7 @@ import {
 import { clearClientState } from "@/lib/api/teardown";
 import { resumeSession, signOut as signOutRequest } from "@/lib/auth";
 import type { AuthUser } from "@/lib/api/types";
+import { DEMO_LOGIN_ENABLED, startDemo } from "@/lib/demo";
 import { useSessionStore } from "@/stores/session";
 
 /**
@@ -85,12 +86,57 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     // `resumeSession` spends it. Only neither token means there is nothing to
     // ask the server about.
     if (!getAccessToken() && !getRefreshToken()) {
+      if (typeof window !== "undefined") {
+        const p = window.location.pathname;
+        if (
+          p.startsWith("/register") ||
+          p.startsWith("/accountant-invite") ||
+          p.startsWith("/auth/accountant-")
+        ) {
+          setUser(null);
+          setStatus("unauthenticated");
+          return null;
+        }
+      }
+
+      if (DEMO_LOGIN_ENABLED) {
+        try {
+          const result = await startDemo();
+          if (result.ok && result.user) {
+            setUser(result.user);
+            setStatus("authenticated");
+            return result.user;
+          }
+        } catch (err) {
+          console.error("Auto demo login failed:", err);
+        }
+      }
+
       setUser(null);
       setStatus("unauthenticated");
       return null;
     }
 
     const resumed = await resumeSession();
+    if (!resumed && DEMO_LOGIN_ENABLED) {
+      if (
+        typeof window === "undefined" ||
+        (!window.location.pathname.startsWith("/register") &&
+          !window.location.pathname.startsWith("/accountant-invite") &&
+          !window.location.pathname.startsWith("/auth/accountant-"))
+      ) {
+        try {
+          const result = await startDemo();
+          if (result.ok && result.user) {
+            setUser(result.user);
+            setStatus("authenticated");
+            return result.user;
+          }
+        } catch (err) {
+          console.error("Auto demo login fallback failed:", err);
+        }
+      }
+    }
     setUser(resumed);
     setStatus(resumed ? "authenticated" : "unauthenticated");
     return resumed;

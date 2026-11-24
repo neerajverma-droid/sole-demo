@@ -4,7 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAtom } from "jotai";
-import { Loader2, Tag } from "lucide-react";
+import { Loader2, Sparkles, Tag } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,6 +45,7 @@ import {
   signUpFromInvite,
   type SpmReferral,
 } from "@/lib/spm-referral";
+import { startDemo } from "@/lib/demo";
 
 /**
  * /register — a new account.
@@ -336,6 +337,19 @@ export function RegisterScreen() {
               Sign in
             </Link>
           </p>
+          <div className="flex items-center justify-center pt-1">
+            <button
+              type="button"
+              onClick={async () => {
+                await startDemo();
+                window.location.assign("/dashboard");
+              }}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary transition-colors cursor-pointer"
+            >
+              <Sparkles className="size-3.5 text-primary" aria-hidden />
+              <span>Want to keep exploring? Return to demo</span>
+            </button>
+          </div>
           <p className="text-xs">
             <AuthLegalLine action="creating an account" />
           </p>

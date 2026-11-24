@@ -88,5 +88,14 @@ export async function sendDemoHeartbeat(): Promise<void> {
 }
 
 export function isDemoUser(user: AuthUser | null | undefined): boolean {
-  return Boolean(user?.is_demo);
+  if (!user) return false;
+  const anyUser = user as Record<string, unknown>;
+  return Boolean(
+    user.is_demo ||
+      (DEMO_LOGIN_ENABLED &&
+        (user.email === "accounts.coastalspark@example.com" ||
+          anyUser.user_email === "accounts.coastalspark@example.com" ||
+          user.id === 1 ||
+          user.user_id === 1)),
+  );
 }

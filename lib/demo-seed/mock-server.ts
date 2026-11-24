@@ -60,7 +60,7 @@ export const demoUser = {
   full_name: "Sam Taylor",
   business_name: "Coastal Spark Electrical",
   role: "Owner",
-  is_demo: false,
+  is_demo: true,
   account_verified: 1,
   plan: "pro",
   has_password: true,

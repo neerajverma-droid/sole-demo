@@ -27,6 +27,10 @@ import { clearClientState } from "@/lib/api/teardown";
 export const LOGIN_ROUTE = "/login";
 export const REGISTER_ROUTE = "/register";
 
+/** Target URL for creating a real account from the demo. */
+export const LIVE_REGISTER_URL =
+  process.env.NEXT_PUBLIC_LIVE_URL || "https://webstaging.getsole.ai/register";
+
 /** The link in an accountant's invite email; reached with no session. */
 export const ACCOUNTANT_INVITE_ROUTE = "/accountant-invite";
 

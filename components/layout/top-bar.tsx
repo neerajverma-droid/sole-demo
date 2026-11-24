@@ -9,6 +9,7 @@ import { Notifications } from "@/components/layout/notifications";
 import { ProfileMenu } from "@/components/layout/profile-menu";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { ActiveTimerControl } from "@/components/projects/active-timer-control";
+import { StartAccountButton } from "@/components/layout/start-account-button";
 import { commandOpenAtom } from "@/lib/atoms";
 import { useSubscriptionQuery } from "@/hooks/use-subscription-query";
 
@@ -51,6 +52,7 @@ export function TopBar() {
 
       {/* The running timer, from any page — drawn only while one runs. */}
       <ActiveTimerControl className="hidden md:flex" />
+      <StartAccountButton />
       <HeaderActions />
       <ThemeToggle />
       <Notifications />

@@ -5,7 +5,7 @@ import { Loader2, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useSession } from "@/components/auth/session-provider";
-import { REGISTER_ROUTE } from "@/lib/api/session";
+import { clearSession, LIVE_REGISTER_URL } from "@/lib/api/session";
 import { DEMO_HEARTBEAT_MS, isDemoUser, sendDemoHeartbeat } from "@/lib/demo";
 
 const formatTime = (iso: string) =>
@@ -60,8 +60,9 @@ export function DemoBanner() {
   const signUp = async () => {
     setLeaving("signup");
     await signOut({ redirect: false });
+    clearSession();
     // A hard navigation, for the reason `signOut` gives for its own.
-    window.location.assign(REGISTER_ROUTE);
+    window.location.assign(LIVE_REGISTER_URL);
   };
 
   return (
@@ -93,13 +94,16 @@ export function DemoBanner() {
         </Button>
         <Button
           size="sm"
+          className="gap-1.5 font-semibold shadow-sm"
           disabled={leaving !== null}
           onClick={() => void signUp()}
         >
-          {leaving === "signup" && (
-            <Loader2 className="animate-spin" aria-hidden />
+          {leaving === "signup" ? (
+            <Loader2 className="size-3.5 animate-spin" aria-hidden />
+          ) : (
+            <Sparkles className="size-3.5 text-primary-foreground" aria-hidden />
           )}
-          Create your account
+          Start my account
         </Button>
       </div>
     </div>

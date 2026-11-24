@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAtom } from "jotai";
 import { Loader2 } from "lucide-react";
 
@@ -23,15 +23,21 @@ import { SocialButtons } from "@/components/auth/social-buttons";
 import { useAuthEntry, withEmail } from "@/components/auth/use-auth-entry";
 import BrandSplashLoader from "@/components/layout/brand-splash-loader";
 import { authEmailAtom, authErrorAtom, authPendingAtom } from "@/lib/atoms";
-import { REGISTER_ROUTE } from "@/lib/api/session";
+import { LIVE_REGISTER_URL, REGISTER_ROUTE } from "@/lib/api/session";
 import { rememberSocialStart, trackSignupInitiated } from "@/lib/analytics";
 import { signInWithPassword } from "@/lib/auth";
+import { DEMO_LOGIN_ENABLED, startDemo } from "@/lib/demo";
 
 const DEMO_EMAIL = "accounts.coastalspark@example.com";
 const DEMO_PASSWORD = "CoastalSpark2026!";
 
 export function LoginScreen() {
   const router = useRouter();
+  const rawSearchParams = useSearchParams();
+  const searchParams = React.useMemo(
+    () => new URLSearchParams(rawSearchParams?.toString() ?? ""),
+    [rawSearchParams],
+  );
   const { land, resolving } = useAuthEntry();
   const code = useEmailCode();
 
@@ -50,6 +56,27 @@ export function LoginScreen() {
       setEmail(DEMO_EMAIL);
     }
   }, [email, setEmail]);
+
+  // When visiting login in demo mode, auto-login directly to the dashboard
+  // unless the user explicitly arrived from a deliberate sign-out or error.
+  const autoLoginAttempted = React.useRef(false);
+  React.useEffect(() => {
+    if (!DEMO_LOGIN_ENABLED || autoLoginAttempted.current) return;
+    const hasReason = searchParams.get("error") || searchParams.get("reason");
+    if (!hasReason) {
+      autoLoginAttempted.current = true;
+      void (async () => {
+        try {
+          const result = await startDemo();
+          if (result.ok && result.user) {
+            await land(result.user);
+          }
+        } catch {
+          // Fall back to pre-filled login screen if auto login encounters any issue
+        }
+      })();
+    }
+  }, [searchParams, land]);
 
   const emailIssue = emailEdited ? requiredEmailIssue(email) : undefined;
   const passwordIssue =
@@ -115,7 +142,7 @@ export function LoginScreen() {
         <p>
           Don&apos;t have an account?{" "}
           <Link
-            href={withEmail(REGISTER_ROUTE, email)}
+            href={withEmail(LIVE_REGISTER_URL, email)}
             onClick={() => {
               // Button 1 of the plan's five: always a sign-up start, with the
               // email when one was typed here first.
