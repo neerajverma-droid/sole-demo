@@ -20,6 +20,7 @@
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
+import { asDocumentBlob } from "@/lib/document-blob";
 import { activeBaseCurrency } from "@/lib/country-context";
 import {
   DEFAULT_QTY_TYPE,
@@ -598,5 +599,5 @@ export async function fetchInvoiceRuntimePreviewBlob(
     responseType: "blob",
   });
 
-  return new Blob([response.data as BlobPart], { type: "application/pdf" });
+  return asDocumentBlob(response.data);
 }

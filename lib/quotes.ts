@@ -6,6 +6,7 @@
 import { formatEventDateTime } from "@/lib/datetime";
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
+import { asDocumentBlob } from "@/lib/document-blob";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
 import {
   accentForId,
@@ -1828,7 +1829,7 @@ export async function fetchQuotePdfBlob(quote: Quote): Promise<Blob> {
     },
   );
 
-  return new Blob([response.data as BlobPart], { type: "application/pdf" });
+  return asDocumentBlob(response.data);
 }
 
 /* ------------------------------------------------------------------ *

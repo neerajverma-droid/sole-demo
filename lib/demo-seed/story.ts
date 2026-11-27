@@ -3,6 +3,8 @@
  * Ported from backend sole-ocr/src/services/demo/seed/story.js
  */
 
+import type { DemoCountry, DemoModule } from "./industries/types";
+
 export const MAIL = (local: string) => `${local}@example.com`;
 
 export const business = {
@@ -81,6 +83,8 @@ export interface DemoSupplier {
   typical: [number, number];
   email: string;
   contactId: string;
+  /** What a bill from this supplier is for; derived stories fill it in. */
+  items?: string[];
 }
 
 export const rawSuppliers = [
@@ -397,4 +401,74 @@ export const employees = [
   { id: "1", first_name: "Jake", last_name: "Morrison", role: "Apprentice electrician", hourly: 24.5, hours: 38, email: MAIL("jake.morrison") },
   { id: "2", first_name: "Olivia", last_name: "Grant", role: "Office admin (part-time)", hourly: 34, hours: 15, email: MAIL("olivia.grant") },
 ];
+
+// ---------------------------------------------------------------------------
+// Story: everything the generator and mock server need for ONE demo business.
+// The constants above are the hand-built default (Coastal Spark Electrical,
+// Australia). Every other industry/country is produced by `buildStory`.
+// ---------------------------------------------------------------------------
+
+export type DemoBusiness = typeof business;
+export type DemoEmployee = (typeof employees)[number];
+export type DemoAsset = (typeof assets)[number];
+export type DemoVehicle = typeof vehicle;
+
+export interface Story {
+  slug: string;
+  /** Industry label as shown in the picker ("Plumbing"). */
+  label: string;
+  /** Short trade word used in descriptions ("Electrical"). */
+  short: string;
+  categoryLabel: string;
+  country: DemoCountry;
+  modules: DemoModule[];
+  /** Seed for the PRNG, so the same industry/country always generates the same books. */
+  seed: number;
+  /** True for the hand-built default, whose narrative blocks are kept verbatim. */
+  legacyNarrative: boolean;
+  business: DemoBusiness & { tax_id: string };
+  clients: DemoClient[];
+  suppliers: DemoSupplier[];
+  services: DemoService[];
+  inventory: DemoInventoryProduct[];
+  projects: DemoProject[];
+  vehicle: DemoVehicle | null;
+  assets: DemoAsset[];
+  employees: DemoEmployee[];
+  /** Booking-page copy and wording that varies by industry. */
+  job: {
+    noun: string;
+    bookingTitle: string;
+    bookingBlurb: string;
+  };
+  /** Name of the income account the industry's sales post to. */
+  incomeCategory: string;
+}
+
+export const defaultStory: Story = {
+  slug: "electrical",
+  label: "Electrical",
+  short: "Electrical",
+  categoryLabel: "Trades and construction",
+  country: "AU",
+  // The flagship demo shows every module; industry demos show the ones the plan recommends.
+  modules: ["calendar", "projects", "km", "payroll", "hr", "proposals", "assets", "budget", "inventory"],
+  seed: 20261029,
+  legacyNarrative: true,
+  business: { ...business, tax_id: business.abn },
+  clients,
+  suppliers,
+  services,
+  inventory: rawInventoryProducts,
+  projects,
+  vehicle,
+  assets,
+  employees,
+  job: {
+    noun: "call-out",
+    bookingTitle: "Book an electrician call-out",
+    bookingBlurb: "Residential call-outs across the Gold Coast.",
+  },
+  incomeCategory: "Electrical services",
+};
 

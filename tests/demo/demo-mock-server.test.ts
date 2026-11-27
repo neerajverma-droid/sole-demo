@@ -94,7 +94,8 @@ describe("Demo Mock Server", () => {
     expect(expenseStatsRes?.data.data.pending_expenses.total_amount).toBeGreaterThan(0);
 
     const projectsRes = handleMockRequest("GET", "/project");
-    expect(projectsRes?.data.data.length).toBe(4);
+    // The product owner wants a fuller Projects module: the demo now seeds 10 projects (first page of 10).
+    expect(projectsRes?.data.data.length).toBeGreaterThanOrEqual(8);
 
     const kmRes = handleMockRequest("GET", "/km-tracker");
     expect(kmRes?.data.data.length).toBeGreaterThanOrEqual(20);
@@ -412,17 +413,16 @@ describe("Demo Mock Server", () => {
     expect(auditRes?.data.data.details.length).toBeGreaterThan(0);
   });
 
-  it("blocks any write operation in read-only demo mode", () => {
-    const createInvoice = handleMockRequest("POST", "/invoice/add", {}, { total: 100 });
-    expect(createInvoice?.data.success).toBe(false);
-    expect(createInvoice?.data.message).toContain("Demo mode is read-only");
+  // Previously "blocks any write operation in read-only demo mode". Contacts, invoices, quotes,
+  // expenses and price-list items are now writable in memory (see tests/demo/demo-overlay.test.ts);
+  // everything else is still refused, with an honest message.
+  it("still refuses writes the demo can't keep", () => {
+    const savePayment = handleMockRequest("POST", "/v1/payrix/updatePayrixToggle", {}, { enabled: 1 });
+    expect(savePayment?.data.success).toBe(false);
+    expect(savePayment?.data.message).toContain("can't be saved in the demo");
 
-    const editExpense = handleMockRequest("PUT", "/expense/edit", {}, { price: 50 });
-    expect(editExpense?.data.success).toBe(false);
-    expect(editExpense?.data.message).toContain("Demo mode is read-only");
-
-    const deleteContact = handleMockRequest("DELETE", "/client/101");
-    expect(deleteContact?.data.success).toBe(false);
-    expect(deleteContact?.data.message).toContain("Demo mode is read-only");
+    const planChange = handleMockRequest("POST", "/subscription/change-plan", {}, { plan: "bundle" });
+    expect(planChange?.data.success).toBe(false);
+    expect(planChange?.data.message).toContain("can't be saved in the demo");
   });
 });

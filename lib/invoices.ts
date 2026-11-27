@@ -15,6 +15,7 @@ import type { DocumentNumbering } from "@/lib/sales-settings";
 import { isTaxedRate } from "@/lib/product-tax";
 import api from "@/utils/axiosInstance";
 import apiRoutes from "@/config/api-routes";
+import { asDocumentBlob, documentFileName } from "@/lib/document-blob";
 
 export const INVOICE_STATUSES = [
   "Draft",
@@ -2845,15 +2846,18 @@ export async function fetchInvoicePdfBlob(
     },
   );
 
-  return new Blob([response.data as BlobPart], { type: "application/pdf" });
+  return asDocumentBlob(response.data);
 }
 
-/** Saves a PDF blob to disk under the given filename. */
+/**
+ * Saves a PDF blob to disk under the given filename. The demo's previews are HTML pages, not
+ * PDFs, so an HTML blob is saved as `.html` rather than a `.pdf` that would not open.
+ */
 export function savePdfBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = filename;
+  link.download = documentFileName(blob, filename);
   document.body.appendChild(link);
   link.click();
   link.remove();

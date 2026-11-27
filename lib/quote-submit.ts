@@ -31,6 +31,7 @@ import {
   roundRate,
 } from "@/lib/invoice-submit";
 import { buildEncryptedRequestBody } from "@/lib/encrypted-request";
+import { asDocumentBlob } from "@/lib/document-blob";
 import { activeBaseCurrency } from "@/lib/country-context";
 import type { QuoteDraft } from "@/lib/quotes";
 
@@ -282,5 +283,5 @@ export async function fetchQuoteRuntimePreviewBlob(
     responseType: "blob",
   });
 
-  return new Blob([response.data as BlobPart], { type: "application/pdf" });
+  return asDocumentBlob(response.data);
 }

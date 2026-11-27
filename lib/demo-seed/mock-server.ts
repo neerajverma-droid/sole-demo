@@ -1,16 +1,63 @@
 /**
  * Offline Mock Server for Sole Demo.
  * Intercepts Axios and Fetch requests in demo mode and returns realistic
- * seeded data from Coastal Spark Electrical without calling backend APIs.
+ * seeded data for the visitor's chosen industry and country, without calling
+ * backend APIs.
  *
- * All write requests (POST, PUT, PATCH, DELETE) are rejected in read-only demo mode
- * with a visible notification.
+ * Contacts, invoices, quotes, expenses and price-list items can be created,
+ * edited and deleted: the changes live in this tab only (see overlay.ts and
+ * session.ts) and are gone when the demo ends. Other writes are not saved and
+ * the visitor is told so.
  */
 
 import { toast } from "sonner";
+import { buildStory } from "./build-story";
+import { getCountryConfig, parseDemoCountry } from "./country";
 import { generateSeedData, type SeedData } from "./generator";
+import {
+  allowedFeaturesFor,
+  buildApiBusiness,
+  buildCountryContextRaw,
+  buildDemoUser,
+  compactPhone,
+  ownerFullName,
+} from "./identity";
+import { DEFAULT_INDUSTRY_SLUG, INDUSTRY_CATALOG, industryIdFor, resolveIndustrySlug } from "./industries/catalog";
+import { applyOverlayWrite } from "./overlay";
+import {
+  endDemoSession,
+  getActiveSession,
+  startDemoSession,
+  onSessionChange,
+  recordOp,
+  touchSession,
+} from "./session";
+import { defaultStory } from "./story";
+import { runHandlers, type HandlerCtx } from "./handlers";
+import { localizeResponse } from "./localize";
+import { brandFor, businessLogo } from "./logo";
+import { makeDates } from "./util";
+import type { DemoOp } from "./session";
 import { decryptPayload } from "@/utils/encrypt";
 
+/** AES-decrypt the single `data` field the app's encrypted writes carry; anything else passes through. */
+function openEnvelope(fields: Record<string, any>): Record<string, any> {
+  if (typeof fields.data === "string") {
+    try {
+      const decrypted = decryptPayload(fields.data) as Record<string, any> | null;
+      if (decrypted && typeof decrypted === "object") return decrypted;
+    } catch {
+      // not encrypted: the plain fields are the payload
+    }
+  }
+  return fields;
+}
+
+/**
+ * The fields of a request body, whatever shape the transport left it in: a FormData
+ * (encrypted `data` plus files), an object, or — what axios hands its adapter — the
+ * JSON string of one.
+ */
 function extractBodyFields(body: any): Record<string, any> {
   if (!body) return {};
   if (typeof FormData !== "undefined" && body instanceof FormData) {
@@ -18,174 +65,75 @@ function extractBodyFields(body: any): Record<string, any> {
     body.forEach((value, key) => {
       fields[key] = value;
     });
-    return fields;
-  }
-  if (typeof body === "object" && typeof body.data === "string") {
-    try {
-      return (decryptPayload(body.data) as Record<string, any>) || {};
-    } catch {
-      // not encrypted or decrypt failed
-    }
+    return openEnvelope(fields);
   }
   if (typeof body === "string") {
     try {
-      return JSON.parse(body);
+      const parsed = JSON.parse(body);
+      return parsed && typeof parsed === "object" ? openEnvelope(parsed) : {};
     } catch {
       return {};
     }
   }
-  return typeof body === "object" ? body : {};
+  return typeof body === "object" ? openEnvelope(body) : {};
 }
 
 let seedData: SeedData | null = null;
+let seedKey = "";
+let replaying = false;
+
+/** The story for the visit in progress: the visitor's industry and country, else the default. */
+function currentStory() {
+  const session = getActiveSession();
+  return session ? buildStory(session.industry, session.country) : defaultStory;
+}
+
+/** Generate the seed for the current visit and re-apply the visitor's earlier changes. */
+function buildSeed(): SeedData {
+  const session = getActiveSession();
+  const story = currentStory();
+  const seed = generateSeedData(story);
+  seedKey = session ? `${session.id}` : "default";
+  if (session && session.ops.length) {
+    replaying = true;
+    try {
+      for (const op of session.ops) {
+        // The seed isn't cached yet, so hand this one in directly.
+        replayOp(op, seed);
+      }
+    } finally {
+      replaying = false;
+    }
+  }
+  return seed;
+}
 
 export function getSeedData(): SeedData {
-  if (!seedData) {
-    seedData = generateSeedData();
+  const session = getActiveSession();
+  const key = session ? session.id : "default";
+  if (!seedData || seedKey !== key) {
+    seedData = buildSeed();
+    seedKey = key;
   }
   return seedData;
 }
 
 export function resetSeedData(): void {
-  seedData = generateSeedData();
+  seedData = null;
+  seedKey = "";
+  seedData = getSeedData();
 }
 
-export const demoUser = {
-  user_id: 1,
-  id: 1,
-  email: "accounts.coastalspark@example.com",
-  user_email: "accounts.coastalspark@example.com",
-  first_name: "Sam",
-  last_name: "Taylor",
-  full_name: "Sam Taylor",
-  business_name: "Coastal Spark Electrical",
-  role: "Owner",
-  is_demo: true,
-  account_verified: 1,
-  plan: "pro",
-  has_password: true,
-  trial_active: false,
-  is_first_login: false,
-  is_onboarding_skipped: 1,
-  is_transaction_present: 1,
-  token: "demo_coastalspark_session_token",
-  refresh_token: "demo_coastalspark_refresh_token",
-  demo_expires_at: new Date(Date.now() + 86400000).toISOString(),
-  business_id: 1,
-  businesses: [
-    {
-      id: 1,
-      business_name: "Coastal Spark Electrical",
-      email: "accounts.coastalspark@example.com",
-      abn: "51 824 753 556",
-      country_iso2: "AU",
-      currency: "AUD",
-      currency_symbol: "$",
-      timezone: "Australia/Brisbane",
-      tax_registered: 1,
-      accounting_type: "cash",
-    },
-  ],
-};
+// A new or ended session throws the cached data away.
+onSessionChange(() => {
+  seedData = null;
+  seedKey = "";
+});
 
-export const ALL_DEMO_ALLOWED_FEATURES = [
-  "dashboard",
-  "sales",
-  "expenses",
-  "assets",
-  "assets-advanced",
-  "contacts",
-  "resources",
-  "referral",
-  "community",
-  "perks",
-  "settings",
-  "support",
-  "education",
-  "reporting",
-  "migrations",
-  "transactions",
-  "projects",
-  "time-tracking",
-  "booking",
-  "km-tracker",
-  "investment",
-  "inventory",
-  "payroll",
-  "reputation",
-  "liabilities",
-  "equity",
-  "tax-estimator",
-  "proposals",
-];
-
-export const demoApiBusiness = {
-  id: 1,
-  business_name: "Coastal Spark Electrical",
-  company_name: "Coastal Spark Electrical",
-  first_name: "Sam",
-  last_name: "Taylor",
-  business_email: "accounts.coastalspark@example.com",
-  email: "accounts.coastalspark@example.com",
-  abn: "51 824 753 556",
-  business_registration_number: "51 824 753 556",
-  tax_registration_number: "51 824 753 556",
-  is_default: true,
-  requires_payment: false,
-  is_locked: false,
-  payment_status: "paid",
-  subscription_status: "active",
-  is_payroll_enabled: 1,
-  payroll_enabled: 1,
-  logo: null,
-  subscription: {
-    status: "active",
-    plan_slug: "pro",
-    plan_name: "Sole Pro Plan",
-    plan_interval: "monthly",
-    monthly_price: 29,
-    effective_monthly_price: 29,
-    discount_percent: 0,
-    is_trial: false,
-    trial_end: "",
-    current_period_end: new Date(Date.now() + 30 * 86400000).toISOString(),
-    addons: [
-      "project",
-      "booking",
-      "time",
-      "investment",
-      "km",
-      "assets-advanced",
-      "payroll",
-      "proposals",
-      "reputation",
-      "tax-estimator",
-    ],
-  },
-  industry_id: 1,
-  industry: "Electrical services",
-  timezone: "Australia/Brisbane",
-  ndis_no: "",
-  accounting_type: "cash",
-  company_type: "Sole Trader",
-  country_iso2: "AU",
-  country_code: "+61",
-  mobile_no: "0491 570 006",
-  phone: "0491 570 006",
-  bank_name: "Coastal Community Bank",
-  bsb: "484-799",
-  account_holder: "Coastal Spark Electrical",
-  account_number: "10492831",
-  show_bank_detail_invoice: 1,
-  address: "14 Ferry Road, Southport QLD 4215, Australia",
-  address_line1: "14 Ferry Road",
-  city: "Southport",
-  state: "QLD",
-  postcode: "4215",
-  country: "Australia",
-  website: "https://coastalspark.example.com",
-  documents: [],
-};
+/** The default story's user and business, kept as exports for existing callers and tests. */
+export const demoUser = buildDemoUser(defaultStory);
+export const ALL_DEMO_ALLOWED_FEATURES = allowedFeaturesFor(defaultStory);
+export const demoApiBusiness = buildApiBusiness(defaultStory);
 
 export interface MockResponse {
   status: number;
@@ -211,14 +159,32 @@ function notifyReadOnly() {
     const now = Date.now();
     if (now - lastToastTime > 2000) {
       lastToastTime = now;
-      toast.error("Demo mode is read-only. Changes cannot be saved.", {
-        description: "Explore listings, features, and reports freely. Creating or editing data is disabled.",
+      toast.error("This change can't be saved in the demo.", {
+        description: "You can add and edit contacts, invoices, quotes, expenses and price-list items. Everything resets when the demo ends.",
       });
     }
   }
 }
 
-export function handleMockRequest(
+function replayOp(op: DemoOp, seed: SeedData) {
+  const cfg = getCountryConfig(seed.story.country);
+  const today = makeDates().today;
+  const path = normalizePath(op.url);
+  const ctx: HandlerCtx = {
+    method: op.method.toUpperCase(),
+    path,
+    params: op.params ?? {},
+    fields: () => op.body,
+    seed,
+    story: seed.story,
+    cfg,
+    today,
+  };
+  if (runHandlers(ctx)) return;
+  applyOverlayWrite(op.method, path, op.body, seed, today, cfg.taxRate);
+}
+
+function handleMockRequestRaw(
   method: string,
   url: string,
   rawParams: Record<string, any> = {},
@@ -227,6 +193,15 @@ export function handleMockRequest(
   const normMethod = method.toUpperCase();
   const path = normalizePath(url);
   const seed = getSeedData();
+  const story = seed.story;
+  const biz = story.business;
+  const cfg = getCountryConfig(story.country);
+  const ownerFull = ownerFullName(story);
+  const phoneCompact = compactPhone(story);
+  const session = getActiveSession();
+  const activeUser = buildDemoUser(story, session ? new Date(session.expiresAt).toISOString() : undefined);
+  const activeBusiness = buildApiBusiness(story);
+  const demoFeatures = allowedFeaturesFor(story);
 
   // Extract query parameters from URL if any
   const urlParams: Record<string, any> = {};
@@ -242,30 +217,60 @@ export function handleMockRequest(
    * Auth & Session Lifecycle (Allowed Writes)
    * ------------------------------------------------------------------ */
   if (path === "/demo/login" || (normMethod === "POST" && path === "/auth/login")) {
+    // The visit starts here: pick the industry/country the visitor asked for (or the default
+    // flagship demo) and begin a fresh session, so every visit starts from clean data.
+    const fields = extractBodyFields(_body);
+    const asked = String(fields.industry ?? "").trim();
+    const live = getActiveSession();
+    // The app signs in again on every page load that has no stored tokens. A login that doesn't
+    // name an industry must therefore pick the visit back up, not replace it with the default.
+    if (!asked && live) {
+      const resumed = getSeedData();
+      return {
+        status: 200,
+        data: {
+          success: true,
+          message: "Demo sign in successful",
+          data: { user: buildDemoUser(resumed.story, new Date(live.expiresAt).toISOString()) },
+        },
+      };
+    }
+    const wanted = resolveIndustrySlug(asked) ?? DEFAULT_INDUSTRY_SLUG;
+    const country = parseDemoCountry(String(fields.country ?? "")) ?? "AU";
+    const started = startDemoSession({ industry: wanted, country });
+    seedData = null;
+    const fresh = getSeedData();
     return {
       status: 200,
       data: {
         success: true,
         message: "Demo sign in successful",
-        data: { user: demoUser },
+        data: { user: buildDemoUser(fresh.story, new Date(started.expiresAt).toISOString()) },
       },
     };
   }
 
   if (path === "/demo/heartbeat") {
+    const live = touchSession();
+    if (!live) {
+      return {
+        status: 401,
+        data: { success: false, message: "Your demo has ended.", data: null },
+      };
+    }
     return {
       status: 200,
       data: {
         success: true,
         message: "OK",
-        data: {
-          demo_expires_at: new Date(Date.now() + 86400000).toISOString(),
-        },
+        data: { demo_expires_at: new Date(live.expiresAt).toISOString() },
       },
     };
   }
 
   if (path === "/auth/logout" || path === "/auth/signout") {
+    // Signing out ends the visit: the generated books and every change are dropped.
+    endDemoSession();
     return {
       status: 200,
       data: { success: true, message: "Logged out" },
@@ -287,9 +292,34 @@ export function handleMockRequest(
       status: 200,
       data: {
         success: true,
-        data: { user: demoUser },
+        data: { user: activeUser },
       },
     };
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Feature handlers (handlers/*.ts): consulted before the generic ones below
+   * ------------------------------------------------------------------ */
+  {
+    const featureCtx: HandlerCtx = {
+      method: normMethod,
+      path,
+      params,
+      fields: () => extractBodyFields(_body),
+      seed,
+      story,
+      cfg,
+      today: makeDates().today,
+    };
+    const featured = runHandlers(featureCtx);
+    if (featured) {
+      // A document preview is a read made over POST: it changes nothing, so it isn't kept for replay.
+      const isRead = featured.data instanceof Blob || path.endsWith("/runtime-preview");
+      if (!replaying && normMethod !== "GET" && !isRead) {
+        recordOp({ method: normMethod, url: path, params, body: featureCtx.fields() });
+      }
+      return featured as MockResponse;
+    }
   }
 
   /* ------------------------------------------------------------------ *
@@ -304,18 +334,24 @@ export function handleMockRequest(
           user: {
             id: 1,
             user_id: 1,
-            first_name: "Sam",
-            last_name: "Taylor",
-            full_name: "Sam Taylor",
-            email: "accounts.coastalspark@example.com",
-            user_email: "accounts.coastalspark@example.com",
-            mobile_number: "0491570006",
-            phone: "0491 570 006",
-            country_code: "+61",
+            first_name: biz.owner.first_name,
+            last_name: biz.owner.last_name,
+            full_name: ownerFull,
+            email: biz.email,
+            user_email: biz.email,
+            mobile_number: phoneCompact,
+            phone: biz.phone,
+            country_code: cfg.phoneDialCode,
             profile_pic: null,
             coupon_code: null,
             fitrec_id: null,
-            allowed_features: ALL_DEMO_ALLOWED_FEATURES,
+            allowed_features: demoFeatures,
+            // What the app reads to decide who is still owed onboarding: nobody is, in a demo.
+            industry_id: biz.industry_id,
+            join_from: "demo",
+            is_first_login: false,
+            is_onboarding_skipped: 1,
+            business_config: activeUser.business_config,
           },
           profile_pic: null,
         },
@@ -343,7 +379,7 @@ export function handleMockRequest(
             {
               log_id: 1,
               performed_at: "29/10/2026 at 09:15 AM",
-              performed_by: "Sam Taylor",
+              performed_by: ownerFull,
               module: "Sales",
               action: "Invoice created",
               description: "Created invoice INV-1051 for Bayside Fitness ($2,035.00)",
@@ -351,7 +387,7 @@ export function handleMockRequest(
             {
               log_id: 2,
               performed_at: "28/10/2026 at 02:40 PM",
-              performed_by: "Sam Taylor",
+              performed_by: ownerFull,
               module: "Banking",
               action: "Transaction matched",
               description: "Matched ANZ bank credit of $2,420.00 to INV-1045",
@@ -359,7 +395,7 @@ export function handleMockRequest(
             {
               log_id: 3,
               performed_at: "28/10/2026 at 11:20 AM",
-              performed_by: "Sam Taylor",
+              performed_by: ownerFull,
               module: "Time Tracker",
               action: "Time logged",
               description: "Logged 4.0h for Switchboard Upgrade & Sub-main Cabling",
@@ -367,7 +403,7 @@ export function handleMockRequest(
             {
               log_id: 4,
               performed_at: "27/10/2026 at 04:30 PM",
-              performed_by: "Sam Taylor",
+              performed_by: ownerFull,
               module: "Expenses",
               action: "Expense created",
               description: "Recorded expense EXP-2041 ($748.00) from Middy's Electrical",
@@ -375,7 +411,7 @@ export function handleMockRequest(
             {
               log_id: 5,
               performed_at: "26/10/2026 at 01:10 PM",
-              performed_by: "Sam Taylor",
+              performed_by: ownerFull,
               module: "Payroll",
               action: "Pay run submitted",
               description: "Submitted fortnightly pay run #14 for 2 employees ($2,840.50)",
@@ -383,7 +419,7 @@ export function handleMockRequest(
             {
               log_id: 6,
               performed_at: "25/10/2026 at 10:00 AM",
-              performed_by: "Sam Taylor",
+              performed_by: ownerFull,
               module: "Scheduling",
               action: "Job scheduled",
               description: "Booked switchboard commissioning job for Bayside Fitness",
@@ -391,7 +427,7 @@ export function handleMockRequest(
             {
               log_id: 7,
               performed_at: "24/10/2026 at 03:15 PM",
-              performed_by: "Sam Taylor",
+              performed_by: ownerFull,
               module: "Quotes",
               action: "Quote accepted",
               description: "Bayside Fitness accepted quote Q-2001 ($2,035.00)",
@@ -399,10 +435,10 @@ export function handleMockRequest(
             {
               log_id: 8,
               performed_at: "23/10/2026 at 08:30 AM",
-              performed_by: "Sam Taylor",
+              performed_by: ownerFull,
               module: "Settings",
               action: "Profile loaded",
-              description: "Loaded Coastal Spark Electrical business settings",
+              description: `Loaded ${biz.name} business settings`,
             },
           ],
           total: 8,
@@ -854,7 +890,7 @@ export function handleMockRequest(
             { key: "Contact Mobile", value: "0412 345 678" },
             { key: "Contact Address", value: "88 Marine Parade, Southport QLD" },
             { key: "Contact Website", value: "https://baysidefitness.com.au" },
-            { key: "Contact ABN", value: "51 824 753 556" },
+            { key: "Contact ABN", value: biz.abn },
           ],
           [
             { key: "Contact Name", value: "Palm Grove Body Corporate" },
@@ -1236,15 +1272,21 @@ export function handleMockRequest(
   }
 
   /* ------------------------------------------------------------------ *
-   * WRITE OPERATIONS — Blocked in Demo Mode
+   * WRITE OPERATIONS — applied to this tab's in-memory copy of the books
    * ------------------------------------------------------------------ */
   if (["POST", "PUT", "PATCH", "DELETE"].includes(normMethod)) {
+    const fields = extractBodyFields(_body);
+    const applied = applyOverlayWrite(normMethod, path, fields, seed, makeDates().today, cfg.taxRate);
+    if (applied) {
+      if (!replaying) recordOp({ method: normMethod, url: path, params, body: fields });
+      return applied;
+    }
     notifyReadOnly();
     return {
-      status: 200, // Return 200 with success: false so app error handling catches it without uncaught promise rejection
+      status: 200, // 200 with success: false so app error handling catches it without an uncaught rejection
       data: {
         success: false,
-        message: "Demo mode is read-only. Changes cannot be saved.",
+        message: "This change can't be saved in the demo.",
         data: null,
       },
     };
@@ -1260,7 +1302,7 @@ export function handleMockRequest(
       status: 200,
       data: {
         success: true,
-        data: [demoApiBusiness],
+        data: [activeBusiness],
       },
     };
   }
@@ -1270,7 +1312,7 @@ export function handleMockRequest(
       status: 200,
       data: {
         success: true,
-        data: demoApiBusiness,
+        data: activeBusiness,
       },
     };
   }
@@ -1325,12 +1367,19 @@ export function handleMockRequest(
       data: {
         success: true,
         data: {
-          iso2: "AU",
-          name: "Australia",
-          currency: "AUD",
-          currency_symbol: "$",
+          iso2: cfg.iso2,
+          name: cfg.name,
+          currency: cfg.currency,
+          currency_symbol: cfg.currencySymbol,
         },
       },
+    };
+  }
+
+  if (path === "/country-context") {
+    return {
+      status: 200,
+      data: { success: true, data: buildCountryContextRaw(story, makeDates().today) },
     };
   }
 
@@ -1346,8 +1395,8 @@ export function handleMockRequest(
         data: {
           tax_settings: {
             id: 1,
-            tax_name: "GST",
-            tax_percentage: "10",
+            tax_name: cfg.taxName,
+            tax_percentage: String(cfg.taxRate),
             is_default: 1,
             country_rate: 10,
           },
@@ -1367,14 +1416,14 @@ export function handleMockRequest(
       data: {
         success: true,
         data: {
-          brand_color: "#1e3a8a",
+          brand_color: brandFor(story).primary,
           content_color: "#0f172a",
-          logo: null,
+          logo: businessLogo(story),
           show_logo_on_invoice: 1,
           phone_enabled: 1,
-          phone: "0491 570 006",
+          phone: biz.phone,
           website_enabled: 1,
-          website: "https://coastalspark.example.com",
+          website: biz.website,
         },
       },
     };
@@ -1453,7 +1502,7 @@ export function handleMockRequest(
               interval: "monthly",
               price: 29,
               monthly_price: 29,
-              currency: "AUD",
+              currency: cfg.currency,
               includes: [
                 "Invoicing",
                 "Expenses",
@@ -1474,7 +1523,7 @@ export function handleMockRequest(
               interval: "annual",
               price: 290,
               monthly_price: 24.16,
-              currency: "AUD",
+              currency: cfg.currency,
               includes: [
                 "Invoicing",
                 "Expenses",
@@ -1497,7 +1546,7 @@ export function handleMockRequest(
               interval: "monthly",
               price: 10,
               monthly_price: 10,
-              currency: "AUD",
+              currency: cfg.currency,
             },
             {
               id: 2,
@@ -1506,7 +1555,7 @@ export function handleMockRequest(
               interval: "monthly",
               price: 6,
               monthly_price: 6,
-              currency: "AUD",
+              currency: cfg.currency,
             },
             {
               id: 3,
@@ -1515,17 +1564,21 @@ export function handleMockRequest(
               interval: "monthly",
               price: 6,
               monthly_price: 6,
-              currency: "AUD",
+              currency: cfg.currency,
             },
-            {
-              id: 4,
-              slug: "investment",
-              name: "Investment property",
-              interval: "monthly",
-              price: 12,
-              monthly_price: 12,
-              currency: "AUD",
-            },
+            ...(cfg.features.investment_property
+              ? [
+                  {
+                    id: 4,
+                    slug: "investment",
+                    name: "Investment property",
+                    interval: "monthly",
+                    price: 12,
+                    monthly_price: 12,
+                    currency: cfg.currency,
+                  },
+                ]
+              : []),
             {
               id: 5,
               slug: "km",
@@ -1533,7 +1586,7 @@ export function handleMockRequest(
               interval: "monthly",
               price: 5,
               monthly_price: 5,
-              currency: "AUD",
+              currency: cfg.currency,
             },
             {
               id: 6,
@@ -1542,7 +1595,7 @@ export function handleMockRequest(
               interval: "monthly",
               price: 8,
               monthly_price: 8,
-              currency: "AUD",
+              currency: cfg.currency,
             },
           ],
         },
@@ -1561,18 +1614,7 @@ export function handleMockRequest(
             platform: "stripe",
             plan_interval: "monthly",
             current_period_end: new Date(Date.now() + 30 * 86400000).toISOString(),
-            addons: [
-              "project",
-              "booking",
-              "time",
-              "investment",
-              "km",
-              "assets-advanced",
-              "payroll",
-              "proposals",
-              "reputation",
-              "tax-estimator",
-            ],
+            addons: activeBusiness.subscription.addons,
           },
           plan: {
             tier: "pro",
@@ -1587,7 +1629,7 @@ export function handleMockRequest(
             effective_next_billing_amount: 63.0,
           },
           requires_first_subscription: false,
-          subscription: demoApiBusiness.subscription,
+          subscription: activeBusiness.subscription,
         },
       },
     };
@@ -1610,11 +1652,7 @@ export function handleMockRequest(
       status: 200,
       data: {
         success: true,
-        data: [
-          { id: 1, name: "Electrical services" },
-          { id: 2, name: "Trades & Construction" },
-          { id: 3, name: "Professional Services" },
-        ],
+        data: INDUSTRY_CATALOG.map((entry) => ({ id: industryIdFor(entry.slug), value: industryIdFor(entry.slug), name: entry.label })),
       },
     };
   }
@@ -1724,12 +1762,12 @@ export function handleMockRequest(
       primary_contact: {
         name: item.contact,
         email: item.email,
-        country_calling_code: "+61",
-        phone_number: "0491 570 006",
+        country_calling_code: cfg.phoneDialCode,
+        phone_number: biz.phone,
       },
-      address_line1: "14 Ferry Road",
-      city: item.city || "Southport",
-      country: "Australia",
+      address_line1: biz.address.line1,
+      city: item.city || biz.address.city,
+      country: cfg.name,
     }));
 
     if (search) {
@@ -1774,8 +1812,8 @@ export function handleMockRequest(
           business_name: found.name,
           company_type: "business",
           email: found.email,
-          city: "city" in found ? found.city : "Southport",
-          country: "Australia",
+          city: "city" in found ? found.city : biz.address.city,
+          country: cfg.name,
           primary_contact: {
             id: Number(found.contactId),
             name: found.contact,
@@ -2877,7 +2915,7 @@ export function handleMockRequest(
         success: true,
         data: {
           opening_balance: seed.cashWallet.opening_balance || 1000,
-          currency: seed.cashWallet.currency || "AUD",
+          currency: seed.cashWallet.currency || cfg.currency,
           balance: seed.cashWallet.balance || 1450,
           movements: seed.cashWallet.movements || [],
         },
@@ -3451,7 +3489,7 @@ export function handleMockRequest(
             entries: 48,
             with_gst: 48,
             without_gst: 0,
-            gst_percentage: 10,
+            gst_percentage: cfg.taxRate,
             label: "GST on Income (10%)",
           },
           activity: {
@@ -3548,14 +3586,14 @@ export function handleMockRequest(
             {
               id: "1",
               bank_connection_id: "conn-1",
-              bank_name: "Coastal Community Bank",
+              bank_name: biz.bank_name,
               account_name: "Everyday Business Account",
-              account_number: "10492831",
-              bsb: "484-799",
+              account_number: biz.account_number,
+              bsb: biz.bsb,
               account_type: "TRANS_AND_SAVINGS_ACCOUNTS",
               balance: 34120.5,
               available: 34120.5,
-              currency: "AUD",
+              currency: cfg.currency,
               provider: "fiskil",
               status: "connected",
               last_synced_at: new Date(Date.now() - 3600000).toISOString(),
@@ -3563,14 +3601,14 @@ export function handleMockRequest(
             {
               id: "2",
               bank_connection_id: "conn-2",
-              bank_name: "Coastal Community Bank",
+              bank_name: biz.bank_name,
               account_name: "Business Online Saver",
               account_number: "10492842",
-              bsb: "484-799",
+              bsb: biz.bsb,
               account_type: "TRANS_AND_SAVINGS_ACCOUNTS",
               balance: 8730.0,
               available: 8730.0,
-              currency: "AUD",
+              currency: cfg.currency,
               provider: "fiskil",
               status: "connected",
               last_synced_at: new Date(Date.now() - 3600000).toISOString(),
@@ -3607,14 +3645,14 @@ export function handleMockRequest(
         data: [
           {
             id: "1",
-            bank_name: "Coastal Community Bank",
+            bank_name: biz.bank_name,
             account_name: "Everyday Business Account",
             balance: 34120.5,
             account_number: "•••• 2831",
           },
           {
             id: "2",
-            bank_name: "Coastal Community Bank",
+            bank_name: biz.bank_name,
             account_name: "Business Online Saver",
             balance: 8730.0,
             account_number: "•••• 2842",
@@ -4105,7 +4143,7 @@ export function handleMockRequest(
         data: {
           connected: true,
           status: "CONNECTED",
-          microkeeper_business_name: "Coastal Spark Electrical",
+          microkeeper_business_name: biz.name,
           last_verified_at: "2026-11-01T10:00:00Z",
           last_sync_at: "2026-11-04T08:00:00Z",
           last_error: null,
@@ -4181,7 +4219,7 @@ export function handleMockRequest(
           connection: {
             connected: true,
             status: "CONNECTED",
-            microkeeper_business_name: "Coastal Spark Electrical",
+            microkeeper_business_name: biz.name,
             last_verified_at: "2026-11-01T10:00:00Z",
             last_sync_at: "2026-11-04T08:00:00Z",
             last_error: null,
@@ -4230,7 +4268,7 @@ export function handleMockRequest(
         username: "jake.morrison",
         eusername: "jake_morrison",
         email: "jake.morrison@coastalspark.example.com",
-        mobile_country_code: "+61",
+        mobile_country_code: cfg.phoneDialCode,
         mobile_number: "0412 345 678",
         employment_type: "FULL_TIME",
         payroll_id: "EMP-001",
@@ -4244,7 +4282,7 @@ export function handleMockRequest(
         username: "olivia.grant",
         eusername: "olivia_grant",
         email: "olivia.grant@coastalspark.example.com",
-        mobile_country_code: "+61",
+        mobile_country_code: cfg.phoneDialCode,
         mobile_number: "0423 456 789",
         employment_type: "PART_TIME",
         payroll_id: "EMP-002",
@@ -4341,7 +4379,7 @@ export function handleMockRequest(
             gender: isOlivia ? "FEMALE" : "MALE",
             dob: isOlivia ? "1994-09-22" : "2001-05-14",
             address_line_1: isOlivia ? "88 Marine Parade" : "12 Seaside Drive",
-            suburb: isOlivia ? "Southport" : "Surfers Paradise",
+            suburb: isOlivia ? biz.address.city : "Surfers Paradise",
             state: "QLD",
             postcode: isOlivia ? "4215" : "4217",
           },
@@ -5011,7 +5049,7 @@ export function handleMockRequest(
           google_review_link: "https://g.page/r/coastal-spark/review",
           auto_send_on_paid_invoice: true,
           minimum_rating_for_google: 4,
-          notification_email: "accounts.coastalspark@example.com",
+          notification_email: biz.email,
         },
       },
     };
@@ -5064,7 +5102,7 @@ export function handleMockRequest(
       bank_transacton_id: t.id || t.bank_transaction_id,
       transaction_id: t.id || t.bank_transaction_id,
       bank_account_id: "1",
-      bank_name: t.bank_name || "Coastal Community Bank",
+      bank_name: t.bank_name || biz.bank_name,
       source: "bank_feed",
       amount: t.amount,
       description: t.description,
@@ -5133,7 +5171,7 @@ export function handleMockRequest(
           account_subcategory_id: t.account_subcategory_id || (t.direction === "credit" ? 101 : 141),
           name: t.direction === "credit" ? "Sales income" : "Materials & Supplies",
           reference_type: t.matched_entity_type || (t.direction === "credit" ? "invoice" : "expense"),
-          client_name: "Coastal Spark Electrical",
+          client_name: biz.name,
         },
       ],
     }));
@@ -5267,5 +5305,20 @@ export function handleMockRequest(
       data: [],
     },
   };
+}
+
+// Answer one API call from the demo's in-memory books. Responses for any story other
+// than the hand-built default are re-skinned for the visitor's industry and country
+// (see localize.ts).
+export function handleMockRequest(
+  method: string,
+  url: string,
+  rawParams: Record<string, any> = {},
+  body?: any,
+): MockResponse | null {
+  const response = handleMockRequestRaw(method, url, rawParams, body);
+  if (!response) return response;
+  const story = getSeedData().story;
+  return story.legacyNarrative ? response : { ...response, data: localizeResponse(response.data, story) };
 }
 

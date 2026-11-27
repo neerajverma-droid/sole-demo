@@ -29,6 +29,10 @@ import { apiRoutes } from "@/lib/api/routes";
 import { setSession } from "@/lib/api/session";
 import type { AuthUser } from "@/lib/api/types";
 import { demoUser } from "@/lib/demo-seed/mock-server";
+import {
+  useOnboardingSurveySessionStore,
+  useOnboardingSurveyStore,
+} from "@/stores/onboarding-survey";
 
 /**
  * Whether to offer the demo at all. In sole-demo this is enabled by default.
@@ -43,8 +47,18 @@ export type DemoResult =
 const GENERIC_FAILURE =
   "We couldn't start the demo. Please try again in a moment.";
 
-/** Sign in to a free demo account. Resolves either way, like every auth call. */
-export async function startDemo(): Promise<DemoResult> {
+export type StartDemoOptions = {
+  /** A marketing industry slug (`plumbing`); unknown or empty means the default demo. */
+  industry?: string | null;
+  /** The market the visitor came from. */
+  country?: "AU" | "NZ" | null;
+};
+
+/**
+ * Sign in to a free demo account for the chosen industry and country (the default
+ * demo when neither is given). Resolves either way, like every auth call.
+ */
+export async function startDemo(options: StartDemoOptions = {}): Promise<DemoResult> {
   const device_id = await ensureDeviceId();
   if (!device_id) {
     return {
@@ -57,6 +71,8 @@ export async function startDemo(): Promise<DemoResult> {
   const result = await apiPost<{ user?: AuthUser }>(apiRoutes.demo.login, {
     device_id,
     platform: PLATFORM,
+    ...(options.industry ? { industry: options.industry } : {}),
+    ...(options.country ? { country: options.country } : {}),
   });
 
   if (!result.success) {
@@ -67,6 +83,14 @@ export async function startDemo(): Promise<DemoResult> {
 
   setSession(user);
   setBusinessId(String((user as any).business_id || 1));
+  // A prospect isn't asked onboarding questions (industry, shortcuts, referral): the demo already
+  // knows its business. Marked on the client stores too, in case the profile hasn't settled yet.
+  try {
+    useOnboardingSurveyStore.getState().markPinsSuggested();
+    useOnboardingSurveySessionStore.getState().markSurveyDoneThisSession();
+  } catch {
+    // No browser storage (a test, a private window): the profile's own seen-flag still applies.
+  }
   track(EVENTS.SIGNUP_COMPLETED, { method: "demo" });
   return { ok: true, user };
 }
